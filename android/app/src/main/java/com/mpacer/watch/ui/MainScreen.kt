@@ -41,6 +41,7 @@ fun MainScreen(
     onResume: () -> Unit,
     onStop: () -> Unit,
     onSettings: () -> Unit,
+    onSync: () -> Unit,
 ) {
     val output = state.output
     Box(
@@ -66,7 +67,7 @@ fun MainScreen(
                 Text(MpacerFormat.duration(output?.elapsedS ?: 0.0), color = Color.LightGray)
             }
             AssistantPanel(output)
-            Controls(output, onStart, onPause, onResume, onStop, onSettings)
+            Controls(output, onStart, onPause, onResume, onStop, onSettings, onSync)
         }
     }
 }
@@ -122,12 +123,14 @@ private fun Controls(
     onResume: () -> Unit,
     onStop: () -> Unit,
     onSettings: () -> Unit,
+    onSync: () -> Unit,
 ) {
     val state = output?.state ?: "Idle"
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         when (state) {
             "Idle", "Finished" -> {
                 Button(onClick = onStart) { Text("Start") }
+                Button(onClick = onSync) { Text("Sync") }
                 Button(onClick = onSettings) { Text("Reglages") }
             }
             "Running" -> {

@@ -1,8 +1,8 @@
-// Plugins declares ici, appliques dans :app
+// Build racine : les plugins sont declares (et non appliques) ici.
+// Chaque module choisit ceux dont il a besoin via le catalogue gradle/libs.versions.toml.
 plugins {
-    id("com.android.application") version "8.7.3" apply false
-    id("org.jetbrains.kotlin.android") version "2.1.0" apply false
-    id("org.jetbrains.kotlin.plugin.compose") version "2.1.0" apply false
-    // Voie maintenue en 2026 pour compiler du Rust dans un projet Android
-    id("org.mozilla.rust-android-gradle.rust-android") version "0.10.0" apply false
+    alias(libs.plugins.android.application) apply false
+    alias(libs.plugins.kotlin.android) apply false
+    alias(libs.plugins.kotlin.compose) apply false
+    alias(libs.plugins.kotlin.serialization) apply false
 }

@@ -1,8 +1,23 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
+
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose")
-    id("org.mozilla.rust-android-gradle.rust-android")
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
+}
+
+// --- Signature ---------------------------------------------------------------
+// Le Data Layer Wear OS n accepte que des applications signees par la meme cle
+// sur le telephone et sur la montre. On lit android/keystore.properties sil existe
+// (fichier non versionne, aucun secret en dur) ; sinon le build de debug utilise
+// la cle de debug standard, suffisante pour le developpement.
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
 }
 
 android {
@@ -10,20 +25,29 @@ android {
     compileSdk = 35
 
     defaultConfig {
+        // Identifiant fige : la montre et le telephone partagent le prefixe com.mpacer.
         applicationId = "com.mpacer.watch"
-        // Wear OS 3+ (Android 11) : Health Services et service de premier plan modernes
+        // Wear OS 3+ (Android 11) : Health Services, foreground service type, TTS modernes.
         minSdk = 30
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+
+        // ABI portees par les montres Wear OS 3/4 et par l emulateur x86_64.
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }
+
         externalNativeBuild {
             cmake {
                 arguments += listOf("-DANDROID_STL=c++_shared")
             }
         }
+
+        // Backend auto-heberge. Valeur par defaut surchargeable sans recompiler :
+        //   adb shell am start -n com.mpacer.watch/.MainActivity --es api_url http://hote:8080
+        buildConfigField("String", "DEFAULT_API_URL", "\"http://10.0.2.2:8080\"")
+        buildConfigField("String", "PAIRING_LABEL", "\"Montre M-pacer\"")
     }
 
     externalNativeBuild {
@@ -33,8 +57,34 @@ android {
         }
     }
 
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            create("release") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // Pas de minification pour l instant : kotlinx.serialization et le pont JNI
+            // demanderaient des regles keep explicites (voir proguard-rules.pro).
+            isMinifyEnabled = false
+            isShrinkResources = false
+            signingConfig = signingConfigs.findByName("release")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+    }
+
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {
@@ -42,49 +92,86 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     packaging {
-        // Les .so Rust sont deja optimises (LTO, panic=abort)
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+        // Les .so Rust sont deja optimises (LTO, panic=abort).
         jniLibs.useLegacyPackaging = false
     }
 }
 
-// --- Compilation du coeur Rust -------------------------------------------------
-cargo {
-    module = "../../crates/mpacer-ffi"
-    libname = "mpacer_ffi"
-    targets = listOf("arm64", "arm", "x86_64")
-    profile = "release"
-    // Verbosite utile au premier montage : decommenter
-    // verbose = true
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
+    }
 }
 
-// Le shim JNI et les .so Rust doivent exister avant toute tache native ou de packaging.
-tasks.matching { task ->
-    task.name.startsWith("merge") && task.name.endsWith("JniLibFolders") ||
-        task.name.startsWith("configure") && task.name.endsWith("NativeBuild") ||
-        task.name.startsWith("build") && task.name.endsWith("NativeBuild")
-}.configureEach {
-    dependsOn("cargoBuildRelease")
+// --- Coeur Rust via cargo-ndk ------------------------------------------------
+// Prerequis sur la machine de build : cargo install cargo-ndk et les cibles
+// rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android.
+// La tache produit app/src/main/jniLibs/<abi>/libmpacer_ffi.so, que CMake importe
+// et que l APK empaquette.
+//   -Pmpacer.buildRust=false   -> ne pas appeler cargo (reutilise des .so existants)
+//   -Pmpacer.cargoProfile=debug -> profil cargo debug
+val buildRust = (findProperty("mpacer.buildRust") as String?)?.toBoolean() ?: true
+val cargoProfile = (findProperty("mpacer.cargoProfile") as String?) ?: "release"
+val rustWorkspaceDir = rootProject.projectDir.parentFile // racine du depot Rust
+val jniLibsDir = layout.projectDirectory.dir("src/main/jniLibs").asFile
+
+val cargoNdkBuild = tasks.register<Exec>("cargoNdkBuild") {
+    group = "build"
+    description = "Compile mpacer-ffi pour arm64-v8a, armeabi-v7a et x86_64 (cargo-ndk)."
+    workingDir = rustWorkspaceDir
+    val arguments = mutableListOf<String>()
+    arguments += listOf("cargo", "ndk", "-t", "arm64-v8a", "-t", "armeabi-v7a", "-t", "x86_64")
+    arguments += listOf("-o", jniLibsDir.absolutePath, "build")
+    if (cargoProfile == "release") arguments += "--release"
+    arguments += listOf("-p", "mpacer-ffi")
+    commandLine(*arguments.toTypedArray())
+    inputs.dir(File(rustWorkspaceDir, "crates/mpacer-ffi/src"))
+    inputs.file(File(rustWorkspaceDir, "Cargo.toml"))
+    outputs.dir(jniLibsDir)
+    onlyIf { buildRust }
 }
+
+// Impossible d assembler un APK sans les .so : on branche la compilation Rust en amont.
+tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(cargoNdkBuild) }
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
+    .configureEach { dependsOn(cargoNdkBuild) }
+tasks.matching { it.name.startsWith("configure") && it.name.endsWith("NativeBuild") }
+    .configureEach { dependsOn(cargoNdkBuild) }
+tasks.matching { it.name.startsWith("build") && it.name.endsWith("NativeBuild") }
+    .configureEach { dependsOn(cargoNdkBuild) }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-service:2.8.7")
-    implementation("androidx.activity:activity-compose:1.9.3")
-    implementation(platform("androidx.compose:compose-bom:2024.10.01"))
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.wear.compose:compose-material:1.4.0")
-    implementation("androidx.wear.compose:compose-foundation:1.4.0")
-    // GPS
-    implementation("com.google.android.gms:play-services-location:21.3.0")
-    // Capteurs / seance systeme (phase 2)
-    implementation("androidx.health:health-services-client:1.1.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
-    debugImplementation("androidx.compose.ui:ui-tooling")
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.service)
+    implementation(libs.androidx.activity.compose)
+
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.wear.compose.material)
+    implementation(libs.androidx.wear.compose.foundation)
+
+    // GPS haute precision
+    implementation(libs.google.play.services.location)
+    // Capteurs / seance systeme (Health Services)
+    implementation(libs.androidx.health.services.client)
+
+    // Synchronisation vers le backend (SyncClient)
+    implementation(libs.okhttp)
+    implementation(libs.okhttp.logging)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.security.crypto)
+
+    // Reception des seances envoyees par le telephone (Data Layer)
+    implementation(libs.google.play.services.wearable)
+
+    debugImplementation(libs.androidx.compose.ui.tooling)
+    testImplementation(libs.junit)
 }

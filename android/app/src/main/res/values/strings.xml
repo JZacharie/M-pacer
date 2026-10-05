@@ -6,6 +6,14 @@
     <string name="resume">Reprendre</string>
     <string name="stop">Arreter</string>
     <string name="settings">Reglages</string>
+    <string name="sync">Sync</string>
+    <string name="sync_title">Synchronisation</string>
+    <string name="sync_pending">En attente : %1$d seance(s)</string>
+    <string name="sync_pair">S\'appairer</string>
+    <string name="sync_now">Synchroniser</string>
+    <string name="sync_disconnect">Se deconnecter</string>
+    <string name="sync_connected">Connecte</string>
+    <string name="sync_disconnected">Non connecte</string>
 
     <!-- Etats GPS : cles renvoyees par le moteur (GpsStatus::message_key) -->
     <string name="gps_disabled">GPS desactive : activez la localisation pour courir</string>

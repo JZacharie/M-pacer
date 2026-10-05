@@ -13,6 +13,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <!-- Synchronisation des seances vers le backend auto-heberge (SyncClient) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:allowBackup="true"
@@ -41,5 +44,20 @@
             android:name=".TrackingService"
             android:exported="false"
             android:foregroundServiceType="location|health" />
+
+        <!-- Reception des seances envoyees par le module :companion (Wearable Data Layer).
+             Meme paquet/signature exiges cote telephone pour que le routage fonctionne. -->
+        <service
+            android:name=".WearSyncListener"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:pathPrefix="/mpacer" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

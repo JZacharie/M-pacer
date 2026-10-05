@@ -1,6 +1,7 @@
 package com.mpacer.watch
 
 import android.Manifest
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -12,6 +13,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mpacer.watch.ui.MainScreen
 import com.mpacer.watch.ui.SettingsScreen
+import com.mpacer.watch.ui.SyncScreen
 
 class MainActivity : ComponentActivity() {
 
@@ -19,11 +21,12 @@ class MainActivity : ComponentActivity() {
 
     private fun registerResultLauncher() = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { _ -> /* l'ecran principal reflète l'etat GPS renvoye par le moteur */ }
+    ) { _ -> /* l ecran principal reflete l etat GPS renvoye par le moteur */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         VoiceCoach.initialise(this)
+        applyApiUrl(intent)
         requestPermissions.launch(
             arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
@@ -34,34 +37,54 @@ class MainActivity : ComponentActivity() {
         setContent {
             val state by TrackingService.state.collectAsState()
             var showSettings by remember { mutableStateOf(false) }
+            var showSync by remember { mutableStateOf(false) }
             var settings by remember { mutableStateOf(WatchSettings()) }
 
-            if (showSettings) {
-                SettingsScreen(
+            when {
+                showSettings -> SettingsScreen(
                     settings = settings,
                     onSettingsChange = { settings = it },
                     onBack = { showSettings = false },
                 )
-            } else {
-                MainScreen(
+                showSync -> SyncScreen(onBack = { showSync = false })
+                else -> MainScreen(
                     state = state,
                     onStart = { TrackingService.send(this, TrackingService.ACTION_START) },
                     onPause = { TrackingService.send(this, TrackingService.ACTION_PAUSE) },
                     onResume = { TrackingService.send(this, TrackingService.ACTION_RESUME) },
                     onStop = { TrackingService.send(this, TrackingService.ACTION_STOP) },
                     onSettings = { showSettings = true },
+                    onSync = { showSync = true },
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        applyApiUrl(intent)
+    }
+
+    /**
+     * URL du backend surchargeable au lancement, utile en developpement :
+     *   adb shell am start -n com.mpacer.watch/.MainActivity --es api_url http://hote:8080
+     */
+    private fun applyApiUrl(intent: Intent?) {
+        val url = intent?.getStringExtra(EXTRA_API_URL)?.takeIf { it.isNotBlank() } ?: return
+        SyncClient.setBaseUrl(this, url)
     }
 
     override fun onDestroy() {
         VoiceCoach.shutdown()
         super.onDestroy()
     }
+
+    companion object {
+        const val EXTRA_API_URL = "api_url"
+    }
 }
 
-/** Reglages locaux (miroir de l'ecran Settings ; a persister avec DataStore). */
+/** Reglages locaux (miroir de l ecran Settings ; a persister avec DataStore). */
 data class WatchSettings(
     val mode: AssistantMode = AssistantMode.TRACK_PACE,
     val raceDistanceM: Double? = null,

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Capacites annoncees au telephone via CapabilityClient (nom partage avec :companion). -->
+<resources>
+    <string-array name="android_wear_capabilities">
+        <item>mpacer_sync</item>
+    </string-array>
+</resources>

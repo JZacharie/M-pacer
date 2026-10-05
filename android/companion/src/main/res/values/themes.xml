@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Theme minimal base sur le framework : toute l UI est dessinee par Compose Material 3. -->
+<resources>
+    <style name="Theme.Mpacer" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/mpacer_background</item>
+        <item name="android:statusBarColor">@color/mpacer_background</item>
+        <item name="android:navigationBarColor">@color/mpacer_background</item>
+    </style>
+</resources>

@@ -1,0 +1,11 @@
+# Secrets et sorties locales du dossier Android (complement au .gitignore racine).
+# Ne jamais versionner un magasin de cles ni un mot de passe.
+keystore.properties
+*.jks
+*.keystore
+local.properties
+
+# Sorties de build des deux modules
+build/
+.gradle/
+app/src/main/jniLibs/

@@ -309,7 +309,7 @@ async fn login_page(Query(query): Query<LoginQuery>) -> Html<String> {
         section class="hero" {
             h1 { "Connexion" }
             @if let Some(erreur) = &query.erreur {
-                p class="alert" { "Connexion impossible : " (erreur) }
+                p class="alert" { (message_erreur(erreur)) }
             }
             p class="muted" { "L'acces se fait avec votre compte Google. Aucun mot de passe n'est stocke par M-pacer." }
             a class="button" href="/auth/google/start" { "Continuer avec Google" }
@@ -776,5 +776,19 @@ fn format_date(timestamp_ms: i64) -> String {
             .format("%d/%m/%Y %H:%M")
             .to_string(),
         None => "-".to_string(),
+    }
+}
+
+/// Traduit un code d'erreur de connexion en message lisible par l'utilisateur.
+fn message_erreur(code: &str) -> String {
+    match code {
+        "google_non_configure" => "La connexion Google n'est pas encore configuree sur ce service :              l'administrateur doit renseigner le client OAuth."
+            .to_string(),
+        "google_refuse" => {
+            "Google a refuse la connexion (client OAuth invalide, redirection non autorisee ou compte non autorise)."
+                .to_string()
+        }
+        "access_denied" => "Vous avez refuse l'acces a votre compte Google.".to_string(),
+        other => format!("Connexion impossible ({other})."),
     }
 }

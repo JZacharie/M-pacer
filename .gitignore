@@ -1,0 +1,22 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Bases de donnees locales (dev et tests)
+*.db
+*.db-wal
+*.db-shm
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/app/src/main/jniLibs/
+*.apk
+*.aab
+
+# Sorties du simulateur
+*.gpx
+!examples/*.gpx

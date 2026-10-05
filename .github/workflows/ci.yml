@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Lints
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests (coeur, client, FFI, backend)
+        run: cargo test --workspace
+      - name: Simulation de bout en bout
+        run: cargo run --release -p mpacer-sim -- --mode plan --distance 10000 --time 3000 --split 0.03 --gpx /tmp/trace.gpx
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint du chart
+        run: helm lint charts/mpacer -f charts/mpacer/values-jo3.yaml
+      - name: Rendu du chart
+        run: helm template mpacer charts/mpacer -n mpacer -f charts/mpacer/values-jo3.yaml > /dev/null
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Construction de l'image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: false

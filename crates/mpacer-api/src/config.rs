@@ -137,6 +137,9 @@ pub struct Config {
     pub session_secret: String,
     pub google_client_id: Option<String>,
     pub google_client_secret: Option<String>,
+    /// URI de redirection OAuth explicitement enregistree dans la console Google.
+    /// Vide => `{public_url}/auth/google/callback`.
+    pub google_redirect_uri: Option<String>,
     /// Autorise une connexion de test sans Google (`/auth/dev-login`).
     pub dev_auth: bool,
     /// Cookie `Secure` : vrai en production (HTTPS), faux en HTTP local.
@@ -184,6 +187,7 @@ impl Config {
             session_secret,
             google_client_id,
             google_client_secret,
+            google_redirect_uri: env_var("MPACER_GOOGLE_REDIRECT_URI"),
             dev_auth: env_var("MPACER_DEV_AUTH")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
@@ -195,8 +199,34 @@ impl Config {
     }
 
     /// URL de redirection OAuth declaree dans la console Google.
+    ///
+    /// Un client OAuth peut avoir enregistre un chemin different (ex. `/Authorized`) :
+    /// `MPACER_GOOGLE_REDIRECT_URI` permet de s'y aligner sans changer le code, et le
+    /// routeur sert alors le callback a ce chemin (voir `google_redirect_path`).
     pub fn google_redirect_uri(&self) -> String {
-        format!("{}/auth/google/callback", self.public_url)
+        self.google_redirect_uri
+            .clone()
+            .unwrap_or_else(|| format!("{}/auth/google/callback", self.public_url))
+    }
+
+    /// Chemin (sur ce service) ou Google renverra le navigateur.
+    pub fn google_redirect_path(&self) -> String {
+        let uri = self.google_redirect_uri();
+        let after_scheme = uri.splitn(2, "://").nth(1).unwrap_or(&uri);
+        match after_scheme.find('/') {
+            Some(index) => {
+                let path = after_scheme[index..]
+                    .split(['?', '#'])
+                    .next()
+                    .unwrap_or("/");
+                if path.is_empty() {
+                    "/".to_string()
+                } else {
+                    path.to_string()
+                }
+            }
+            None => "/".to_string(),
+        }
     }
 
     /// Vrai si un client Google **exploitable** est configure.
@@ -241,6 +271,7 @@ impl Config {
             session_secret: "secret-de-test-suffisamment-long-pour-hs256".to_string(),
             google_client_id: Some("client-de-test".to_string()),
             google_client_secret: Some("secret-de-test".to_string()),
+            google_redirect_uri: None,
             dev_auth: false,
             cookie_secure: false,
             device_code_ttl: Duration::from_secs(600),
@@ -281,6 +312,24 @@ mod tests {
 
         config.google_client_secret = Some("GOCSPX-vrai-secret".to_string());
         assert!(config.google_configured());
+    }
+
+    #[test]
+    fn redirect_uri_and_path_are_configurable() {
+        let mut config = Config::for_tests("https://mpacer.p.zacharie.org", "postgresql://exemple");
+        assert_eq!(
+            config.google_redirect_uri(),
+            "https://mpacer.p.zacharie.org/auth/google/callback"
+        );
+        assert_eq!(config.google_redirect_path(), "/auth/google/callback");
+
+        // Cas d'un client OAuth dont l'URI enregistree est differente
+        config.google_redirect_uri = Some("https://mpacer.p.zacharie.org/Authorized".to_string());
+        assert_eq!(config.google_redirect_path(), "/Authorized");
+        assert_eq!(
+            config.google_redirect_uri(),
+            "https://mpacer.p.zacharie.org/Authorized"
+        );
     }
 
     #[test]

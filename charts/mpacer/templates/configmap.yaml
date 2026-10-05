@@ -10,4 +10,8 @@ data:
   MPACER_PUBLIC_URL: {{ .Values.config.publicUrl | quote }}
   MPACER_COOKIE_SECURE: {{ .Values.config.cookieSecure | quote }}
   MPACER_DEV_AUTH: {{ .Values.config.devAuth | quote }}
+  {{- if .Values.config.googleRedirectUri }}
+  # Doit correspondre EXACTEMENT a une URI autorisee dans la console Google
+  MPACER_GOOGLE_REDIRECT_URI: {{ .Values.config.googleRedirectUri | quote }}
+  {{- end }}
   RUST_LOG: {{ .Values.config.rustLog | quote }}

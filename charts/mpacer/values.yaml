@@ -50,6 +50,10 @@ config:
   cookieSecure: true
   # A NE JAMAIS activer en production : connexion de test sans Google
   devAuth: false
+  # URI de redirection OAuth enregistree dans la console Google.
+  # Vide => <publicUrl>/auth/google/callback. A renseigner si le client OAuth
+  # utilise un autre chemin (le service sert alors le callback a ce chemin).
+  googleRedirectUri: ""
   rustLog: "info,mpacer_api=info,tower_http=warn"
 
 auth:

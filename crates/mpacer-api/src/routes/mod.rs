@@ -15,14 +15,23 @@ use tower_http::trace::TraceLayer;
 
 /// Routeur complet du service.
 pub fn router(state: AppState) -> Router {
-    Router::new()
+    let mut app = Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .merge(api::router())
         .merge(web::router())
         .layer(CompressionLayer::new())
-        .layer(TraceLayer::new_for_http())
-        .with_state(state)
+        .layer(TraceLayer::new_for_http());
+
+    // Un client OAuth peut avoir enregistre une autre URI de redirection (ex. /Authorized) :
+    // le callback est alors servi aussi a ce chemin.
+    let callback_path = state.config.google_redirect_path();
+    if callback_path != "/auth/google/callback" && callback_path != "/" {
+        tracing::info!(chemin = %callback_path, "callback OAuth servi a un chemin personnalise");
+        app = app.route(&callback_path, get(web::google_callback));
+    }
+
+    app.with_state(state)
 }
 
 /// Export GPX d'une seance, partage par l'API (jeton) et l'interface web (session).

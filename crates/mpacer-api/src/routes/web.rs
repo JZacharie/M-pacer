@@ -351,13 +351,13 @@ async fn google_start(State(state): State<AppState>) -> AppResult<Response> {
 }
 
 #[derive(Debug, Deserialize)]
-struct CallbackQuery {
+pub(crate) struct CallbackQuery {
     code: Option<String>,
     state: Option<String>,
     error: Option<String>,
 }
 
-async fn google_callback(
+pub(crate) async fn google_callback(
     State(state): State<AppState>,
     Query(query): Query<CallbackQuery>,
     jar: axum_extra::extract::CookieJar,

@@ -27,8 +27,8 @@ Chaque lot a un **périmètre de fichiers disjoint** et peut avancer en parallè
 |---|---|---|---|---|
 | **L1** | Backend : exploitation et durcissement | crates/mpacer-api/src/**, migrations/** | — | ✅ filtres, export .pac, agrégats (14 tests verts) |
 | **L2** | Frontend web : tableaux de bord et navigation | routes/web.rs, static/** | — | ✅ page statistiques, navigation, pagination |
-| **L3** | Images conteneur et publication | deploy/**, .github/workflows/** | — | 🔶 image construite et testée, **publication bloquée** (jeton sans write:packages) |
-| **L4** | Secrets Vault + ExternalSecrets | templates/externalsecret*.yaml, values.yaml | jeton Vault | 🔶 gabarits livrés et conformes, **scellement à faire** |
+| **L3** | Images conteneur et publication | deploy/**, .github/workflows/** | — | ✅ publication par GitHub Actions (`GITHUB_TOKEN`, `packages: write`) |
+| **L4** | Secrets Vault + ExternalSecrets | templates/externalsecret*.yaml, values.yaml | jeton Vault | ✅ scellés dans `apps/mpacer` (montage `apps/`), ESO en `SecretSynced` |
 | **L5** | ArgoCD / GitOps sur jo3 | dépôt JZacharie/jo3, Applications/** | L3 (image publiée) | ✅ application créée, ingress + certificat TLS émis, PostgreSQL adopté |
 | **L6** | Application montre (Wear OS) | android/app/** | — | ✅ code livré (23 fichiers Kotlin), **non compilé** |
 | **L7** | Application Android compagnon | android/companion/**, android/*.gradle.kts | L1 (API) | ✅ module livré, **non compilé** |

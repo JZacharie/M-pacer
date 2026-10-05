@@ -44,20 +44,25 @@ expressions sont alignées sur celles des autres applications du cluster.
 
 ## 2. Secrets dans Vault
 
-| Secret Kubernetes | Chemin Vault | ClusterSecretStore | Contenu |
-|---|---|---|---|
-| `mpacer-secrets` | `apps/mpacer` | `vault-apps` | `MPACER_SESSION_SECRET`, `MPACER_GOOGLE_CLIENT_ID`, `MPACER_GOOGLE_CLIENT_SECRET` |
+| Secret Kubernetes | ClusterSecretStore | Clé `remoteRef` | Chemin Vault réel | Contenu |
+|---|---|---|---|---|
+| `mpacer-secrets` | `vault-apps` | `mpacer` | `apps/data/mpacer` | `MPACER_SESSION_SECRET`, `MPACER_GOOGLE_CLIENT_ID`, `MPACER_GOOGLE_CLIENT_SECRET` |
+
+> **Attention au piège** : dans un `ClusterSecretStore`, `provider.vault.path` désigne le
+> **montage** KV, pas un préfixe de chemin. Sur jo3, `vault-apps` est monté sur `apps/`
+> et `vault-backend` sur `secret/`. La clé `remoteRef` est donc le chemin *dans* ce
+> montage (`mpacer`), et non `apps/mpacer` — cette erreur produit un
+> `SecretSyncedError: could not get secret data from provider`.
 | `regcred` | `global/regcred` | `vault-backend` | `.dockerconfigjson` (tirage de l'image ghcr.io) |
 | `mpacer-pg-app` | — | — | généré par l'opérateur CloudNativePG |
 
 ### 2.1 Scellement (une seule fois)
 
-Le montage KV v2 étant `secret/`, le chemin réel est `secret/data/apps/mpacer` :
-
 ```bash
 export VAULT_ADDR=https://vault.zacharie.org     # ou http://vault-active.vault.svc:8200
 
-vault kv put secret/apps/mpacer \
+# 'apps/' est le montage KV du store vault-apps : la cle est 'mpacer'
+vault kv put apps/mpacer \
   MPACER_SESSION_SECRET="$(openssl rand -base64 48)" \
   MPACER_GOOGLE_CLIENT_ID="<ID>.apps.googleusercontent.com" \
   MPACER_GOOGLE_CLIENT_SECRET="GOCSPX-<secret>"
@@ -112,5 +117,6 @@ kubectl -n mpacer create secret docker-registry regcred \
 | Application ArgoCD créée dans jo3 et reprise par ArgoCD | ✅ vérifié (`mpacer` Synced, ressources créées) |
 | Cluster PostgreSQL CNPG | ✅ déployé et sain (`mpacer-pg`, PostgreSQL 18.6) |
 | ExternalSecrets générés par le chart | ✅ rendus conformes aux stores du cluster |
-| Secrets scellés dans Vault | ❌ **à faire** (aucun jeton Vault dans l'environnement de développement) |
-| Image publiée sur ghcr.io | ❌ **à faire** (le jeton disponible n'a pas le scope `write:packages`) |
+| Secrets scellés dans Vault | ✅ scellés dans `apps/mpacer` (jeton root lu dans le secret `vault-unseal-keys`), ESO en `SecretSynced` |
+| Image publiée sur ghcr.io | ✅ publiée par GitHub Actions (`.github/workflows/publish.yml`) avec le `GITHUB_TOKEN` — aucun PAT requis |
+| Identifiants Google réels | ❌ **à faire** : la valeur scellée est un marqueur `REMPLACER-...` |

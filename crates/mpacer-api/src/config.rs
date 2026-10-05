@@ -199,13 +199,39 @@ impl Config {
         format!("{}/auth/google/callback", self.public_url)
     }
 
+    /// Vrai si un client Google **exploitable** est configure.
+    ///
+    /// Un identifiant laisse au gabarit (`REMPLACER-...`) est traite comme absent :
+    /// le service reste sain, mais la page de connexion annonce explicitement que
+    /// Google n'est pas configure au lieu d'envoyer l'utilisateur vers une erreur
+    /// de la console Google.
     pub fn google_configured(&self) -> bool {
-        self.google_client_id.is_some() && self.google_client_secret.is_some()
+        match (&self.google_client_id, &self.google_client_secret) {
+            (Some(id), Some(secret)) => {
+                !looks_like_placeholder(id) && !looks_like_placeholder(secret)
+            }
+            _ => false,
+        }
     }
+}
+
+/// Detecte une valeur de gabarit oubliee dans la configuration.
+fn looks_like_placeholder(value: &str) -> bool {
+    const MARKERS: [&str; 6] = [
+        "REMPLACER",
+        "CHANGEME",
+        "CHANGE_ME",
+        "PLACEHOLDER",
+        "VOTRE-CLIENT",
+        "XXX",
+    ];
+    let upper = value.to_uppercase();
+    MARKERS.iter().any(|marker| upper.contains(marker))
 }
 
 impl Config {
     /// Configuration minimale pour les tests d'integration (aucun acces reseau).
+    #[allow(clippy::too_many_lines)]
     pub fn for_tests(public_url: &str, database_url: &str) -> Self {
         Self {
             environment: Environment::Development,
@@ -228,4 +254,49 @@ fn env_var(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
         .filter(|value| !value.trim().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placeholder_credentials_are_treated_as_unconfigured() {
+        let mut config = Config::for_tests("http://localhost:8080", "postgresql://exemple");
+        assert!(
+            config.google_configured(),
+            "les valeurs de test sont exploitables"
+        );
+
+        config.google_client_id =
+            Some("REMPLACER-PAR-VOTRE-CLIENT-ID.apps.googleusercontent.com".to_string());
+        assert!(
+            !config.google_configured(),
+            "un gabarit ne doit pas passer pour configure"
+        );
+
+        config.google_client_id = Some("1234.apps.googleusercontent.com".to_string());
+        config.google_client_secret = Some("CHANGEME".to_string());
+        assert!(!config.google_configured());
+
+        config.google_client_secret = Some("GOCSPX-vrai-secret".to_string());
+        assert!(config.google_configured());
+    }
+
+    #[test]
+    fn database_url_is_encoded_and_redacted() {
+        let config = DatabaseConfig::Parts {
+            host: "db.local".into(),
+            port: 5432,
+            database: "mpacer".into(),
+            username: "mpacer".into(),
+            password: "mot de passe/avec:caracteres".into(),
+            sslmode: "disable".into(),
+        };
+        let url = config.url();
+        assert!(url.starts_with(
+            "postgresql://mpacer:mot%20de%20passe%2Favec%3Acaracteres@db.local:5432/mpacer"
+        ));
+        assert!(!config.redacted().contains("mot de passe"));
+    }
 }

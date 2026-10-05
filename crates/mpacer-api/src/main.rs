@@ -21,6 +21,12 @@ async fn main() -> anyhow::Result<()> {
     if config.dev_auth {
         tracing::warn!("MPACER_DEV_AUTH actif : ne jamais activer cette option en production");
     }
+    if !config.google_configured() {
+        tracing::warn!(
+            "connexion Google non configuree (identifiants absents ou laisses au gabarit) : \
+             la page de connexion le signalera, aucune authentification n'est possible"
+        );
+    }
 
     let pool = db::connect(&config).await?;
     let state = AppState::new(pool, Arc::new(config.clone()));

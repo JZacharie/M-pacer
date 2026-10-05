@@ -137,7 +137,14 @@ binaire, un utilisateur non privilegie (uid 10001) et un `HEALTHCHECK` sur `/hea
    https://mpacer.p.zacharie.org/auth/google/callback
    https://mpacer.zacharie.org/auth/google/callback     (si l'ingress public est active)
    ```
-4. Recopier l'ID client et le secret : ils seront passes a Helm (section suivante).
+4. Recopier l'ID client et le secret : ils sont scelles dans Vault (section 4 quater).
+
+> **URI deja enregistree differente ?** Le service s'aligne sur ce que le client OAuth
+> autorise grace a `config.googleRedirectUri` : renseignez l'URI exacte, le callback
+> est alors servi a ce chemin (sur jo3, le client du projet `mpacer` n'autorise que
+> `https://mpacer.p.zacharie.org/Authorized`, d'ou cette valeur dans
+> `values-jo3.yaml`). Une URI non declaree provoque `redirect_uri_mismatch` : c'est
+> l'erreur la plus frequente au premier deploiement.
 
 Le service verifie l'`id_token` contre les cles publiques de Google (JWKS), controle
 l'audience, l'emetteur, la signature et `email_verified`, puis ouvre une session

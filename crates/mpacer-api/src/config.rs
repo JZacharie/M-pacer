@@ -212,7 +212,10 @@ impl Config {
     /// Chemin (sur ce service) ou Google renverra le navigateur.
     pub fn google_redirect_path(&self) -> String {
         let uri = self.google_redirect_uri();
-        let after_scheme = uri.splitn(2, "://").nth(1).unwrap_or(&uri);
+        let after_scheme = uri
+            .split_once("://")
+            .map(|(_, reste)| reste)
+            .unwrap_or(&uri);
         match after_scheme.find('/') {
             Some(index) => {
                 let path = after_scheme[index..]

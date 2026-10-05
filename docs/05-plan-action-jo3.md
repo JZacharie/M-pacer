@@ -25,14 +25,21 @@ Chaque lot a un **périmètre de fichiers disjoint** et peut avancer en parallè
 
 | Lot | Objet | Périmètre | Dépend de | Statut |
 |---|---|---|---|---|
-| **L1** | Backend : exploitation et durcissement | crates/mpacer-api/src/**, migrations/** | — | 🔶 démarré |
-| **L2** | Frontend web : tableaux de bord et navigation | routes/web.rs, static/** | — | 🔶 démarré |
-| **L3** | Images conteneur et publication | deploy/**, .github/workflows/** | — | 🔶 démarré |
-| **L4** | Secrets Vault + ExternalSecrets | templates/externalsecret*.yaml, values.yaml | jeton Vault | 🔶 gabarits, scellement à faire |
-| **L5** | ArgoCD / GitOps sur jo3 | dépôt JZacharie/jo3, Applications/** | L3 (image publiée) | 🔶 démarré |
-| **L6** | Application montre (Wear OS) | android/app/** | — | 🔶 délégué |
-| **L7** | Application Android compagnon | android/companion/**, android/*.gradle.kts | L1 (API) | 🔶 délégué |
-| **L8** | Vérification terrain | — | L1→L7 | 🔲 à venir |
+| **L1** | Backend : exploitation et durcissement | crates/mpacer-api/src/**, migrations/** | — | ✅ filtres, export .pac, agrégats (14 tests verts) |
+| **L2** | Frontend web : tableaux de bord et navigation | routes/web.rs, static/** | — | ✅ page statistiques, navigation, pagination |
+| **L3** | Images conteneur et publication | deploy/**, .github/workflows/** | — | 🔶 image construite et testée, **publication bloquée** (jeton sans write:packages) |
+| **L4** | Secrets Vault + ExternalSecrets | templates/externalsecret*.yaml, values.yaml | jeton Vault | 🔶 gabarits livrés et conformes, **scellement à faire** |
+| **L5** | ArgoCD / GitOps sur jo3 | dépôt JZacharie/jo3, Applications/** | L3 (image publiée) | ✅ application créée, ingress + certificat TLS émis, PostgreSQL adopté |
+| **L6** | Application montre (Wear OS) | android/app/** | — | ✅ code livré (23 fichiers Kotlin), **non compilé** |
+| **L7** | Application Android compagnon | android/companion/**, android/*.gradle.kts | L1 (API) | ✅ module livré, **non compilé** |
+| **L8** | Vérification terrain | — | L1→L7 | 🔲 à venir (nécessite une machine avec le SDK Android) |
+
+**Vérifications automatiques du lot Android** (à défaut de compilation) : catalogue de
+versions cohérent (43 alias déclarés, 27 utilisés, aucun introuvable), 23 fichiers
+Kotlin dont le package correspond à l'arborescence, deux modules déclarés et présents
+(`:app`, `:companion`), points d'entrée appelés conformes à l'API
+(`/api/v1/device/code`, `/api/v1/device/token`, `/api/v1/me`, `/api/v1/workouts`),
+aucun secret en dur, aucun fichier modifié hors de `android/`.
 
 > L6 et L7 partagent la configuration Gradle : **un seul lot les pilote**, afin d'éviter
 > deux écritures concurrentes sur settings.gradle.kts.

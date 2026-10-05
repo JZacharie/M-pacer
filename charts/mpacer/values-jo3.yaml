@@ -28,11 +28,6 @@ externalSecrets:
   secretStore: vault-apps
   vaultPath: apps/mpacer
   secretName: mpacer-secrets
-  regcred:
-    enabled: true
-    secretStore: vault-backend
-    key: global/regcred
-    secretName: regcred
 
 # Le chart ne cree pas de Secret : il consomme celui produit par ESO
 auth:

@@ -118,12 +118,9 @@ externalSecrets:
     sessionSecret: MPACER_SESSION_SECRET
     googleClientId: MPACER_GOOGLE_CLIENT_ID
     googleClientSecret: MPACER_GOOGLE_CLIENT_SECRET
-  # Identifiant de tirage d'image (motif global/regcred du cluster jo3)
-  regcred:
-    enabled: true
-    secretStore: vault-backend
-    key: global/regcred
-    secretName: regcred
+  # NB : le cluster jo3 provisionne deja 'regcred' (et 'tls-zacharie-org') dans chaque
+  # namespace via ses propres ExternalSecrets. On ne les recree donc pas ici, pour
+  # eviter un conflit de propriete sur un secret existant.
 
 persistence:
   enabled: false

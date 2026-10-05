@@ -1,0 +1,81 @@
+# Valeurs pour le cluster k3s "jo3" (label de noeud : cluster=jo3).
+#   helm upgrade --install mpacer charts/mpacer -n mpacer --create-namespace \
+#     -f charts/mpacer/values-jo3.yaml \
+#     --set auth.googleClientId=... --set auth.googleClientSecret=...
+
+image:
+  repository: ghcr.io/jzacharie/mpacer
+  tag: latest
+  pullPolicy: Always
+
+imagePullSecrets:
+  - name: regcred
+
+# Noeuds amd64 (vm15x/vm16x) : le cluster compte aussi des noeuds arm64 (pi20x).
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+service:
+  port: 8080
+
+config:
+  environment: production
+  # Doit correspondre a l'URL de redirection declaree dans la console Google :
+  #   https://mpacer.p.zacharie.org/auth/google/callback
+  publicUrl: https://mpacer.p.zacharie.org
+  cookieSecure: true
+  devAuth: false
+
+# PostgreSQL gere par l'operateur CloudNativePG (present sur jo3 : cnpg-system)
+postgresql:
+  enabled: true
+  mode: cnpg
+  instances: 1
+  database: mpacer
+  username: mpacer
+  storage:
+    size: 2Gi
+    # Conserve le volume si le cluster est supprime (donnees de sante personnelles)
+    storageClass: local-path-retain
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  nodeSelector:
+    kubernetes.io/arch: amd64
+
+# L'application n'ecrit plus rien sur disque : plus de volume applicatif
+persistence:
+  enabled: false
+
+# Avec PostgreSQL, l'application est sans etat : mise a jour sans coupure
+strategy:
+  type: RollingUpdate
+
+ingress:
+  enabled: true
+  className: traefik
+  host: mpacer.p.zacharie.org
+
+# Passer a true pour exposer le service publiquement (montre hors du domicile).
+cloudflareIngress:
+  enabled: false
+  className: cloudflare-tunnel
+  host: mpacer.zacharie.org
+
+certificate:
+  enabled: true
+  issuerRef:
+    name: letsencrypt-production-dns
+    kind: ClusterIssuer
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi

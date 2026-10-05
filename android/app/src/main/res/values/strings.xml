@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">M-pacer</string>
+    <string name="start">Demarrer</string>
+    <string name="pause">Pause</string>
+    <string name="resume">Reprendre</string>
+    <string name="stop">Arreter</string>
+    <string name="settings">Reglages</string>
+
+    <!-- Etats GPS : cles renvoyees par le moteur (GpsStatus::message_key) -->
+    <string name="gps_disabled">GPS desactive : activez la localisation pour courir</string>
+    <string name="gps_acquiring">Recherche du signal GPS...</string>
+    <string name="gps_poor">Signal faible : valeurs peu fiables</string>
+    <string name="gps_ok">Signal GPS bon</string>
+
+    <!-- Configuration incomplete -->
+    <string name="config_missing_distance">Renseignez la distance de course</string>
+    <string name="config_missing_target_time">Renseignez le temps prevu</string>
+</resources>

@@ -1,0 +1,28 @@
+{{- if .Values.cloudflareIngress.enabled }}
+{{- if not .Values.cloudflareIngress.host }}
+{{- fail "cloudflareIngress.host est obligatoire lorsque cloudflareIngress.enabled = true" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "mpacer.fullname" . }}-cloudflare-tunnel
+  labels:
+    {{- include "mpacer.labels" . | nindent 4 }}
+  {{- with .Values.cloudflareIngress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.cloudflareIngress.className }}
+  rules:
+    - host: {{ .Values.cloudflareIngress.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.path }}
+            pathType: {{ .Values.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "mpacer.fullname" . }}
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}

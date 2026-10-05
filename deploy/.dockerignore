@@ -1,0 +1,3 @@
+# Fichier conserve pour la documentation : le fichier reellement utilise par
+# podman/docker est celui de la racine du depot (.dockerignore), puisque le
+# contexte de build est la racine (voir deploy/README.md).

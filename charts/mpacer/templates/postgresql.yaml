@@ -1,0 +1,73 @@
+{{- if and .Values.postgresql.enabled (eq .Values.postgresql.mode "cnpg") }}
+{{- $pg := include "mpacer.postgresName" . }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $pg }}
+  labels:
+    {{- include "mpacer.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.postgresql.instances }}
+  # Image par defaut de l'operateur CloudNativePG (evite d'epingler une version figee)
+  {{- if .Values.postgresql.imageName }}
+  imageName: {{ .Values.postgresql.imageName | quote }}
+  {{- end }}
+  primaryUpdateStrategy: unsupervised
+  storage:
+    size: {{ .Values.postgresql.storage.size }}
+    {{- if .Values.postgresql.storage.storageClass }}
+    storageClass: {{ .Values.postgresql.storage.storageClass | quote }}
+    {{- end }}
+  resources:
+    {{- toYaml .Values.postgresql.resources | nindent 4 }}
+  bootstrap:
+    initdb:
+      database: {{ .Values.postgresql.database | quote }}
+      owner: {{ .Values.postgresql.username | quote }}
+      encoding: UTF8
+      localeCType: C
+      localeCollate: C
+  # Le secret applicatif <cluster>-app contient host/port/dbname/username/password/uri
+  {{- with .Values.postgresql.nodeSelector }}
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              {{- range $key, $value := . }}
+              - key: {{ $key }}
+                operator: In
+                values:
+                  - {{ $value | quote }}
+              {{- end }}
+  {{- end }}
+  {{- if .Values.postgresql.backup.enabled }}
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.postgresql.backup.destinationPath | quote }}
+      {{- if .Values.postgresql.backup.endpointURL }}
+      endpointURL: {{ .Values.postgresql.backup.endpointURL | quote }}
+      {{- end }}
+      s3Credentials:
+        accessKeyId:
+          name: {{ .Values.postgresql.backup.credentialsSecret | quote }}
+          key: ACCESS_KEY_ID
+        secretAccessKey:
+          name: {{ .Values.postgresql.backup.credentialsSecret | quote }}
+          key: ACCESS_SECRET_KEY
+  {{- end }}
+{{- end }}
+{{- if and .Values.postgresql.enabled (eq .Values.postgresql.mode "cnpg") .Values.postgresql.backup.enabled .Values.postgresql.backup.schedule }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ include "mpacer.postgresName" . }}-daily
+  labels:
+    {{- include "mpacer.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.postgresql.backup.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: {{ include "mpacer.postgresName" . }}
+{{- end }}

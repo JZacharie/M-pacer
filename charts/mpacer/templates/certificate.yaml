@@ -1,0 +1,29 @@
+{{- if .Values.certificate.enabled }}
+{{- $names := .Values.certificate.dnsNames }}
+{{- if not $names }}
+{{- $names = list .Values.ingress.host }}
+{{- if and .Values.cloudflareIngress.enabled .Values.cloudflareIngress.host }}
+{{- $names = append $names .Values.cloudflareIngress.host }}
+{{- end }}
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "mpacer.fullname" . }}
+  labels:
+    {{- include "mpacer.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "mpacer.tlsSecretName" . }}
+  duration: 2160h    # 90 jours
+  renewBefore: 360h  # 15 jours
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Values.certificate.issuerRef.name }}
+    kind: {{ .Values.certificate.issuerRef.kind }}
+  dnsNames:
+    {{- range $names }}
+    - {{ . | quote }}
+    {{- end }}
+{{- end }}

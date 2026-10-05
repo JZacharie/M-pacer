@@ -1,0 +1,183 @@
+# Valeurs par defaut du chart M-pacer.
+# Pour le cluster jo3, utiliser values-jo3.yaml (voir deploy/README.md).
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/jzacharie/mpacer
+  # Vide => appVersion du chart
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Le cluster jo3 dispose d'un secret regcred par namespace (ghcr.io)
+imagePullSecrets:
+  - name: regcred
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Configuration non sensible (ConfigMap)
+config:
+  environment: production
+  publicUrl: https://mpacer.p.zacharie.org
+  cookieSecure: true
+  # A NE JAMAIS activer en production : connexion de test sans Google
+  devAuth: false
+  rustLog: "info,mpacer_api=info,tower_http=warn"
+
+auth:
+  # Reutiliser un secret existant (cree hors chart : External Secrets, sceau, etc.)
+  existingSecret: ""
+  # Sinon, renseigner les identifiants Google (Console Google Cloud -> OAuth 2.0)
+  googleClientId: ""
+  googleClientSecret: ""
+  # Laissez vide : un secret de session est genere puis conserve entre les upgrades
+  sessionSecret: ""
+
+# Base de donnees. Par defaut : un cluster PostgreSQL CloudNativePG dedie,
+# cree dans ce namespace (operateur cnpg 1.30 present sur jo3).
+postgresql:
+  enabled: true
+  # cnpg = cluster gere par l'operateur ; external = serveur PostgreSQL existant
+  mode: cnpg
+  # Vide => <fullname>-pg
+  name: ""
+  # 1 instance suffit pour un usage personnel ; passer a 3 pour du HA
+  instances: 1
+  imageName: ""
+  database: mpacer
+  username: mpacer
+  storage:
+    size: 2Gi
+    storageClass: local-path-retain
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  nodeSelector: {}
+  # Sauvegardes continues vers un stockage objet compatible S3 (optionnel)
+  backup:
+    enabled: false
+    destinationPath: ""
+    endpointURL: ""
+    credentialsSecret: ""
+    schedule: "0 30 2 * * *"
+  # Serveur existant (mode external)
+  external:
+    host: ""
+    port: 5432
+    database: mpacer
+    username: mpacer
+    # Secret contenant la cle "password" (et "host"/"port" si besoin)
+    existingSecret: ""
+    sslmode: require
+
+# Volume local du pod applicatif : plus necessaire avec PostgreSQL,
+# conserve pour un eventuel cache ou journal de support.
+persistence:
+  enabled: false
+  storageClass: local-path
+  accessMode: ReadWriteOnce
+  size: 1Gi
+  mountPath: /data
+  annotations: {}
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    kubernetes.io/ingress.class: traefik
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+  host: mpacer.p.zacharie.org
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: true
+    # Vide => <fullname>-tls (voir certificate ci-dessous)
+    secretName: ""
+
+# Acces depuis Internet (indispensable pour que la montre synchronise hors du domicile)
+cloudflareIngress:
+  enabled: false
+  className: cloudflare-tunnel
+  host: mpacer.zacharie.org
+  annotations: {}
+
+# Certificat TLS gere par cert-manager (ClusterIssuer DNS Cloudflare sur jo3)
+certificate:
+  enabled: true
+  issuerRef:
+    name: letsencrypt-production-dns
+    kind: ClusterIssuer
+  # Vide => <fullname>-tls
+  secretName: ""
+  # Vide => ingress.host + cloudflareIngress.host
+  dnsNames: []
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+livenessProbe:
+  enabled: true
+  path: /healthz
+  initialDelaySeconds: 5
+  periodSeconds: 30
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  path: /readyz
+  initialDelaySeconds: 3
+  periodSeconds: 15
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# L'application ne conserve aucun etat local : la mise a jour peut se faire
+# sans coupure (PostgreSQL est gere separement par l'operateur CNPG).
+strategy:
+  type: RollingUpdate
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []

@@ -1,0 +1,33 @@
+M-pacer est deploye dans le namespace {{ .Release.Namespace }}.
+
+1) Verifier que le pod est pret
+   kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "mpacer.fullname" . }}
+
+2) Verifier la sante du service
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "mpacer.fullname" . }} 8080:{{ .Values.service.port }}
+   curl -s http://127.0.0.1:8080/readyz
+
+3) URL publique
+{{- if .Values.ingress.enabled }}
+   https://{{ .Values.ingress.host }}
+{{- end }}
+{{- if .Values.cloudflareIngress.enabled }}
+   https://{{ .Values.cloudflareIngress.host }}   (Cloudflare Tunnel)
+{{- end }}
+
+4) Configuration Google OAuth (obligatoire pour la connexion)
+   Console Google Cloud > APIs et services > Identifiants > ID client OAuth (application Web)
+   URI de redirection autorisee :
+     {{ .Values.config.publicUrl }}/auth/google/callback
+   Puis :
+     helm upgrade {{ .Release.Name }} charts/mpacer -n {{ .Release.Namespace }} \
+       -f charts/mpacer/values-jo3.yaml \
+       --set auth.googleClientId=... --set auth.googleClientSecret=...
+
+5) Appairer la montre
+   Ouvrir {{ .Values.config.publicUrl }}/link une fois connecte, puis saisir le code
+   affiche par la montre (ou par mpacer-sim --api-url ...).
+
+6) Synchroniser une seance depuis le simulateur
+   cargo run -p mpacer-sim -- --mode plan --distance 10000 --time 3000 \
+     --api-url {{ .Values.config.publicUrl }}

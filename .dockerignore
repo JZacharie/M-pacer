@@ -1,0 +1,23 @@
+# Le contexte de build est la racine du depot : tout ce qui n'est pas
+# indispensable a la compilation du backend est exclu.
+target/
+**/target/
+*.db
+*.db-wal
+*.db-shm
+*.gpx
+
+.git/
+.github/
+android/
+charts/
+docs/
+deploy/
+examples/
+# On garde deploy/Dockerfile explicitement : Docker l'ajoute toujours au contexte.
+!deploy/Dockerfile
+
+**/*.pdb
+**/*.dll
+**/*.lib
+**/*.exp

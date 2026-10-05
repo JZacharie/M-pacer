@@ -1,0 +1,43 @@
+[package]
+name = "mpacer-api"
+description = "Backend M-pacer : API de synchronisation des seances, authentification Google et interface web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "mpacer_api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mpacer-api"
+path = "src/main.rs"
+
+[dependencies]
+mpacer-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+axum = { workspace = true }
+axum-extra = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+sqlx = { workspace = true }
+jsonwebtoken = { workspace = true }
+reqwest = { workspace = true }
+maud = { workspace = true }
+cookie = { workspace = true }
+uuid = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tower = { workspace = true, features = ["util"] }
+http-body-util = "0.1"

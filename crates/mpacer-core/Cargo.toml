@@ -1,0 +1,11 @@
+[package]
+name = "mpacer-core"
+description = "Moteur d'allure, assistant de course et suivi d'entrainement (Rust pur, sans E/S)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

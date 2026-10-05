@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mpacer-core",
+    "crates/mpacer-sim",
+    "crates/mpacer-ffi",
+    "crates/mpacer-client",
+    "crates/mpacer-api",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+authors = ["M-pacer contributors"]
+repository = "https://github.com/JZacharie/M-pacer"
+
+[workspace.dependencies]
+mpacer-core = { path = "crates/mpacer-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "macros", "form", "matched-path", "original-uri"] }
+axum-extra = { version = "0.10", features = ["cookie"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time", "net"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "compression-gzip", "limit", "set-header"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "macros", "tls-rustls-ring"] }
+jsonwebtoken = "9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+maud = "0.27"
+cookie = "0.18"
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "2"
+anyhow = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+# Les dependances sont compilees sans informations de debogage : cela accelere
+# nettement les builds et evite un bug de MSVC 14.51 (VS 18) ou l'option `-Z7`
+# ajoutee par cc-rs fait echouer la compilation des sources C (sqlite3, ring)
+# avec l'erreur D8050. Nos propres crates restent deboguables.
+[profile.dev.package."*"]
+debug = false

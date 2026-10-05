@@ -1,0 +1,12 @@
+[package]
+name = "mpacer-sim"
+description = "Simulateur de seance : rejoue une course synthetique dans le moteur M-pacer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+mpacer-core = { workspace = true }
+mpacer-client = { path = "../mpacer-client" }
+tokio = { workspace = true }

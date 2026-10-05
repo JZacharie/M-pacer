@@ -22,6 +22,7 @@ use serde::Deserialize;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(dashboard))
+        .route("/stats", get(stats_page))
         .route("/login", get(login_page))
         .route("/auth/google/start", get(google_start))
         .route("/auth/google/callback", get(google_callback))
@@ -65,15 +66,36 @@ async fn script() -> Response {
 
 // ------------------------------------------------------------------ tableau de bord
 
+/// Parametres de pagination de l'historique.
+#[derive(Debug, Deserialize)]
+struct PageQuery {
+    #[serde(default)]
+    page: Option<u32>,
+}
+
+/// Seances affichees par page.
+const PAGE_SIZE: i64 = 20;
+
 async fn dashboard(
     State(state): State<AppState>,
     OptionalUser(user): OptionalUser,
+    Query(query): Query<PageQuery>,
 ) -> AppResult<Response> {
     let Some(user) = user else {
         return Ok(page(landing()));
     };
 
-    let workouts = crate::db::list_workouts(&state.pool, &user.id, 20, 0).await?;
+    let page_number = query.page.unwrap_or(1).max(1);
+    let filter = crate::db::WorkoutFilter {
+        limit: PAGE_SIZE,
+        offset: (page_number as i64 - 1) * PAGE_SIZE,
+        ..Default::default()
+    };
+    let workouts = crate::db::list_workouts(&state.pool, &user.id, &filter).await?;
+    let total_workouts =
+        crate::db::count_workouts(&state.pool, &user.id, &crate::db::WorkoutFilter::default())
+            .await?;
+    let last_page = ((total_workouts + PAGE_SIZE - 1) / PAGE_SIZE).max(1) as u32;
     let stats = crate::db::stats(&state.pool, &user.id, 30, state.now_ms()).await?;
     let tokens = crate::db::list_tokens(&state.pool, &user.id).await?;
     let active_tokens = tokens
@@ -111,7 +133,10 @@ async fn dashboard(
         section {
             div class="section-head" {
                 h2 { "Historique" }
-                a class="button ghost" href="/link" { "Appairer une montre" }
+                div class="actions" {
+                    a class="button ghost" href="/api/v1/export" { "Exporter (.pac)" }
+                    a class="button ghost" href="/link" { "Appairer une montre" }
+                }
             }
             @if workouts.is_empty() {
                 p class="muted" { "Aucune seance pour l'instant. Appairez votre montre pour commencer la synchronisation." }
@@ -129,6 +154,17 @@ async fn dashboard(
                                 td { (format_pace(Some(workout.average_pace_s_per_km))) " /km" }
                                 td { a href={ "/workouts/" (workout.id) } { "Detail" } }
                             }
+                        }
+                    }
+                }
+                @if last_page > 1 {
+                    div class="actions pager" {
+                        @if page_number > 1 {
+                            a class="button ghost" href={ "/?page=" (page_number - 1) } { "Precedent" }
+                        }
+                        span class="muted" { "Page " (page_number) " / " (last_page) " - " (total_workouts) " seances" }
+                        @if page_number < last_page {
+                            a class="button ghost" href={ "/?page=" (page_number + 1) } { "Suivant" }
                         }
                     }
                 }
@@ -165,6 +201,105 @@ fn landing() -> Markup {
             }
         },
     )
+}
+
+// ------------------------------------------------------------------ statistiques
+
+async fn stats_page(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+
+    let now = state.now_ms();
+    let weekly =
+        crate::db::weekly_totals(&state.pool, &user.id, now - 12 * 7 * 24 * 3600 * 1000).await?;
+    let month = crate::db::stats(&state.pool, &user.id, 30, now).await?;
+    let year = crate::db::stats(&state.pool, &user.id, 365, now).await?;
+
+    let content = html! {
+        section class="hero" {
+            h1 { "Statistiques" }
+            p class="muted" { "12 dernieres semaines" }
+        }
+        section class="cards" {
+            div class="card" {
+                span class="card-label" { "30 jours" }
+                strong { (month.workout_count) " seances" }
+            }
+            div class="card" {
+                span class="card-label" { "Distance 30 j" }
+                strong { (format_distance(month.total_distance_m, UnitSystem::Metric)) }
+            }
+            div class="card" {
+                span class="card-label" { "Allure moyenne 30 j" }
+                strong { (format_pace(month.average_pace_s_per_km)) " /km" }
+            }
+            div class="card" {
+                span class="card-label" { "Distance 12 mois" }
+                strong { (format_distance(year.total_distance_m, UnitSystem::Metric)) }
+            }
+        }
+        section {
+            h2 { "Volume hebdomadaire" }
+            @if weekly.is_empty() {
+                p class="muted" { "Pas encore de donnees sur la periode." }
+            } @else {
+                (weekly_chart(&weekly))
+                table {
+                    thead { tr { th { "Semaine" } th { "Seances" } th { "Distance" } th { "Duree" } } }
+                    tbody {
+                        @for week in &weekly {
+                            tr {
+                                td { (week.label) }
+                                td { (week.workout_count) }
+                                td { (format_distance(week.distance_m, UnitSystem::Metric)) }
+                                td { (format_duration(week.duration_s)) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+    Ok(page(layout("Statistiques", Some(&user), content)))
+}
+
+/// Histogramme SVG du volume hebdomadaire (aucune librairie de graphiques).
+fn weekly_chart(weeks: &[crate::db::WeekTotal]) -> Markup {
+    let max_distance = weeks
+        .iter()
+        .map(|week| week.distance_m)
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+    let width = (weeks.len() as f64 * 34.0).max(160.0);
+    let height = 150.0;
+
+    html! {
+        svg class="chart" viewBox=(format!("0 0 {width} {height}")) preserveAspectRatio="none" {
+            @for (index, week) in weeks.iter().enumerate() {
+                @let ratio = (week.distance_m / max_distance).clamp(0.0, 1.0);
+                @let bar_height = 12.0 + ratio * (height - 34.0);
+                rect
+                    x=(format!("{:.1}", index as f64 * 34.0 + 6.0))
+                    y=(format!("{:.1}", height - bar_height - 14.0))
+                    width="22"
+                    height=(format!("{:.1}", bar_height))
+                    rx="3" {
+                    title { (week.label) " : " (format!("{:.1}", week.distance_m / 1000.0)) " km" }
+                }
+                text
+                    x=(format!("{:.1}", index as f64 * 34.0 + 17.0))
+                    y=(format!("{:.1}", height - 2.0))
+                    text-anchor="middle"
+                    class="chart-label" {
+                    (week.label)
+                }
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------------------ connexion
@@ -561,6 +696,8 @@ fn layout(title: &str, user: Option<&User>, content: Markup) -> Markup {
                     nav {
                         @if let Some(user) = user {
                             span class="who" { (user.name.clone().unwrap_or_else(|| user.email.clone())) }
+                            a href="/" { "Seances" }
+                            a href="/stats" { "Statistiques" }
                             a href="/link" { "Appairer" }
                             a href="/settings" { "Jetons" }
                             form method="post" action="/logout" { button class="ghost" type="submit" { "Deconnexion" } }

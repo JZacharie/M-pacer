@@ -224,28 +224,99 @@ pub async fn upsert_workout(
     Ok(existing.is_some())
 }
 
+/// Filtre de liste : pagination et plage de dates (bornes incluses, en ms).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WorkoutFilter {
+    pub limit: i64,
+    pub offset: i64,
+    pub from_ms: Option<i64>,
+    pub to_ms: Option<i64>,
+}
+
 pub async fn list_workouts(
     pool: &PgPool,
     user_id: &str,
-    limit: i64,
-    offset: i64,
+    filter: &WorkoutFilter,
 ) -> Result<Vec<WorkoutRow>, sqlx::Error> {
     sqlx::query_as::<_, WorkoutRow>(
         "SELECT id, started_at_ms, duration_s, distance_m, average_pace_s_per_km, unit_system, uploaded_at_ms
-           FROM workouts WHERE user_id = $1 ORDER BY started_at_ms DESC LIMIT $2 OFFSET $3",
+           FROM workouts
+          WHERE user_id = $1
+            AND ($2::bigint IS NULL OR started_at_ms >= $2)
+            AND ($3::bigint IS NULL OR started_at_ms <= $3)
+          ORDER BY started_at_ms DESC
+          LIMIT $4 OFFSET $5",
     )
     .bind(user_id)
-    .bind(limit)
-    .bind(offset)
+    .bind(filter.from_ms)
+    .bind(filter.to_ms)
+    .bind(filter.limit.max(1))
+    .bind(filter.offset.max(0))
     .fetch_all(pool)
     .await
 }
 
-pub async fn count_workouts(pool: &PgPool, user_id: &str) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar("SELECT COUNT(*)::bigint FROM workouts WHERE user_id = $1")
+/// Toutes les seances d'un utilisateur, sous forme de `WorkoutSummary` JSON.
+///
+/// Sert a l'export `.pac` : le format est exactement celui produit par le coeur
+/// Rust, donc reimportable par une montre ou par un autre backend.
+pub async fn all_workout_payloads(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT payload FROM workouts WHERE user_id = $1 ORDER BY started_at_ms")
         .bind(user_id)
-        .fetch_one(pool)
+        .fetch_all(pool)
         .await
+}
+
+/// Cumul par semaine, pour la page de statistiques.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct WeekTotal {
+    /// Etiquette courte de la semaine (ex. "06/10").
+    pub label: String,
+    pub workout_count: i64,
+    pub distance_m: f64,
+    pub duration_s: f64,
+}
+
+pub async fn weekly_totals(
+    pool: &PgPool,
+    user_id: &str,
+    since_ms: i64,
+) -> Result<Vec<WeekTotal>, sqlx::Error> {
+    sqlx::query_as::<_, WeekTotal>(
+        "SELECT to_char(date_trunc('week', to_timestamp(started_at_ms / 1000.0)), 'DD/MM') AS label,
+                COUNT(*)::bigint AS workout_count,
+                COALESCE(SUM(distance_m), 0)::double precision AS distance_m,
+                COALESCE(SUM(duration_s), 0)::double precision AS duration_s
+           FROM workouts
+          WHERE user_id = $1 AND started_at_ms >= $2
+          GROUP BY 1
+          ORDER BY 1",
+    )
+    .bind(user_id)
+    .bind(since_ms)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn count_workouts(
+    pool: &PgPool,
+    user_id: &str,
+    filter: &WorkoutFilter,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM workouts
+          WHERE user_id = $1
+            AND ($2::bigint IS NULL OR started_at_ms >= $2)
+            AND ($3::bigint IS NULL OR started_at_ms <= $3)",
+    )
+    .bind(user_id)
+    .bind(filter.from_ms)
+    .bind(filter.to_ms)
+    .fetch_one(pool)
+    .await
 }
 
 pub async fn get_workout(

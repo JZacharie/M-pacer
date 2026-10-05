@@ -10,7 +10,9 @@ use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
 use crate::models::{UploadResponse, WorkoutUpload};
 use crate::state::AppState;
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
+use axum::http::header;
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -29,6 +31,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/workouts/{id}/gpx", get(workout_gpx))
         .route("/api/v1/stats", get(stats))
+        .route("/api/v1/export", get(export_pac))
         .route("/api/v1/version", get(version))
 }
 
@@ -97,6 +100,23 @@ struct ListQuery {
     limit: i64,
     #[serde(default)]
     offset: i64,
+    /// Borne inferieure (horodatage UNIX en millisecondes).
+    #[serde(default)]
+    from: Option<i64>,
+    /// Borne superieure (horodatage UNIX en millisecondes).
+    #[serde(default)]
+    to: Option<i64>,
+}
+
+impl ListQuery {
+    fn filter(&self) -> crate::db::WorkoutFilter {
+        crate::db::WorkoutFilter {
+            limit: self.limit.clamp(1, 200),
+            offset: self.offset.max(0),
+            from_ms: self.from,
+            to_ms: self.to,
+        }
+    }
 }
 
 fn default_limit() -> i64 {
@@ -114,10 +134,14 @@ async fn list_workouts(
     AuthUser(user): AuthUser,
     Query(query): Query<ListQuery>,
 ) -> AppResult<Json<ListResponse>> {
-    let limit = query.limit.clamp(1, 200);
-    let offset = query.offset.max(0);
-    let items = crate::db::list_workouts(&state.pool, &user.id, limit, offset).await?;
-    let total = crate::db::count_workouts(&state.pool, &user.id).await?;
+    let filter = query.filter();
+    if let (Some(from), Some(to)) = (filter.from_ms, filter.to_ms) {
+        if from > to {
+            return Err(AppError::bad_request("la borne 'from' doit preceder 'to'"));
+        }
+    }
+    let items = crate::db::list_workouts(&state.pool, &user.id, &filter).await?;
+    let total = crate::db::count_workouts(&state.pool, &user.id, &filter).await?;
     Ok(Json(ListResponse { total, items }))
 }
 
@@ -146,6 +170,35 @@ async fn delete_workout(
     } else {
         Err(AppError::NotFound)
     }
+}
+
+/// Export de tout l'historique au format `.pac` (JSON versionne).
+///
+/// Le fichier est reimportable par une montre, un autre backend ou un script :
+/// c'est exactement le format produit par le coeur Rust.
+async fn export_pac(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Response> {
+    let payloads = crate::db::all_workout_payloads(&state.pool, &user.id).await?;
+    let mut workouts = Vec::with_capacity(payloads.len());
+    for payload in payloads {
+        match serde_json::from_str::<mpacer_core::history::WorkoutSummary>(&payload) {
+            Ok(summary) => workouts.push(summary),
+            Err(error) => tracing::warn!(error = %error, "seance ignoree a l'export"),
+        }
+    }
+    let body = mpacer_core::history::export_pac(&workouts)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let filename = format!("mpacer-{}.pac", chrono::Utc::now().format("%Y%m%d"));
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{filename}\""),
+        )
+        .body(Body::from(body))
+        .map_err(|error| AppError::internal(error.to_string()))
 }
 
 /// Export GPX d'une seance (partage vers Strava/Garmin).

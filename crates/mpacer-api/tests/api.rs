@@ -686,3 +686,164 @@ async fn device_login_is_disabled_unless_enabled() {
         .unwrap()
         .starts_with("mpacer_session="));
 }
+
+#[tokio::test]
+async fn workout_filters_and_pac_export() {
+    let (app, state) = app_or_skip!(test_app(false).await);
+    let user = mpacer_api::db::upsert_user(
+        &state.pool,
+        None,
+        "coureur@example.org",
+        Some("Coureur"),
+        None,
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+    let token = mpacer_api::auth::new_device_token();
+    mpacer_api::db::insert_api_token(
+        &state.pool,
+        &user.id,
+        &mpacer_api::auth::hash_token(&token),
+        "test",
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+
+    // Deux seances : une ancienne (2020) et une recente (2025).
+    for (id, started) in [
+        ("ancienne", 1_600_000_000_000_i64),
+        ("recente", 1_750_000_000_000_i64),
+    ] {
+        let mut workout = sample_workout();
+        workout["id"] = serde_json::json!(id);
+        workout["started_at_ms"] = serde_json::json!(started);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/workouts")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(workout.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // Filtre par date : seule la seance recente est renvoyee.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/workouts?from=1700000000000")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = body_text(response).await;
+    let list: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(list["total"], 1, "corps = {body}");
+    assert_eq!(list["items"][0]["id"], "recente");
+
+    // Plage inversee : refusee.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/workouts?from=2000&to=1000")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Export .pac : le fichier contient les deux seances.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/export")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers()[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .contains(".pac"));
+    let pac = body_text(response).await;
+    assert!(pac.contains("mpacer.pac"), "{pac}");
+    assert!(pac.contains("ancienne") && pac.contains("recente"));
+}
+
+#[tokio::test]
+async fn stats_page_renders_weekly_volume() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+
+    // Connexion de developpement : le cookie porte la session.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/dev-login")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let cookie = response.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let session = cookie.split(';').next().unwrap().to_string();
+
+    // Une seance vieille de trois jours (donc dans la semaine en cours).
+    let user = mpacer_api::db::upsert_user(
+        &state.pool,
+        None,
+        "dev@localhost",
+        None,
+        None,
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+    let upload = mpacer_api::models::WorkoutUpload {
+        id: "1700000000000".into(),
+        started_at_ms: state.now_ms() - 3 * 24 * 3600 * 1000,
+        duration_s: 1800.0,
+        distance_m: 6000.0,
+        average_pace_s_per_km: 300.0,
+        laps: serde_json::json!([]),
+        best_efforts: serde_json::json!([]),
+        track: vec![],
+        unit_system: Some(mpacer_core::units::UnitSystem::Metric),
+    };
+    let payload = serde_json::to_string(&upload).unwrap();
+    mpacer_api::db::upsert_workout(&state.pool, &user.id, &upload, &payload, state.now_ms())
+        .await
+        .unwrap();
+
+    let response = app
+        .oneshot(get_with_cookie("/stats", &session))
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = body_text(response).await;
+    assert_eq!(status, StatusCode::OK, "corps = {body}");
+    assert!(body.contains("Statistiques"), "{body}");
+    assert!(body.contains("Volume hebdomadaire"), "{body}");
+    assert!(body.contains("6.00 km"), "{body}");
+}

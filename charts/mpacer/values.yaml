@@ -104,6 +104,27 @@ postgresql:
 
 # Volume local du pod applicatif : plus necessaire avec PostgreSQL,
 # conserve pour un eventuel cache ou journal de support.
+# Secrets synchronises depuis HashiCorp Vault par l'External Secrets Operator
+# (present sur jo3). Si active, le chart ne cree plus son propre Secret : il
+# consomme celui produit par ESO (auth.existingSecret doit pointer dessus).
+externalSecrets:
+  enabled: false
+  secretStore: vault-apps
+  refreshInterval: 1h
+  # Chemin KV v2 dans le store (sans le prefixe "data/")
+  vaultPath: apps/mpacer
+  secretName: mpacer-secrets
+  keys:
+    sessionSecret: MPACER_SESSION_SECRET
+    googleClientId: MPACER_GOOGLE_CLIENT_ID
+    googleClientSecret: MPACER_GOOGLE_CLIENT_SECRET
+  # Identifiant de tirage d'image (motif global/regcred du cluster jo3)
+  regcred:
+    enabled: true
+    secretStore: vault-backend
+    key: global/regcred
+    secretName: regcred
+
 persistence:
   enabled: false
   storageClass: local-path

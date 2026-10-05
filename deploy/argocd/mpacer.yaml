@@ -1,0 +1,74 @@
+# Application ArgoCD du projet M-pacer.
+#
+# Copie de reference de ce qui est versionne dans le depot GitOps du cluster :
+#   JZacharie/jo3 -> Applications/home/mpacer.yaml
+# Le motif app-of-apps de jo3 cree automatiquement l'Application a partir de ce
+# dossier ; ce fichier est conserve ici pour documenter le cablage et permettre un
+# kubectl apply direct en cas d'urgence.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mpacer
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/instance: 1-argo-jo3
+    joe3.org/area: home
+    joe3.org/family: Joseph
+    joe3.org/vision: k8s-app
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  destination:
+    namespace: mpacer
+    server: https://kubernetes.default.svc
+  project: home
+  # Source unique : le chart Helm et ses valeurs jo3 vivent dans le depot de l'application.
+  source:
+    repoURL: https://github.com/JZacharie/M-pacer.git
+    targetRevision: main
+    path: charts/mpacer
+    helm:
+      valueFiles:
+        - values-jo3.yaml
+  # L'operateur CloudNativePG et l'External Secrets Operator ajoutent des champs par
+  # defaut : on les ignore pour eviter un faux OutOfSync permanent.
+  ignoreDifferences:
+    - group: external-secrets.io
+      kind: ExternalSecret
+      jqPathExpressions:
+        - .metadata.annotations
+        - .metadata.finalizers
+        - .spec.data[].remoteRef.conversionStrategy
+        - .spec.data[].remoteRef.decodingStrategy
+        - .spec.data[].remoteRef.metadataPolicy
+        - .spec.refreshInterval
+        - .spec.target.creationPolicy
+    - group: postgresql.cnpg.io
+      kind: Cluster
+      jqPathExpressions:
+        - .metadata.annotations
+        - .spec.monitoring
+    - group: apps
+      kind: Deployment
+      jqPathExpressions:
+        - .spec.replicas
+        - .spec.template.metadata.annotations
+        - .spec.template.spec.containers[].terminationMessagePath
+        - .spec.template.spec.containers[].terminationMessagePolicy
+        - .spec.template.spec.dnsPolicy
+        - .spec.template.spec.restartPolicy
+        - .spec.template.spec.schedulerName
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

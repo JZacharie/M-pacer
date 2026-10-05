@@ -143,6 +143,12 @@ Le service verifie l'`id_token` contre les cles publiques de Google (JWKS), cont
 l'audience, l'emetteur, la signature et `email_verified`, puis ouvre une session
 signee (JWT HS256) dans un cookie `HttpOnly` + `SameSite=Lax` + `Secure`.
 
+## 4 quater. GitOps et Vault
+
+Le cablage ArgoCD et la gestion des secrets dans Vault sont detailles dans
+[GITOPS-ET-SECRETS.md](GITOPS-ET-SECRETS.md) : ordre de mise en service, commandes de
+scellement, et variante sans jeton Vault.
+
 ## 5. Deployer
 
 ```bash

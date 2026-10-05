@@ -111,8 +111,10 @@ externalSecrets:
   enabled: false
   secretStore: vault-apps
   refreshInterval: 1h
-  # Chemin KV v2 dans le store (sans le prefixe "data/")
-  vaultPath: apps/mpacer
+  # Chemin dans le montage Vault du store (sans prefixe "data/").
+  # Exemple jo3 : le store 'vault-apps' monte 'apps/', donc vaultPath = mpacer
+  # pour lire apps/data/mpacer.
+  vaultPath: mpacer
   secretName: mpacer-secrets
   keys:
     sessionSecret: MPACER_SESSION_SECRET

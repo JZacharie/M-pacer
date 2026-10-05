@@ -19,14 +19,16 @@ service:
   port: 8080
 
 # Secrets geres dans Vault et synchronises par l'External Secrets Operator :
-#   vault kv put secret/apps/mpacer \
+#   vault kv put apps/mpacer \
 #     MPACER_SESSION_SECRET="$(openssl rand -base64 48)" \
 #     MPACER_GOOGLE_CLIENT_ID="....apps.googleusercontent.com" \
 #     MPACER_GOOGLE_CLIENT_SECRET="GOCSPX-...."
 externalSecrets:
   enabled: true
+  # Le ClusterSecretStore 'vault-apps' pointe sur le MONTAGE Vault 'apps/'
+  # (verifie sur jo3) : la cle est donc simplement le chemin dans ce montage.
   secretStore: vault-apps
-  vaultPath: apps/mpacer
+  vaultPath: mpacer
   secretName: mpacer-secrets
 
 # Le chart ne cree pas de Secret : il consomme celui produit par ESO

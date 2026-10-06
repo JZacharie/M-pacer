@@ -3,6 +3,7 @@
 use crate::auth::google::{GoogleOidc, OidcProvider, UnconfiguredOidc};
 use crate::avatar::AvatarCache;
 use crate::config::Config;
+use crate::live::LiveStore;
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -16,6 +17,8 @@ pub struct AppState {
     pub oidc: Arc<dyn OidcProvider>,
     /// Photos de profil Google mises en cache (proxy de `GET /avatar`).
     pub avatars: Arc<AvatarCache>,
+    /// Positions recues du broker MQTT pendant les seances en cours.
+    pub live: Arc<LiveStore>,
 }
 
 impl AppState {
@@ -38,6 +41,7 @@ impl AppState {
             http,
             oidc,
             avatars: Arc::new(AvatarCache::new()),
+            live: Arc::new(LiveStore::new()),
         }
     }
 
@@ -49,6 +53,7 @@ impl AppState {
             http: http_client(),
             oidc,
             avatars: Arc::new(AvatarCache::new()),
+            live: Arc::new(LiveStore::new()),
         }
     }
 

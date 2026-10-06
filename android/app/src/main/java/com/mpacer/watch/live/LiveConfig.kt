@@ -1,0 +1,120 @@
+package com.mpacer.watch.live
+
+/**
+ * Reglages du suivi en direct (MQTT) pendant une seance.
+ *
+ * Sans adresse de broker, [configured] est faux : la montre n'ouvre aucune
+ * connexion, ne cree aucun fil et ne consomme donc rien de plus qu'avant.
+ * Publier en direct est une fonctionnalite opt-in.
+ */
+data class LiveConfig(
+    val enabled: Boolean = true,
+    /** Adresse du broker : "mqtt://hote:1883" ou "mqtts://hote:8883". */
+    val url: String = "",
+    /** Prefixe des sujets ; la montre publie sur <prefixe>/live/<montre>. */
+    val topicPrefix: String = "mpacer",
+    /** Nom de la montre dans le sujet (vide = identifiant local). */
+    val device: String = "",
+    val username: String = "",
+    val password: String = "",
+    /** Periode de publication en course (s). */
+    val intervalS: Int = 10,
+    /** Periode de publication en pause (s) : la montre ne bouge plus. */
+    val pausedIntervalS: Int = 60,
+    /** Precision GPS au-dela de laquelle un point n'est pas publie (m). */
+    val minAccuracyM: Double = 50.0,
+    /**
+     * Conserver le dernier message sur le broker : un proche qui ouvre le suivi
+     * apres le depart voit immediatement la position courante.
+     */
+    val retain: Boolean = true,
+    /** Taille maximale de la file d'attente (positions non encore ecrites). */
+    val maxQueue: Int = 16,
+) {
+    /** Vrai si le suivi en direct est reellement actif. */
+    val configured: Boolean get() = enabled && url.isNotBlank()
+
+    /** Sujet publie par la montre. */
+    fun topic(deviceId: String): String {
+        val prefixe = topicPrefix.trim().trimEnd('/').ifBlank { "mpacer" }
+        val brut = device.trim().ifBlank { deviceId }
+        val nom = brut.trim().replace(' ', '-')
+        return prefixe + "/live/" + nom
+    }
+
+    /** Periode effective, pause comprise, bornes appliquees. */
+    fun intervalMs(paused: Boolean): Long =
+        (if (paused) pausedIntervalS else intervalS)
+            .coerceIn(MIN_INTERVAL_S, MAX_INTERVAL_S) * 1000L
+
+    companion object {
+        /**
+         * Bornes de la cadence : en dessous de 5 s le GPS n'apporte rien de plus,
+         * au dela de 5 min le suivi n'est plus « en direct ».
+         */
+        const val MIN_INTERVAL_S = 5
+        const val MAX_INTERVAL_S = 300
+
+        val DEFAULT = LiveConfig()
+
+        /** Periodes proposees sur l'ecran de reglages. */
+        val INTERVALS = listOf(5, 10, 30, 60)
+
+        /** Normalise une saisie utilisateur. */
+        fun normalise(config: LiveConfig): LiveConfig = config.copy(
+            url = config.url.trim(),
+            username = config.username.trim(),
+            password = config.password.trim(),
+            intervalS = config.intervalS.coerceIn(MIN_INTERVAL_S, MAX_INTERVAL_S),
+            pausedIntervalS = config.pausedIntervalS.coerceIn(MIN_INTERVAL_S, MAX_INTERVAL_S),
+            minAccuracyM = config.minAccuracyM.coerceIn(5.0, 500.0),
+            maxQueue = config.maxQueue.coerceIn(2, 128),
+        )
+    }
+}
+
+/** Adresse de broker analysee : hote, port et TLS. */
+internal data class BrokerAddress(val host: String, val port: Int, val tls: Boolean) {
+
+    companion object {
+        /**
+         * Analyse "mqtt://hote", "mqtts://hote:8883" ou "hote:1883".
+         * Renvoie null si l'adresse n'est pas exploitable (aucun plantage).
+         */
+        fun parse(url: String): BrokerAddress? {
+            val brut = url.trim()
+            if (brut.isEmpty()) return null
+            val tls: Boolean
+            val reste: String
+            val separateur = brut.indexOf("://")
+            if (separateur > 0) {
+                when (brut.substring(0, separateur).lowercase()) {
+                    "mqtt", "tcp" -> tls = false
+                    "mqtts", "ssl", "tls" -> tls = true
+                    else -> return null
+                }
+                reste = brut.substring(separateur + 3)
+            } else {
+                tls = false
+                reste = brut
+            }
+            // Identifiants eventuels dans l'URL : ils sont ignores ici (les
+            // reglages de la montre portent le couple utilisateur/mot de passe).
+            val apresIdentifiants = reste.substringAfterLast('@', reste).trimEnd('/')
+            if (apresIdentifiants.isEmpty()) return null
+            val deuxPoints = apresIdentifiants.lastIndexOf(':')
+            val host: String
+            var port = if (tls) 8883 else 1883
+            if (deuxPoints > 0) {
+                host = apresIdentifiants.substring(0, deuxPoints)
+                val textePort = apresIdentifiants.substring(deuxPoints + 1)
+                port = textePort.toIntOrNull() ?: return null
+                if (port !in 1..65535) return null
+            } else {
+                host = apresIdentifiants
+            }
+            if (host.isBlank()) return null
+            return BrokerAddress(host, port, tls)
+        }
+    }
+}

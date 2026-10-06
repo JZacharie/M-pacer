@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  M-pacer pour montres Garmin — Connect IQ (Monkey C).
+
+  La liste des produits ci-dessous provient de l'inventaire des appareils du SDK
+  Connect IQ 4.x (API >= 4.0.0). Pour ajouter une montre récente (fēnix 8,
+  Forerunner 570/970, Instinct 3, Enduro 3, Venu 4...), lancer :
+
+      pwsh ./garmin/tools/sync-products.ps1 -Add <id-appareil>
+
+  qui relit le dossier Devices/ du SDK installé et réécrit <iq:products>.
+-->
+<iq:manifest version="3" xmlns:iq="http://www.garmin.com/xml/connectiq">
+    <iq:application id="8f0a1c2e-3b4d-4e5f-9a6b-7c8d9e0f1a2b"
+                    type="watch-app"
+                    name="@Strings.AppName"
+                    entry="MpacerApp"
+                    launcherIcon="@Drawables.LauncherIcon"
+                    minApiLevel="4.0.0">
+        <iq:products>
+            <iq:product id="approachs7042mm"/>
+            <iq:product id="approachs7047mm"/>
+            <iq:product id="d2airx10"/>
+            <iq:product id="d2mach1"/>
+            <iq:product id="descentmk343mm"/>
+            <iq:product id="descentmk351mm"/>
+            <iq:product id="epix2"/>
+            <iq:product id="epix2pro42mm"/>
+            <iq:product id="epix2pro47mm"/>
+            <iq:product id="epix2pro51mm"/>
+            <iq:product id="fenix7"/>
+            <iq:product id="fenix7pro"/>
+            <iq:product id="fenix7pronowifi"/>
+            <iq:product id="fenix7s"/>
+            <iq:product id="fenix7spro"/>
+            <iq:product id="fenix7x"/>
+            <iq:product id="fenix7xpro"/>
+            <iq:product id="fenix7xpronowifi"/>
+            <iq:product id="fr165"/>
+            <iq:product id="fr165m"/>
+            <iq:product id="fr255"/>
+            <iq:product id="fr255m"/>
+            <iq:product id="fr255s"/>
+            <iq:product id="fr255sm"/>
+            <iq:product id="fr265"/>
+            <iq:product id="fr265s"/>
+            <iq:product id="fr955"/>
+            <iq:product id="fr965"/>
+            <iq:product id="marq2"/>
+            <iq:product id="marq2aviator"/>
+            <iq:product id="venu2"/>
+            <iq:product id="venu2plus"/>
+            <iq:product id="venu2s"/>
+            <iq:product id="venu3"/>
+            <iq:product id="venu3s"/>
+            <iq:product id="venusq2"/>
+            <iq:product id="venusq2m"/>
+            <iq:product id="vivoactive5"/>
+        </iq:products>
+        <iq:permissions>
+            <!-- HTTPS vers le backend auto-hébergé (appairage + envoi des séances). -->
+            <iq:uses-permission id="Communications"/>
+            <!-- Enregistrement de la séance dans un fichier FIT (Garmin Connect). -->
+            <iq:uses-permission id="Fit"/>
+            <!-- GPS 1 Hz et statut de précision. -->
+            <iq:uses-permission id="Positioning"/>
+            <!-- Fréquence cardiaque et cadence. -->
+            <iq:uses-permission id="Sensor"/>
+            <iq:uses-permission id="SensorLogging"/>
+        </iq:permissions>
+    </iq:application>
+</iq:manifest>

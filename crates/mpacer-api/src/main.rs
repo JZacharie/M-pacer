@@ -2,7 +2,7 @@
 
 use mpacer_api::config::Config;
 use mpacer_api::state::AppState;
-use mpacer_api::{db, routes};
+use mpacer_api::{db, live, routes};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -16,6 +16,7 @@ async fn main() -> anyhow::Result<()> {
         database = %config.database.redacted(),
         google = config.google_configured(),
         dev_auth = config.dev_auth,
+        suivi_en_direct = config.mqtt_configured(),
         "demarrage de mpacer-api"
     );
     if config.dev_auth {
@@ -30,6 +31,11 @@ async fn main() -> anyhow::Result<()> {
 
     let pool = db::connect(&config).await?;
     let state = AppState::new(pool, Arc::new(config.clone()));
+    // Suivi en direct : sans MPACER_MQTT_URL, aucune tache n'est creee.
+    match live::spawn(state.clone()) {
+        Some(_) => tracing::info!(broker = ?config.mqtt_url, "suivi en direct actif"),
+        None => tracing::info!("suivi en direct inactif (MPACER_MQTT_URL non defini)"),
+    }
     let app = routes::router(state);
 
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;

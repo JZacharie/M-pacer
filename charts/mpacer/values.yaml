@@ -57,6 +57,14 @@ config:
   # URI de redirection OAuth Spotify, declaree dans la console Spotify for
   # Developers. Vide => <publicUrl>/auth/spotify/callback
   spotifyRedirectUri: ""
+  # Suivi en direct : le service s'abonne a ce broker MQTT et publie la page
+  # /live avec la position de la montre pendant la seance. Vide => fonctionnalite
+  # desactivee (aucune connexion ouverte, page /live explicative).
+  mqttUrl: ""
+  # Filtre souscrit : "mpacer/live/+" couvre "mpacer/live/<montre>".
+  mqttTopic: "mpacer/live/+"
+  # Identifiant du broker (le mot de passe va dans auth.mqttPassword).
+  mqttUsername: ""
   rustLog: "info,mpacer_api=info,tower_http=warn"
 
 auth:
@@ -69,6 +77,9 @@ auth:
   # pour les fichiers personnels et annonce que Spotify n'est pas configure.
   spotifyClientId: ""
   spotifyClientSecret: ""
+  # Mot de passe du broker MQTT du suivi en direct (optionnel). Stocke dans le
+  # Secret, jamais dans le ConfigMap.
+  mqttPassword: ""
   # Laissez vide : un secret de session est genere puis conserve entre les upgrades
   sessionSecret: ""
 

@@ -29,6 +29,10 @@ tower-http = { version = "0.6", features = ["trace", "compression-gzip", "limit"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "macros", "tls-rustls-ring"] }
 jsonwebtoken = "9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Client MQTT du suivi en direct : TLS optionnel (mqtts://). Le fournisseur
+# cryptographique est "ring", deja compile pour sqlx et reqwest.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots = "0.26"
 maud = "0.27"
 cookie = "0.18"
 uuid = { version = "1", features = ["v4"] }

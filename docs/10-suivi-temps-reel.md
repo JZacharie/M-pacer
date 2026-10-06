@@ -1,0 +1,290 @@
+# 10 — Suivi en direct (MQTT)
+
+Pendant une séance, la montre publie sa position sur un **broker MQTT** ; le
+service s'y abonne et la page **/live** affiche la trace en temps réel. Les
+proches (ou vous-même, depuis un autre appareil) suivez la course sans que la
+montre ait à parler HTTP, et sans que la séance dépende du réseau : le suivi en
+direct est un **confort**, l'enregistrement reste local puis synchronisé à la
+fin comme avant.
+
+Ce document décrit le contrat entre la montre et le service, le coût réel de la
+fonctionnalité, et ce qui n'est pas fait.
+
+---
+
+## 1. Principe
+
+```text
+Montre Wear OS                 Broker MQTT            mpacer-api                Navigateur
+┌──────────────┐   PUBLISH    ┌──────────┐  SUBSCRIBE ┌──────────────┐   GET    ┌───────────┐
+│ GPS 1 Hz     │  QoS 0       │ mosquitto│  QoS 1     │ LiveStore    │  /live   │ trace SVG │
+│ LiveTracker  │─────────────▶│ (cluster)│───────────▶│ (mémoire)    │─────────▶│ 10 s      │
+│ 1 point/10 s │  ~130 o      │          │            │ 4096 pts max │          │ auto-     │
+└──────────────┘              └──────────┘            └──────────────┘          │ rafraîchi │
+                                                                               └───────────┘
+```
+
+Trois choix structurants :
+
+1. **La montre publie, elle ne sert pas.** Aucun port ouvert, aucun certificat à
+   gérer côté montre : elle se connecte au broker, comme elle se connecte au
+   backend pour envoyer une séance.
+2. **Le suivi est volatil.** Aucune position n'est écrite en base : le magasin
+   du service est un anneau en mémoire, purgé après 24 h de silence. La séance,
+   elle, arrive par `POST /api/v1/workouts` et reste la source de vérité.
+3. **Le coût est borné par construction** — cadence, filtre de précision, file
+   bornée, un seul fil, aucune minuterie (§ 5).
+
+---
+
+## 2. Contrat MQTT
+
+### 2.1 Sujet
+
+| Élément | Valeur |
+|---|---|
+| Sujet publié | `<préfixe>/live/<montre>`, par défaut `mpacer/live/<montre>` |
+| Filtre souscrit | `MPACER_MQTT_TOPIC`, par défaut `mpacer/live/+` |
+| `<montre>` | nom choisi dans les réglages, sinon les 8 premiers caractères de l'`ANDROID_ID` |
+
+Un nom de montre ne peut contenir que des lettres, chiffres, `-`, `_` et `.`
+(les espaces deviennent des `-`) : aucun caractère de sujet MQTT n'est laissé au
+hasard.
+
+### 2.2 Charge utile
+
+JSON compact, champs courts — un point pèse **116 octets** (136 si le nom de la
+montre voyage avec lui ; par défaut il n'est que dans le sujet) :
+
+| Champ | Sens | Exemple |
+|---|---|---|
+| `t` | horodatage de la mesure (ms epoch) | `1728222000000` |
+| `lat`, `lon` | position (6 décimales, ~0,1 m) | `48.856600`, `2.352200` |
+| `acc` | précision annoncée par le GPS (m) | `4.0` |
+| `dist` | distance parcourue depuis le départ (m) | `1234.5` |
+| `pace` | allure lissée du cœur (s/km) | `300.0` |
+| `hr` | fréquence cardiaque (bpm) | `142` |
+| `bat` | batterie de la montre (%) | `78` |
+| `st` | état de la séance : `arm`, `run`, `pause`, `stop` | `run` |
+| `dev` | nom de la montre (facultatif, sinon le sujet suffit) | `montre-a1b2` |
+
+Exemple complet :
+
+```json
+{"t":1728222000000,"lat":48.856600,"lon":2.352200,"acc":4.0,"dist":1234.5,
+ "pace":300.0,"hr":142,"bat":78,"st":"run","dev":"montre-a1b2"}
+```
+
+> Le champ `lap` (numéro de tour) est prévu par le format côté service mais
+> n'est pas encore publié : le cœur n'expose pas de tour courant dans
+> `EngineOutput`, et la montre ne calcule rien elle-même.
+
+### 2.3 Qualité de service et retenue
+
+| Sens | QoS | Retenue (`retain`) |
+|---|---|---|
+| Montre → broker | 0 | oui |
+| Broker → service | 1 | — (le service accuse réception) |
+
+La montre publie en **QoS 0** : un point perdu toutes les dix secondes est
+invisible sur une trace, et l'accusé de réception coûterait de la radio et de la
+mémoire. Le message est **retenu** : un proche qui ouvre la page en cours de
+route voit immédiatement la dernière position connue, sans attendre le point
+suivant. Le dernier message d'une séance porte `"st":"stop"` : la page affiche
+alors « séance terminée » et cesse de se rafraîchir.
+
+---
+
+## 3. Côté montre (Wear OS)
+
+| Fichier | Rôle |
+|---|---|
+| `.../watch/live/LiveConfig.kt` | réglages, analyse de l'adresse du broker (`mqtt://`, `mqtts://`) |
+| `.../watch/live/LivePolicy.kt` | **politique de cadence** : une publication par période, filtre de précision |
+| `.../watch/live/LivePayload.kt` | charge utile JSON compacte (locale `ROOT`, texte assaini) |
+| `.../watch/live/MqttCodec.kt` | sérialisation MQTT 3.1.1 (CONNECT, PUBLISH, PINGREQ, DISCONNECT) |
+| `.../watch/live/LiveTracker.kt` | un fil de fond : file bornée, connexion, reconnexion, compteurs |
+| `.../watch/live/LiveSettings.kt` | persistance (mot de passe en `EncryptedSharedPreferences`) |
+| `.../watch/TrackingService.kt` | branche le suivi au départ et à l'arrêt, tend chaque position |
+| `.../watch/ui/SettingsScreen.kt` | activation, cadence, état de la liaison |
+
+Règles tenues :
+
+- **Aucune bibliothèque MQTT embarquée** : 4 paquets suffisent, testés octet par
+  octet. Pas de client complet avec ses tampons, ses fils et ses `ScheduledExecutor`.
+- **Aucun réveil supplémentaire** : le fil attend sur une condition et se
+  réveille quand une position est mise en file (ou à l'expiration du délai de
+  `PINGREQ`). Rien ne tourne quand la séance est arrêtée.
+- **La montre ne calcule rien** : distance, allure et cardio viennent déjà du
+  cœur Rust ; `LiveTracker` ne fait que transmettre, comme le reste du shell.
+- **La séance ne dépend pas du réseau** : si le broker est injoignable, la
+  montre publie ce qu'elle peut et la séance se termine normalement.
+
+### Réglages
+
+| Réglage | Défaut | Effet |
+|---|---|---|
+| URL du broker | vide | vide = suivi **désactivé**, coût nul |
+| Préfixe de sujet | `mpacer` | sujet publié : `<préfixe>/live/<montre>` |
+| Nom de la montre | `ANDROID_ID` (8 car.) | dernier segment du sujet |
+| Identifiant / mot de passe | vide | authentification du broker (facultative) |
+| Cadence en course | 10 s | 5 s à 5 min |
+| Cadence en pause | 60 s | la montre ne bouge plus |
+| Précision minimale | 50 m | en dessous, le point n'est pas publié |
+
+L'URL et les identifiants se saisissent par `adb` (le clavier d'une montre ronde
+n'est pas un clavier) :
+
+```bash
+adb shell am start -n com.mpacer.watch/.MainActivity \
+  --es mqtt_url "mqtt://mosquitto.mpacer.svc:1883"
+```
+
+---
+
+## 4. Côté service
+
+| Fichier | Rôle |
+|---|---|
+| `crates/mpacer-api/src/mqtt.rs` | client MQTT minimal (TCP ou TLS), reconnexion 2 s → 60 s, `PINGREQ` toutes les 30 s |
+| `crates/mpacer-api/src/live.rs` | magasin en mémoire (`LiveStore`), purge, résumé de trace |
+| `crates/mpacer-api/src/routes/web.rs` | page `/live` (SVG, sans JavaScript) et `/live.json` |
+| `crates/mpacer-api/src/state.rs` | `AppState.live` partagé par les gestionnaires |
+| `crates/mpacer-api/src/main.rs` | démarrage de l'abonnement si `MPACER_MQTT_URL` est défini |
+
+### Variables d'environnement
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `MPACER_MQTT_URL` | *(vide)* | `mqtt://hote:1883` ou `mqtts://hote:8883`. Vide = suivi désactivé, aucune connexion ouverte |
+| `MPACER_MQTT_TOPIC` | `mpacer/live/+` | filtre souscrit |
+| `MPACER_MQTT_USERNAME` | *(vide)* | identifiant du broker |
+| `MPACER_MQTT_PASSWORD` | *(vide)* | mot de passe (dans le Secret Helm, jamais dans le ConfigMap) |
+
+Le chart Helm expose `config.mqttUrl`, `config.mqttTopic`,
+`config.mqttUsername` et `auth.mqttPassword`.
+
+### Routes
+
+| Route | Accès | Contenu |
+|---|---|---|
+| `GET /live` | session (cookie) | trace en SVG, chiffres clés, lien OpenStreetMap, rafraîchissement automatique de 10 s |
+| `GET /live.json` | session (cookie) | même contenu en JSON, pour un tableau de bord ou un script |
+
+La page ne charge **aucune ressource tierce** : la trace est une `<polyline>`
+SVG calculée par le service, pas un fond de carte. Un lien ouvre OpenStreetMap
+sur la position exacte si l'on veut du contexte.
+
+---
+
+## 5. Budget de ressources
+
+### 5.1 Montre
+
+| Poste | Valeur | Détail |
+|---|---|---|
+| Publications | 360 / h | une toutes les 10 s en course, une toutes les 60 s en pause |
+| Trafic montant | ~65 ko / h | 360 × (116 o de charge + ~24 o d'en-têtes MQTT + ~40 o d'IP/TCP) ≈ 18 o/s |
+| `PINGREQ` | 2 o / 30 s | garde la liaison ouverte, évite une reconnexion par point |
+| Fils | 1 | priorité `THREAD_PRIORITY_BACKGROUND`, endormi sur condition |
+| Wake locks | 0 | aucun |
+| Demandes GPS | 0 en plus | la boucle 1 Hz du service existe déjà, elle est seulement observée |
+| Mémoire | ~2 ko | file de 16 paquets au maximum |
+| Batterie (estimation) | < 1 %/h | le GPS 1 Hz reste le poste dominant ; la radio est réveillée 6 fois par minute pendant ~50 ms |
+| Suivi désactivé | 0 | aucun fil, aucune connexion, aucun objet créé |
+
+Si le broker tombe : la file se remplit (16 paquets), **les positions les plus
+anciennes sont jetées** et la reconnexion retente 2 s, 4 s, 8 s… jusqu'à 60 s.
+À la reconnexion, seule la position courante est conservée : pendant une course,
+une position d'il y a trois minutes n'intéresse personne.
+
+### 5.2 Service
+
+| Poste | Valeur | Détail |
+|---|---|---|
+| Connexions | 1 | une socket vers le broker, un task Tokio |
+| Mémoire par montre | ~600 ko | anneau de 4096 points de ~144 o (11 h à 10 s), purgé après 24 h de silence |
+| Rendu d'une page | ~10 ko de HTML | trace sous-échantillonnée à 700 points, 4 montres au maximum |
+| Écritures en base | 0 | le suivi en direct ne touche pas PostgreSQL |
+
+### 5.3 Comment le vérifier
+
+- **Tests unitaires de la politique** (`LivePolicyTest`) : la cadence est
+  vérifiée à la seconde près, y compris le passage en pause.
+- **Tests du magasin** (`live.rs`) : l'anneau reste borné à 4096 points, la
+  trace rendue à 700, les montres silencieuses sont oubliées.
+- **Compteurs sur la montre** : l'écran Réglages affiche l'état de la liaison,
+  le nombre de points publiés et le nombre de points jetés.
+- **Mesure sur le terrain** : comparer une séance d'une heure avec et sans le
+  suivi en direct :
+
+  ```bash
+  adb shell dumpsys batterystats --reset          # avant la séance
+  # … séance d'une heure …
+  adb shell dumpsys batterystats | Select-String "com.mpacer.watch|Mobile radio|Wifi"
+  ```
+
+  Le critère du projet reste « batterie < 25 %/h » : le suivi en direct doit
+  rester dans le bruit de mesure de cette comparaison.
+
+---
+
+## 6. Sécurité et vie privée
+
+- **Aucun secret dans le message** : la charge utile ne contient que des
+  mesures ; l'identifiant de montre n'est pas un secret.
+- **Le mot de passe du broker** est rangé dans `EncryptedSharedPreferences`
+  (clé AES256-GCM du Keystore Android), comme le jeton d'appairage.
+- **TLS** : `mqtts://` utilise une socket TLS avec vérification du certificat
+  et du nom d'hôte (autorités racines publiques). Un broker à certificat
+  auto-signé n'est pas accepté — dans ce cas, gardez le broker sur le réseau
+  interne du cluster, ce qui est la configuration recommandée.
+- **La page `/live` demande une session** (connexion Google) : elle n'est pas
+  publique. Un partage par lien sans compte reste à faire (§ 8).
+- **Le broker ne doit pas être exposé sur Internet** sans mot de passe ni TLS :
+  un sujet MQTT est lisible par quiconque peut s'abonner.
+
+---
+
+## 7. Ce qui n'est pas fait
+
+| Limite | Raison |
+|---|---|
+| **Garmin (Connect IQ)** ne publie pas en MQTT | Connect IQ n'expose aucune socket TCP, seulement `Communications.makeWebRequest` (HTTP). Un relais par le backend est possible plus tard, mais la trace complète vit déjà dans le FIT Garmin |
+| Aucun historique du suivi | choix assumé : la base reçoit la séance à la fin ; le direct est volatil |
+| Aucun lien de partage public | la page demande une session ; un jeton de partage en lecture seule est la suite logique |
+| Pas de « dernier point reçu » dans l'en-tête de la page de séance | la page `/live` suffit pour l'instant |
+| Pas de fond de carte | aucune donnée envoyée à un service tiers, comme le reste du projet |
+
+---
+
+## 8. Vérification
+
+```bash
+# Service : sérialisation MQTT, magasin en direct, page /live (62 tests unitaires)
+cargo test -p mpacer-api
+
+# Un faux broker dans les tests : connexion, PUBLISH QoS 1, PUBACK
+cargo test -p mpacer-api mqtt::
+
+# Montre : politique de cadence, charge utile, paquets MQTT
+cd android && ./gradlew :app:testDebugUnitTest
+```
+
+Essai de bout en bout, sans montre :
+
+```bash
+# 1. Un broker local
+docker run --rm -p 1883:1883 eclipse-mosquitto:2 \
+  mosquitto -c /mosquitto-no-auth.conf
+
+# 2. Le service abonné
+MPACER_MQTT_URL=mqtt://127.0.0.1:1883 cargo run -p mpacer-api
+
+# 3. Un point publié à la main, tel que la montre l'envoie
+mosquitto_pub -h 127.0.0.1 -t mpacer/live/montre-test -r \
+  -m '{"t":1728222000000,"lat":48.8566,"lon":2.3522,"acc":4.0,"st":"run"}'
+
+# 4. La page
+#    http://localhost:8080/live  (session ouverte) doit afficher la trace
+```

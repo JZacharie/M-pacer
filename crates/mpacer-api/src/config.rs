@@ -148,6 +148,12 @@ pub struct Config {
     pub spotify_redirect_uri: Option<String>,
     /// Autorise une connexion de test sans Google (`/auth/dev-login`).
     pub dev_auth: bool,
+    /// Broker MQTT du suivi en direct (absent = fonctionnalite eteinte, aucun cout).
+    pub mqtt_url: Option<String>,
+    /// Filtre de sujet souscrit sur le broker.
+    pub mqtt_topic: String,
+    pub mqtt_username: Option<String>,
+    pub mqtt_password: Option<String>,
     /// Cookie `Secure` : vrai en production (HTTPS), faux en HTTP local.
     pub cookie_secure: bool,
     pub device_code_ttl: Duration,
@@ -200,6 +206,11 @@ impl Config {
             dev_auth: env_var("MPACER_DEV_AUTH")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
+            mqtt_url: env_var("MPACER_MQTT_URL"),
+            mqtt_topic: env_var("MPACER_MQTT_TOPIC")
+                .unwrap_or_else(|| crate::live::DEFAULT_TOPIC.to_string()),
+            mqtt_username: env_var("MPACER_MQTT_USERNAME"),
+            mqtt_password: env_var("MPACER_MQTT_PASSWORD"),
             cookie_secure,
             device_code_ttl: Duration::from_secs(600),
             session_ttl: Duration::from_secs(60 * 60 * 24 * 30),
@@ -246,6 +257,16 @@ impl Config {
             }
             _ => false,
         }
+    }
+
+    /// Vrai si le suivi en direct est configure.
+    ///
+    /// Sans `MPACER_MQTT_URL`, aucune tache n'est lancee : le service reste
+    /// strictement identique a ce qu'il etait avant le suivi en direct.
+    pub fn mqtt_configured(&self) -> bool {
+        self.mqtt_url
+            .as_ref()
+            .is_some_and(|url| !url.trim().is_empty())
     }
 
     /// Vrai si un client Google **exploitable** est configure.
@@ -314,6 +335,10 @@ impl Config {
             spotify_client_secret: None,
             spotify_redirect_uri: None,
             dev_auth: false,
+            mqtt_url: None,
+            mqtt_topic: crate::live::DEFAULT_TOPIC.to_string(),
+            mqtt_username: None,
+            mqtt_password: None,
             cookie_secure: false,
             device_code_ttl: Duration::from_secs(600),
             session_ttl: Duration::from_secs(3600),
@@ -401,6 +426,19 @@ mod tests {
             config.spotify_redirect_uri(),
             "https://mpacer.p.zacharie.org/spotify/retour"
         );
+    }
+
+    #[test]
+    fn live_tracking_is_optional() {
+        let mut config = Config::for_tests("http://localhost:8080", "postgresql://exemple");
+        assert!(!config.mqtt_configured(), "aucun broker par defaut");
+        assert_eq!(config.mqtt_topic, "mpacer/live/+");
+
+        config.mqtt_url = Some("   ".to_string());
+        assert!(!config.mqtt_configured(), "une adresse vide n'active rien");
+
+        config.mqtt_url = Some("mqtt://broker.mpacer.svc:1883".to_string());
+        assert!(config.mqtt_configured());
     }
 
     #[test]

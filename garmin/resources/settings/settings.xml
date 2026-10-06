@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Réglages modifiables depuis Garmin Connect Mobile (et, sur certains modèles,
+  depuis la montre). Les valeurs par défaut vivent dans properties.xml.
+  Une liste (<settingConfig type="list">) ne peut porter que des valeurs
+  entières ; les libellés viennent des ressources de chaînes.
+-->
+<settings>
+    <setting propertyKey="@Properties.assistantMode" title="@Strings.SettingAssistant">
+        <settingConfig type="list">
+            <listEntry value="0">@Strings.ModeTrackPace</listEntry>
+            <listEntry value="1">@Strings.ModePredictFinish</listEntry>
+            <listEntry value="2">@Strings.ModePlannedTime</listEntry>
+        </settingConfig>
+    </setting>
+
+    <setting propertyKey="@Properties.units" title="@Strings.SettingUnits">
+        <settingConfig type="list">
+            <listEntry value="0">@Strings.UnitMetric</listEntry>
+            <listEntry value="1">@Strings.UnitImperial</listEntry>
+        </settingConfig>
+    </setting>
+
+    <setting propertyKey="@Properties.detectPaceChange" title="@Strings.SettingDetectPaceChange">
+        <settingConfig type="boolean"/>
+    </setting>
+
+    <setting propertyKey="@Properties.autoPause" title="@Strings.SettingAutoPause">
+        <settingConfig type="boolean"/>
+    </setting>
+
+    <setting propertyKey="@Properties.alertsEnabled" title="@Strings.SettingAlerts">
+        <settingConfig type="boolean"/>
+    </setting>
+
+    <setting propertyKey="@Properties.alertFrequency" title="@Strings.SettingAlertFrequency">
+        <settingConfig type="list">
+            <listEntry value="0">@Strings.AlertOff</listEntry>
+            <listEntry value="1">@Strings.Alert1Min</listEntry>
+            <listEntry value="2">@Strings.Alert2Min</listEntry>
+            <listEntry value="3">@Strings.Alert5Min</listEntry>
+            <listEntry value="4">@Strings.AlertLap</listEntry>
+        </settingConfig>
+    </setting>
+
+    <setting propertyKey="@Properties.extendedLapInfo" title="@Strings.SettingExtendedLap">
+        <settingConfig type="boolean"/>
+    </setting>
+
+    <setting propertyKey="@Properties.plannedDistanceKm" title="@Strings.SettingPlannedDistance">
+        <settingConfig type="numeric" min="0.0" max="500.0"/>
+    </setting>
+
+    <setting propertyKey="@Properties.plannedTimeMin" title="@Strings.SettingPlannedTime">
+        <settingConfig type="numeric" min="0" max="2880"/>
+    </setting>
+
+    <setting propertyKey="@Properties.negativeSplit" title="@Strings.SettingNegativeSplit">
+        <settingConfig type="boolean"/>
+    </setting>
+
+    <setting propertyKey="@Properties.negativeSplitRatio" title="@Strings.SettingNegativeSplitRatio">
+        <settingConfig type="numeric" min="0.0" max="20.0"/>
+    </setting>
+
+    <setting propertyKey="@Properties.maxHeartRate" title="@Strings.SettingMaxHeartRate">
+        <settingConfig type="numeric" min="100" max="230"/>
+    </setting>
+
+    <setting propertyKey="@Properties.backendUrl" title="@Strings.SettingBackendUrl">
+        <settingConfig type="alphaNumeric" maxLength="120"/>
+    </setting>
+
+    <setting propertyKey="@Properties.syncTrace" title="@Strings.SettingSyncTrace">
+        <settingConfig type="boolean"/>
+    </setting>
+
+    <setting propertyKey="@Properties.traceIntervalS" title="@Strings.SettingTraceInterval">
+        <settingConfig type="numeric" min="1" max="120"/>
+    </setting>
+</settings>

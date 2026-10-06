@@ -16,6 +16,8 @@ import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.Text
 import com.mpacer.watch.AssistantMode
 import com.mpacer.watch.WatchSettings
+import com.mpacer.watch.live.LiveConfig
+import com.mpacer.watch.live.LiveState
 
 /**
  * Reglages essentiels, en listes de puces (pattern Wear OS) plutot qu'en formulaires.
@@ -27,6 +29,7 @@ import com.mpacer.watch.WatchSettings
 @Composable
 fun SettingsScreen(
     settings: WatchSettings,
+    liveState: LiveState,
     onSettingsChange: (WatchSettings) -> Unit,
     onBack: () -> Unit,
     onMusic: () -> Unit,
@@ -87,6 +90,40 @@ fun SettingsScreen(
             )
         }
         Chip(label = { Text("Ouvrir la bibliotheque") }, onClick = onMusic)
+
+        // Suivi en direct : la position part sur le broker MQTT choisi. L'adresse
+        // du broker se saisit sur un ecran plus confortable (voir android/README :
+        // reglages persistants, surchargeable par adb) ; ici on regle l'essentiel.
+        Text("Suivi en direct")
+        Text(liveState.resume)
+        Chip(
+            label = { Text(if (settings.live.enabled) "MQTT : active" else "MQTT : coupe") },
+            onClick = {
+                onSettingsChange(settings.copy(live = settings.live.copy(enabled = !settings.live.enabled)))
+            },
+            colors = if (settings.live.enabled) {
+                ChipDefaults.primaryChipColors()
+            } else {
+                ChipDefaults.secondaryChipColors()
+            },
+        )
+        LiveConfig.INTERVALS.forEach { secondes ->
+            Chip(
+                label = { Text("Position toutes les " + secondes + " s") },
+                onClick = { onSettingsChange(settings.copy(live = settings.live.copy(intervalS = secondes))) },
+                colors = if (settings.live.intervalS == secondes) {
+                    ChipDefaults.primaryChipColors()
+                } else {
+                    ChipDefaults.secondaryChipColors()
+                },
+            )
+        }
+        if (settings.live.url.isBlank()) {
+            Text("Broker non configure : mqtt_url")
+        } else {
+            Text(settings.live.url)
+        }
+
         Button(onClick = onBack) { Text("Retour") }
     }
 }

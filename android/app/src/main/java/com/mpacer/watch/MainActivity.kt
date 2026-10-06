@@ -11,6 +11,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.mpacer.watch.live.LiveConfig
+import com.mpacer.watch.live.LiveSettings
+import com.mpacer.watch.live.LiveTracker
 import com.mpacer.watch.music.MusicConfig
 import com.mpacer.watch.music.MusicSession
 import com.mpacer.watch.ui.MainScreen
@@ -44,18 +47,26 @@ class MainActivity : ComponentActivity() {
             var showSettings by remember { mutableStateOf(false) }
             var showSync by remember { mutableStateOf(false) }
             var showMusic by remember { mutableStateOf(false) }
-            var settings by remember { mutableStateOf(WatchSettings()) }
+            // Les reglages persistent entre deux lancements : musique (deja
+            // transmis au moteur) et suivi en direct.
+            var settings by remember {
+                mutableStateOf(WatchSettings(live = LiveSettings.load(this)))
+            }
+            val liveState by LiveTracker.state.collectAsState()
 
             // Les reglages musique partent tout de suite au moteur (ou sont gardes
             // par MusicSession si la seance n'a pas encore demarre).
             val updateSettings: (WatchSettings) -> Unit = { nouveau ->
                 settings = nouveau
                 MusicSession.setConfig(nouveau.music)
+                LiveSettings.save(this, nouveau.live)
+                LiveTracker.refresh(this)
             }
 
             when {
                 showSettings -> SettingsScreen(
                     settings = settings,
+                    liveState = liveState,
                     onSettingsChange = updateSettings,
                     onBack = { showSettings = false },
                     onMusic = {
@@ -89,8 +100,16 @@ class MainActivity : ComponentActivity() {
      *   adb shell am start -n com.mpacer.watch/.MainActivity --es api_url http://hote:8080
      */
     private fun applyApiUrl(intent: Intent?) {
-        val url = intent?.getStringExtra(EXTRA_API_URL)?.takeIf { it.isNotBlank() } ?: return
-        SyncClient.setBaseUrl(this, url)
+        // Deux adresses surchargeables au lancement, utiles en developpement :
+        //   adb shell am start -n com.mpacer.watch/.MainActivity \
+        //     --es api_url http://hote:8080 --es mqtt_url mqtt://hote:1883
+        intent?.getStringExtra(EXTRA_API_URL)?.takeIf { it.isNotBlank() }?.let {
+            SyncClient.setBaseUrl(this, it)
+        }
+        intent?.getStringExtra(EXTRA_MQTT_URL)?.takeIf { it.isNotBlank() }?.let {
+            LiveSettings.setUrl(this, it)
+            LiveTracker.refresh(this)
+        }
     }
 
     override fun onDestroy() {
@@ -100,6 +119,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_API_URL = "api_url"
+        const val EXTRA_MQTT_URL = "mqtt_url"
     }
 }
 
@@ -112,4 +132,5 @@ data class WatchSettings(
     val metric: Boolean = true,
     val voice: VoiceConfig = VoiceConfig(),
     val music: MusicConfig = MusicConfig(),
+    val live: LiveConfig = LiveConfig.DEFAULT,
 )

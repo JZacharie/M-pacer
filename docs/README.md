@@ -12,6 +12,8 @@ Index des documents. Le point d'entrée reste le [README principal](../README.md
 | [05 - Courses à venir : fiches, planning et suivi](05-courses-et-planning.md) | préparer une course : dossard, horaires, lieux, live, hébergement, nutrition, informations importantes et éléments à cocher |
 | [06 - Analyse d'une séance](06-analyse-seance.md) | lire un écran d'analyse : veille concurrente (Strava, Garmin, Polar, Coros…), plan contre réalisé, zones de fréquence cardiaque, découplage et temps d'accélération |
 | [07 - Musique, BPM et playlists de course](07-musique-bpm-et-playlists.md) | ajouter de la musique à la montre : playlists Spotify ou fichiers personnels, tempo cible, préparation avant une course, contrat d'interface du coeur, de l'API et des écrans |
+| [09 - Montre Garmin (Connect IQ, Monkey C)](09-montre-garmin.md) | porter l'application sur une montre Garmin : correspondance module par module avec le cœur Rust, capteurs et FIT, contraintes de mémoire et de réseau, contrat d'API, outillage et vérification |
+| [10 - Suivi en direct (MQTT)](10-suivi-temps-reel.md) | suivre la course en temps réel : contrat du sujet et de la charge utile, cadence et filtre de précision sur la montre, page `/live`, budget de ressources chiffré, sécurité et limites |
 | [08 - Tableaux de bord](08-tableaux-de-bord.md) | composer vos propres écrans : catalogue de neuf widgets (allure, carte, tours, meilleures distances, cardio, historique…), gabarits Pace Control / Analyse / Historique, modèle de données et routes |
 | [Guide de déploiement](../deploy/README.md) | déployer concrètement sur le cluster k3s **jo3** : image, secrets, Helm, ingress, TLS, sauvegardes, dépannage |
 
@@ -42,5 +44,7 @@ du site (visionneuse plein écran) et reprises par
 **Je veux déployer** → [deploy/README.md](../deploy/README.md).
 
 **Je veux reprendre le développement montre** → 03 puis [android/README.md](../android/README.md).
+
+**Je veux déployer sur une montre Garmin** → 09 puis [garmin/README.md](../garmin/README.md).
 
 **Je veux toucher au backend** → 04, puis le code de `crates/mpacer-api/` (chaque module est documenté en tête de fichier).

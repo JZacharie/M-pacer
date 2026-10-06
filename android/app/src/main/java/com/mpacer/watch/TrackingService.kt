@@ -18,6 +18,7 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import com.mpacer.watch.live.LiveTracker
 import com.mpacer.watch.music.MusicDirective
 import com.mpacer.watch.music.MusicPlayer
 import com.mpacer.watch.music.MusicSession
@@ -90,6 +91,9 @@ class TrackingService : Service() {
         MusicSession.apply(core)
         startForeground(NOTIFICATION_ID, notification("Preparation GPS..."))
         publish(if (armed) core.arm(now()) else core.start(now()))
+        // Suivi en direct : sans broker configure, LiveTracker.start ne fait
+        // strictement rien (aucun fil, aucune connexion).
+        LiveTracker.start(this, if (armed) "arm" else "run")
         requestLocations()
         heart.start()
     }
@@ -120,13 +124,27 @@ class TrackingService : Service() {
     }
 
     private fun onLocation(location: Location) {
+        val tMs = location.time.takeIf { it > 0 } ?: System.currentTimeMillis()
         val output = core.gps(
-            tMs = location.time.takeIf { it > 0 } ?: System.currentTimeMillis(),
+            tMs = tMs,
             lat = location.latitude,
             lon = location.longitude,
             accuracyM = location.accuracy.toDouble(),
             altitudeM = location.altitude.takeIf { location.hasAltitude() },
             speedMps = location.speed.takeIf { location.hasSpeed() }?.toDouble(),
+        )
+        // Suivi en direct : la cadence, le filtre de precision et l'etat publie
+        // sont decides dans LiveTracker (docs/10). Ici, on ne fait que tendre les
+        // valeurs deja calculees par le moteur.
+        LiveTracker.position(
+            tMs = tMs,
+            lat = location.latitude,
+            lon = location.longitude,
+            accuracyM = location.accuracy.toDouble(),
+            distanceM = output.distanceM,
+            paceSPerKm = output.currentPace,
+            heartRateBpm = output.heartRateBpm,
+            engineState = output.state,
         )
         publish(output, location)
     }
@@ -205,6 +223,9 @@ class TrackingService : Service() {
     private fun stopWorkout() {
         val output = core.stop(now())
         publish(output)
+        // Dernier message retenu (etat "stop") puis fermeture de la liaison :
+        // le suivi s'arrete avec la seance, il ne tourne pas en arriere-plan.
+        LiveTracker.stop()
         // Resume pret pour l'historique / l'export
         val summary = core.summary(startedAtMs)
         WorkoutArchive.save(this, summary)
@@ -218,6 +239,7 @@ class TrackingService : Service() {
     }
 
     override fun onDestroy() {
+        LiveTracker.stop()
         locations.removeLocationUpdates(locationCallback)
         heart.stop()
         MusicSession.detach(core)

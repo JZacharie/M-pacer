@@ -128,6 +128,33 @@ du moteur. C'est ce qui permet de tester tous les calculs sur un PC, sans montre
 3. Un envoi déjà accepté est mémorisé localement : renvoyer la même séance **remplace** la version
    distante au lieu de créer un doublon.
 
+## Suivre la course en direct
+
+<p>
+Pendant la séance, la montre peut publier sa position sur un <strong>broker MQTT</strong> : un point
+toutes les dix secondes, environ 130 octets. Le service s'y abonne et la page <code>/live</code>
+affiche la trace en temps réel — une polyligne SVG dessinée par le service, rafraîchie toute les
+dix secondes, sans fond de carte ni script tiers.
+</p>
+
+<ul>
+  <li><strong>Désactivé par défaut.</strong> Sans adresse de broker, la montre n'ouvre aucune
+  connexion et ne crée aucun fil : le suivi ne coûte rien tant qu'on ne le configure pas.</li>
+  <li><strong>Cadence maîtrisée.</strong> Une position toutes les 10 s en course, une toutes les 60 s
+  en pause ; un point dont la précision GPS dépasse 50 m n'est pas publié. Environ 55 ko par heure,
+  un fil en priorité basse, aucune minuterie, aucun wake lock.</li>
+  <li><strong>Volatil.</strong> Rien n'est écrit en base : la séance reste la source de vérité et
+  arrive à la fin, comme avant. Un proche qui se connecte en route voit immédiatement la dernière
+  position (message retenu).</li>
+  <li><strong>Privé.</strong> La page demande une connexion ; le mot de passe du broker, s'il y en a
+  un, est rangé dans le Keystore Android, et <code>mqtts://</code> est accepté.</li>
+</ul>
+
+<p class="muted">
+Détail du contrat MQTT, budget de ressources chiffré et limites :
+<a href="https://github.com/JZacharie/M-pacer/blob/main/docs/10-suivi-temps-reel.md">docs/10 — Suivi en direct</a>.
+</p>
+
 ## Appairer la montre
 
 <ol class="steps">

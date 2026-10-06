@@ -218,6 +218,70 @@ le code affiche par l'application.
 3. La montre recoit un jeton d'appareil et le conserve : les seances suivantes
    partent toutes seules (le simulateur le fait a la fin de chaque seance).
 
+## 7 bis. Suivi en direct (MQTT, optionnel)
+
+Pendant une seance, la montre peut publier sa position sur un broker MQTT : la
+page `/live` du site affiche alors la trace en temps reel. Le detail du contrat
+et le budget de ressources sont dans [docs/10](../docs/10-suivi-temps-reel.md).
+
+Cote chart, deux valeurs suffisent :
+
+```bash
+helm upgrade mpacer charts/mpacer -n mpacer -f charts/mpacer/values-jo3.yaml \\
+  --set config.mqttUrl=mqtt://mosquitto.mpacer.svc:1883 \\
+  --set config.mqttTopic='mpacer/live/+'
+```
+
+Sans `config.mqttUrl`, le service ne se connecte a rien et la page `/live`
+explique simplement comment l'activer.
+
+> `auth.mqttPassword` (optionnel) est range dans le Secret, jamais dans le
+> ConfigMap.
+
+Un broker minimal dans le cluster (aucun stockage, aucun compte : le suivi en
+direct est volatil) :
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mosquitto
+  namespace: mpacer
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: mosquitto }
+  template:
+    metadata:
+      labels: { app: mosquitto }
+    spec:
+      containers:
+        - name: mosquitto
+          image: eclipse-mosquitto:2
+          args: ["mosquitto", "-c", "/mosquitto-no-auth.conf"]
+          ports:
+            - containerPort: 1883
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mosquitto
+  namespace: mpacer
+spec:
+  selector: { app: mosquitto }
+  ports:
+    - port: 1883
+      targetPort: 1883
+```
+
+`mosquitto-no-auth.conf` accepte les connexions sans identifiants : c'est
+acceptable **uniquement** parce que le service n'est joignable que dans le
+cluster (`ClusterIP`, aucun Ingress). Pour un broker expose, activez
+l'authentification et `mqtts://` (voir docs/10 § 6).
+
 ## 8. Sauvegarde et restauration
 
 ### 8.1 Sauvegarde logique a la demande

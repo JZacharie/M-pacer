@@ -18,4 +18,12 @@ data:
   # Doit correspondre EXACTEMENT a une URI autorisee dans la console Spotify
   MPACER_SPOTIFY_REDIRECT_URI: {{ .Values.config.spotifyRedirectUri | quote }}
   {{- end }}
+  {{- if .Values.config.mqttUrl }}
+  # Suivi en direct : positions publiees par la montre pendant la seance.
+  MPACER_MQTT_URL: {{ .Values.config.mqttUrl | quote }}
+  MPACER_MQTT_TOPIC: {{ .Values.config.mqttTopic | quote }}
+  {{- if .Values.config.mqttUsername }}
+  MPACER_MQTT_USERNAME: {{ .Values.config.mqttUsername | quote }}
+  {{- end }}
+  {{- end }}
   RUST_LOG: {{ .Values.config.rustLog | quote }}

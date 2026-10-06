@@ -1,0 +1,9 @@
+# M-pacer — projet Connect IQ
+#
+# `project.manifest` est obligatoire : monkeyc lit le manifeste déclaré ici.
+# Les chemins source/ressources sont ensuite déclarés explicitement pour que le
+# build soit reproductible en ligne de commande comme dans VS Code.
+
+project.manifest = manifest.xml
+base.sourcePath = source
+base.resourcePath = resources

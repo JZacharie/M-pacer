@@ -6,17 +6,19 @@
 use crate::auth::device;
 use crate::auth::{AuthUser, OptionalUser, SESSION_COOKIE};
 use crate::error::{AppError, AppResult};
+use crate::live::{LivePoint, LiveSessionView};
 use crate::models::{
     MusicPlaylistInput, MusicTrack, MusicTrackInput, Race, RaceInput, RaceTask, SpotifyAccount,
     User,
 };
+use crate::mqtt::MqttStatus;
 use crate::state::AppState;
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use axum::{Form, Router};
+use axum::{Form, Json, Router};
 use cookie::{Cookie, SameSite};
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 use mpacer_core::cardio::HeartRateZones;
@@ -25,12 +27,17 @@ use mpacer_core::music::{
 };
 use mpacer_core::units::{format_duration, format_pace, UnitSystem};
 use serde::Deserialize;
+use std::fmt::Write as _;
 
 /// Routes web.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(dashboard))
         .route("/stats", get(stats_page))
+        // Suivi en direct : positions publiees par la montre en MQTT pendant la
+        // seance (page HTML pour les proches, JSON pour un outil externe).
+        .route("/live", get(live_page))
+        .route("/live.json", get(live_json))
         // Tableaux de bord : ecrans composes par l'utilisateur (docs/08).
         .route("/dashboards", get(dashboards_page))
         .route(
@@ -1691,8 +1698,9 @@ fn page(markup: Markup) -> Response {
 /// Reglages est un onglet comme les autres (docs/07 section 10.3) : l'appairage
 /// d'une montre, les jetons et la deconnexion vivent sur `/settings`, et le menu
 /// deroulant de l'en-tete a disparu.
-const NAV: [(&str, &str, &str, &str); 7] = [
+const NAV: [(&str, &str, &str, &str); 8] = [
     ("seances", "Seances", "icon-activity", "/"),
+    ("live", "Direct", "icon-watch", "/live"),
     ("dashboards", "Tableaux", "icon-grid", "/dashboards"),
     ("courses", "Courses", "icon-route", "/courses"),
     ("planning", "Planning", "icon-clock", "/courses/planning"),
@@ -1702,6 +1710,21 @@ const NAV: [(&str, &str, &str, &str); 7] = [
 ];
 
 fn layout(title: &str, active: &str, user: Option<&User>, content: Markup) -> Markup {
+    layout_refresh(title, active, user, None, content)
+}
+
+/// Mise en page avec rafraichissement automatique optionnel (suivi en direct).
+///
+/// Le rafraichissement est un simple `<meta http-equiv="refresh">` : aucune
+/// ligne de JavaScript, donc rien a charger ni a faire tourner sur le telephone
+/// des proches.
+fn layout_refresh(
+    title: &str,
+    active: &str,
+    user: Option<&User>,
+    refresh_s: Option<u64>,
+    content: Markup,
+) -> Markup {
     html! {
         (DOCTYPE)
         html lang="fr" {
@@ -1719,6 +1742,9 @@ fn layout(title: &str, active: &str, user: Option<&User>, content: Markup) -> Ma
                 meta name="apple-mobile-web-app-capable" content="yes";
                 meta name="apple-mobile-web-app-title" content="M-pacer";
                 meta name="description" content="Suivi de course auto-heberge : seances, analyse, export GPX.";
+                @if let Some(secondes) = refresh_s {
+                    meta http-equiv="refresh" content=(secondes);
+                }
                 title { (title) " - M-pacer" }
                 link rel="stylesheet" href="/static/app.css";
                 // Favicon : la marque seule, servie par le service (aucune image externe).
@@ -4568,6 +4594,313 @@ async fn music_manifest(
     super::manifest_response(&state, &user.id, &id).await
 }
 
+// ------------------------------------------------------------- suivi en direct
+//
+// Pendant une seance, la montre publie sa position sur un broker MQTT
+// (docs/10). Le service s'y abonne et garde la trace en memoire ; cette page
+// l'affiche, sans JavaScript et sans service de cartographie tiers : la trace
+// est dessinee en SVG, et un lien ouvre OpenStreetMap pour la position exacte.
+
+/// Nombre de montres affichees sur la page.
+const MAX_LIVE_SESSIONS: usize = 4;
+
+/// Periode de rafraichissement de la page (s) tant qu'une montre publie.
+const LIVE_REFRESH_S: u64 = 10;
+
+/// Page de suivi en direct.
+async fn live_page(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let now_ms = state.now_ms();
+    let sessions = state.live.snapshot(now_ms, MAX_LIVE_SESSIONS);
+    let en_direct = sessions.iter().any(|session| session.is_live(now_ms));
+    let content = live_content(&sessions, state.live.status(), &state.config, now_ms);
+    Ok(page(layout_refresh(
+        "Suivi en direct",
+        "live",
+        Some(&user),
+        en_direct.then_some(LIVE_REFRESH_S),
+        content,
+    )))
+}
+
+/// Meme donnee que la page, en JSON, pour un outil externe (tableau de bord
+/// personnel, Home Assistant, statistiques maison).
+async fn live_json(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+) -> AppResult<Response> {
+    if user.is_none() {
+        return Ok(StatusCode::UNAUTHORIZED.into_response());
+    }
+    let now_ms = state.now_ms();
+    let status = state.live.status();
+    Ok(Json(serde_json::json!({
+        "now_ms": now_ms,
+        "broker": {
+            "connected": status.connected(),
+            "connections": status.connections(),
+            "messages": status.messages(),
+            "last_message_ms": status.last_message_ms(),
+        },
+        "sessions": state.live.snapshot(now_ms, MAX_LIVE_SESSIONS),
+    }))
+    .into_response())
+}
+
+/// Contenu de la page : etat du broker, puis une carte par montre.
+fn live_content(
+    sessions: &[LiveSessionView],
+    status: &MqttStatus,
+    config: &crate::config::Config,
+    now_ms: i64,
+) -> Markup {
+    html! {
+        section class="hero" {
+            h1 { "Suivi en direct" }
+            p class="muted" {
+                "Pendant la seance, la montre publie sa position sur le broker MQTT : "
+                "cette page suit la trace en temps reel. Rien n'est ecrit en base, la "
+                "seance arrive ici a la fin, comme d'habitude."
+            }
+        }
+        (broker_panel(status, config, now_ms))
+        @if sessions.is_empty() {
+            section class="empty" {
+                span class="icon icon-watch" {}
+                p { "Aucune position recue pour l'instant." }
+                p class="tiny muted" {
+                    "Renseignez l'adresse du broker MQTT dans les reglages de la montre, "
+                    "puis lancez une seance : la trace apparaitra ici."
+                }
+            }
+        } @else {
+            @for session in sessions {
+                (live_card(session, now_ms))
+            }
+            p class="tiny muted" {
+                "Trace en memoire seulement : le fichier de la seance reste sur la montre "
+                "et arrive au backend a la fin."
+            }
+        }
+    }
+}
+
+/// Bandeau d'etat de la liaison avec le broker.
+fn broker_panel(status: &MqttStatus, config: &crate::config::Config, now_ms: i64) -> Markup {
+    let (classe, libelle) = if !config.mqtt_configured() {
+        ("off", "desactive")
+    } else if status.connected() {
+        ("on", "connecte")
+    } else {
+        ("off", "deconnecte")
+    };
+    html! {
+        section class="panel" {
+            div class="section-head" {
+                h2 { "Broker MQTT" }
+                span class={ "pill " (classe) } { (libelle) }
+            }
+            @if config.mqtt_configured() {
+                p class="tiny muted" {
+                    "Filtre " code { (config.mqtt_topic) } " - "
+                    (status.messages()) " message(s) recu(s) - "
+                    (status.connections()) " connexion(s) - "
+                    "dernier message " (status_age(status, now_ms))
+                }
+            } @else {
+                p class="tiny muted" {
+                    "Definissez " code { "MPACER_MQTT_URL" } " (par exemple "
+                    code { "mqtt://mosquitto.mpacer.svc:1883" } ") pour activer le suivi en direct."
+                }
+            }
+        }
+    }
+}
+
+/// Carte d'une montre : etat, chiffres cles, trace et position exacte.
+fn live_card(session: &LiveSessionView, now_ms: i64) -> Markup {
+    let (classe, libelle) = match session.state.as_str() {
+        "stop" => ("off", "seance terminee"),
+        "pause" | "paused" => ("brand", "en pause"),
+        _ if session.is_live(now_ms) => ("on", "en direct"),
+        _ => ("off", "silence"),
+    };
+    let dernier = session.last.as_ref();
+    html! {
+        section class="card live-card" {
+            div class="section-head" {
+                h2 { (session.device) }
+                span class={ "pill " (classe) } { (libelle) }
+            }
+            div class="mini-cards" {
+                (mini_card("Distance", &option_distance(session.distance_m)))
+                (mini_card("Duree", &option_duration(session.duration_s)))
+                (mini_card("Allure", &format_pace(session.pace_s_per_km)))
+                (mini_card("Cardio", &option_bpm(dernier.and_then(|point| point.heart_rate_bpm))))
+                (mini_card("Batterie", &option_percent(dernier.and_then(|point| point.battery_percent))))
+                (mini_card("Precision", &option_accuracy(dernier.and_then(|point| point.accuracy_m))))
+                (mini_card("Points", &session.points.to_string()))
+            }
+            (trace_svg(&session.trace))
+            @if let Some(point) = dernier {
+                div class="live-foot" {
+                    p class="tiny muted" {
+                        "Derniere position " (since_label(now_ms - point.t_ms)) " - "
+                        (format!("{:.5}, {:.5}", point.lat, point.lon))
+                    }
+                    a class="button ghost" href=(osm_url(point.lat, point.lon))
+                      target="_blank" rel="noopener noreferrer" { "Ouvrir dans OpenStreetMap" }
+                }
+            }
+        }
+    }
+}
+
+/// Trace GPS dessinee en SVG, echelle uniforme (la forme du parcours est juste).
+fn trace_svg(points: &[LivePoint]) -> Markup {
+    const LARGEUR: f64 = 1000.0;
+    const HAUTEUR: f64 = 420.0;
+    const MARGE: f64 = 18.0;
+    /// Metres par degre de latitude (valeur moyenne suffisante pour un apercu).
+    const METRES_PAR_DEGRE: f64 = 111_320.0;
+
+    if points.is_empty() {
+        return html! {};
+    }
+    let nombre = points.len() as f64;
+    let lat0 = points.iter().map(|point| point.lat).sum::<f64>() / nombre;
+    let lon0 = points.iter().map(|point| point.lon).sum::<f64>() / nombre;
+    // Projection locale : les longitudes sont compressees par le cosinus de la
+    // latitude, sinon la trace est etiree d'est en ouest.
+    let cosinus = lat0.to_radians().cos().abs().max(0.02);
+    let xs: Vec<f64> = points
+        .iter()
+        .map(|point| (point.lon - lon0) * cosinus)
+        .collect();
+    let ys: Vec<f64> = points.iter().map(|point| point.lat - lat0).collect();
+
+    let min_x = xs.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max_x = xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let min_y = ys.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max_y = ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let mut etendue_x = max_x - min_x;
+    let mut etendue_y = max_y - min_y;
+    let immobile = etendue_x < 1e-6 && etendue_y < 1e-6;
+    if immobile {
+        // Montre immobile : un point, pas une division par zero.
+        etendue_x = 1e-5;
+        etendue_y = 1e-5;
+    }
+    // Cadre de 5 % autour de la trace (le point isole tombe au centre).
+    let (origine_x, cadre_x) = if immobile {
+        (min_x - etendue_x / 2.0, etendue_x)
+    } else {
+        (min_x - etendue_x * 0.05, etendue_x * 1.1)
+    };
+    let (origine_y, cadre_y) = if immobile {
+        (min_y - etendue_y / 2.0, etendue_y)
+    } else {
+        (min_y - etendue_y * 0.05, etendue_y * 1.1)
+    };
+    let echelle = ((LARGEUR - 2.0 * MARGE) / cadre_x).min((HAUTEUR - 2.0 * MARGE) / cadre_y);
+    let marge_x = (LARGEUR - cadre_x * echelle) / 2.0;
+    let marge_y = (HAUTEUR - cadre_y * echelle) / 2.0;
+
+    let mut trace = String::with_capacity(points.len() * 12);
+    let mut dernier = (LARGEUR / 2.0, HAUTEUR / 2.0);
+    for (x, y) in xs.iter().zip(ys.iter()) {
+        let px = marge_x + (x - origine_x) * echelle;
+        // L'axe vertical est inverse : le nord est en haut.
+        let py = HAUTEUR - marge_y - (y - origine_y) * echelle;
+        let _ = write!(trace, "{px:.1},{py:.1} ");
+        dernier = (px, py);
+    }
+
+    let (largeur_m, hauteur_m) = (etendue_x * METRES_PAR_DEGRE, etendue_y * METRES_PAR_DEGRE);
+    let (cx, cy) = dernier;
+    html! {
+        figure class="trace-map" {
+            svg viewBox=(format!("0 0 {LARGEUR:.0} {HAUTEUR:.0}"))
+                role="img" aria-label="Trace GPS de la seance en cours" {
+                polyline points=(trace.trim_end()) {}
+                circle class="now" cx=(format!("{cx:.1}")) cy=(format!("{cy:.1}")) r="9" {}
+            }
+            figcaption class="tiny muted" {
+                "Trace sur " (format!("{largeur_m:.0} m x {hauteur_m:.0} m")) " - "
+                (points.len()) " point(s) - nord en haut"
+            }
+        }
+    }
+}
+
+/// Lien OpenStreetMap sur la derniere position connue.
+fn osm_url(lat: f64, lon: f64) -> String {
+    format!("https://www.openstreetmap.org/?mlat={lat:.6}&mlon={lon:.6}#map=16/{lat:.6}/{lon:.6}")
+}
+
+/// "il y a 12 s", "il y a 3 min", "il y a 2 h".
+fn since_label(ecart_ms: i64) -> String {
+    if ecart_ms < 0 {
+        return "a l'instant".to_string();
+    }
+    let secondes = ecart_ms / 1000;
+    if secondes < 5 {
+        "a l'instant".to_string()
+    } else if secondes < 60 {
+        format!("il y a {secondes} s")
+    } else if secondes < 3600 {
+        format!("il y a {} min", secondes / 60)
+    } else {
+        format!("il y a {} h", secondes / 3600)
+    }
+}
+
+/// Age du dernier message recu du broker.
+fn status_age(status: &MqttStatus, now_ms: i64) -> String {
+    if status.messages() == 0 {
+        return "aucun depuis le demarrage".to_string();
+    }
+    since_label(now_ms - status.last_message_ms())
+}
+
+/// Distance lissee : metres sous le kilometre, kilometres ensuite.
+fn option_distance(valeur: Option<f64>) -> String {
+    match valeur {
+        Some(metres) if metres >= 1000.0 => format!("{:.2} km", metres / 1000.0),
+        Some(metres) => format!("{metres:.0} m"),
+        None => "-".to_string(),
+    }
+}
+
+fn option_duration(valeur: Option<f64>) -> String {
+    // `format_duration` rend "--:--" pour une valeur non finie : meme convention
+    // que le reste de l'interface quand la montre n'a pas encore duree.
+    format_duration(valeur.unwrap_or(f64::NAN))
+}
+
+fn option_bpm(valeur: Option<i64>) -> String {
+    valeur
+        .map(|bpm| format!("{bpm} bpm"))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn option_percent(valeur: Option<i64>) -> String {
+    valeur
+        .map(|pourcent| format!("{pourcent} %"))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn option_accuracy(valeur: Option<f64>) -> String {
+    valeur
+        .map(|metres| format!("{metres:.0} m"))
+        .unwrap_or_else(|| "-".to_string())
+}
+
 #[cfg(test)]
 mod music_web_tests {
     use super::*;
@@ -4694,7 +5027,8 @@ mod navigation_web_tests {
     fn the_header_tabs_include_settings_and_the_dropdown_is_gone() {
         // Reglages est un onglet comme les autres (docs/07 section 10.3) : plus
         // de menu deroulant, l'appairage et les jetons vivent sur /settings.
-        assert_eq!(NAV.len(), 7);
+        assert_eq!(NAV.len(), 8);
+        assert!(NAV.iter().any(|(cle, ..)| *cle == "live"));
         assert!(NAV.iter().any(|(cle, ..)| *cle == "dashboards"));
         assert!(NAV
             .iter()
@@ -4723,5 +5057,141 @@ mod navigation_web_tests {
         // Plus de menu deroulant ni de deconnexion dans l'en-tete.
         assert!(!markup.contains("menu-panel"), "{markup}");
         assert!(!markup.contains("action=\"/logout\""), "{markup}");
+    }
+}
+
+#[cfg(test)]
+mod live_web_tests {
+    use super::*;
+
+    fn point(t_ms: i64, lat: f64, lon: f64) -> LivePoint {
+        LivePoint {
+            t_ms,
+            lat,
+            lon,
+            accuracy_m: Some(4.0),
+            distance_m: Some(1_200.0),
+            pace_s_per_km: Some(300.0),
+            heart_rate_bpm: Some(145),
+            lap: Some(1),
+            battery_percent: Some(72),
+            state: Some("run".to_string()),
+            device: None,
+        }
+    }
+
+    fn session(points: Vec<LivePoint>) -> LiveSessionView {
+        let dernier = points.last().cloned();
+        LiveSessionView {
+            device: "montre-a1b2".to_string(),
+            state: "run".to_string(),
+            started_ms: points.first().map(|p| p.t_ms).unwrap_or(0),
+            last_ms: dernier.as_ref().map(|p| p.t_ms).unwrap_or(0),
+            received: points.len() as u64,
+            points: points.len(),
+            trace: points,
+            distance_m: Some(1_200.0),
+            duration_s: Some(600.0),
+            pace_s_per_km: Some(300.0),
+            last: dernier,
+        }
+    }
+
+    fn config() -> crate::config::Config {
+        crate::config::Config::for_tests("http://localhost:8080", "postgresql://exemple")
+    }
+
+    /// Coordonnees de la polyligne, dans l'ordre du document.
+    fn polyline_points(markup: &str) -> Vec<(f64, f64)> {
+        let brut = markup
+            .split("points=\"")
+            .nth(1)
+            .expect("polyligne presente")
+            .split('"')
+            .next()
+            .unwrap();
+        brut.split(' ')
+            .map(|paire| {
+                let (x, y) = paire.split_once(',').expect("couple x,y");
+                (x.parse().unwrap(), y.parse().unwrap())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_trace_is_drawn_inside_the_view_box() {
+        let markup = trace_svg(&[
+            point(0, 48.85, 2.35),
+            point(1, 48.86, 2.36),
+            point(2, 48.87, 2.35),
+        ])
+        .into_string();
+        assert!(markup.contains("viewBox=\"0 0 1000 420\""), "{markup}");
+        let points = polyline_points(&markup);
+        assert_eq!(points.len(), 3);
+        for (x, y) in &points {
+            assert!((0.0..=1000.0).contains(x), "x hors cadre : {x}");
+            assert!((0.0..=420.0).contains(y), "y hors cadre : {y}");
+        }
+        // Le nord est en haut : le point le plus au nord a le plus petit y.
+        assert!(points[1].1 < points[0].1, "{points:?}");
+    }
+
+    #[test]
+    fn a_stationary_watch_still_draws_a_point() {
+        let markup = trace_svg(&[point(0, 48.85, 2.35)]).into_string();
+        assert!(markup.contains("<circle"), "{markup}");
+        let points = polyline_points(&markup);
+        assert_eq!(points.len(), 1);
+        // La trace immobile est centree dans le cadre.
+        assert!((points[0].0 - 500.0).abs() < 1.0, "{points:?}");
+        assert!((points[0].1 - 210.0).abs() < 1.0, "{points:?}");
+    }
+
+    #[test]
+    fn the_current_position_closes_the_trace() {
+        let markup = trace_svg(&[point(0, 48.0, 2.0), point(1, 48.1, 2.2)]).into_string();
+        let points = polyline_points(&markup);
+        let (x, y) = points.last().unwrap();
+        assert!(markup.contains(&format!("cx=\"{x:.1}\"")), "{markup}");
+        assert!(markup.contains(&format!("cy=\"{y:.1}\"")), "{markup}");
+    }
+
+    #[test]
+    fn session_age_is_written_in_plain_french() {
+        assert_eq!(since_label(1_000), "a l'instant");
+        assert_eq!(since_label(12_000), "il y a 12 s");
+        assert_eq!(since_label(180_000), "il y a 3 min");
+        assert_eq!(since_label(7_200_000), "il y a 2 h");
+        assert_eq!(since_label(-5), "a l'instant");
+    }
+
+    #[test]
+    fn the_page_shows_the_device_its_state_and_a_map_link() {
+        let status = MqttStatus::default();
+        let markup = live_content(
+            &[session(vec![point(10, 48.85, 2.35)])],
+            &status,
+            &config(),
+            20,
+        )
+        .into_string();
+        assert!(markup.contains("montre-a1b2"), "{markup}");
+        assert!(markup.contains("en direct"), "{markup}");
+        assert!(markup.contains("1.20 km"), "{markup}");
+        assert!(markup.contains("5:00"), "allure formatee : {markup}");
+        assert!(
+            markup.contains("openstreetmap.org/?mlat=48.850000&amp;mlon=2.350000"),
+            "{markup}"
+        );
+        // Sans broker configure, la page explique le reglage au lieu d'un vide.
+        assert!(markup.contains("MPACER_MQTT_URL"), "{markup}");
+    }
+
+    #[test]
+    fn without_any_session_the_page_says_so() {
+        let markup = live_content(&[], &MqttStatus::default(), &config(), 1_000).into_string();
+        assert!(markup.contains("Aucune position recue"), "{markup}");
+        assert!(!markup.contains("<polyline"), "{markup}");
     }
 }

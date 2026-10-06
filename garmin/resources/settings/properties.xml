@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Valeurs par défaut des réglages. Elles sont relues par le code au démarrage
+  (source/MpacerSettings.mc) : l'application fonctionne même si l'utilisateur
+  n'ouvre jamais la page de réglages de Garmin Connect.
+
+  Les réglages à choix multiple sont stockés sous forme de nombres : c'est ce
+  qu'attend le compilateur de ressources Connect IQ pour une liste
+  (<listEntry value="...">), qui doit être un entier.
+-->
+<properties>
+    <!-- 0 = allure seule, 1 = temps de finish estimé, 2 = temps visé -->
+    <property id="assistantMode" type="number">0</property>
+    <!-- 0 = kilomètres, 1 = miles -->
+    <property id="units" type="number">0</property>
+
+    <property id="detectPaceChange" type="boolean">false</property>
+    <property id="autoPause" type="boolean">false</property>
+    <property id="alertsEnabled" type="boolean">true</property>
+    <!-- 0 = aucune, 1 = 1 min, 2 = 2 min, 3 = 5 min, 4 = à chaque tour -->
+    <property id="alertFrequency" type="number">2</property>
+    <property id="extendedLapInfo" type="boolean">false</property>
+
+    <property id="plannedDistanceKm" type="float">10.0</property>
+    <property id="plannedTimeMin" type="number">50</property>
+    <property id="negativeSplit" type="boolean">false</property>
+    <property id="negativeSplitRatio" type="float">3.0</property>
+    <property id="maxHeartRate" type="number">190</property>
+
+    <property id="backendUrl" type="string"></property>
+    <property id="syncTrace" type="boolean">false</property>
+    <property id="traceIntervalS" type="number">15</property>
+</properties>

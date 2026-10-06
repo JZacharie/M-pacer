@@ -31,6 +31,23 @@ jobs:
       - name: Rendu du chart
         run: helm template mpacer charts/mpacer -n mpacer -f charts/mpacer/values-jo3.yaml > /dev/null
 
+  garmin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Cache du SDK Connect IQ
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/mpacer-connectiq-9.2.0
+          key: connectiq-sdk-9.2.0-linux
+      - name: Pre-vol de l'application Connect IQ
+        shell: pwsh
+        run: ./garmin/preflight.ps1
+
   image:
     runs-on: ubuntu-latest
     steps:

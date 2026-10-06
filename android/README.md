@@ -45,6 +45,13 @@ android/
       music/MusicLibrary.kt                   scan du dossier Music/ (USB) + index local
       music/MusicPlayer.kt, MusicPlaybackService.kt  Media3 ExoPlayer + MediaSessionService
       music/MusicSession.kt                   pont vers le coeur (reglages, piste, cadence)
+      live/LiveConfig.kt                      reglages MQTT + analyse de l adresse du broker
+      live/LivePolicy.kt                      cadence (10 s / 60 s en pause) et filtre de precision
+      live/LivePayload.kt                     charge utile JSON compacte (~130 octets)
+      live/MqttCodec.kt                       paquets MQTT 3.1.1 (CONNECT, PUBLISH, PINGREQ)
+      live/LiveTracker.kt                     fil de fond : file bornee, reconnexion, compteurs
+      live/LiveSettings.kt                    persistance (mot de passe chiffre)
+    src/test/java/com/mpacer/watch/live/      tests unitaires JVM (paquets, cadence, charge utile)
   companion/                                 module telephone
     build.gradle.kts                         Material 3, Compose, OkHttp, Wearable
     proguard-rules.pro
@@ -216,6 +223,36 @@ fichiers presents sur son disque et remonte l'etat. Contrat complet :
 - **Compagnon** : l'onglet Musique est informatif (playlists du backend + rappel de
   la procedure USB), sans televersement.
 
+## Suivi en direct (MQTT)
+
+Pendant une seance, la montre peut publier sa position sur un broker MQTT : un
+point toutes les dix secondes, environ 130 octets, ce qui permet de suivre la
+trace en temps reel depuis la page `/live` du backend. Contrat complet, budget
+de ressources et limites : [docs/10](../docs/10-suivi-temps-reel.md).
+
+- **Desactive par defaut** : sans adresse de broker, `LiveTracker.start` ne cree
+  ni fil ni connexion — le suivi ne coute rien tant qu'il n'est pas configure.
+- **Reglages** : ecran Reglages de la montre (activation, cadence) ; l'adresse du
+  broker se saisit par `adb` ou par l'extra d'intent, plus confortable qu'un
+  clavier sur un ecran rond :
+
+  ```powershell
+  adb shell am start -n com.mpacer.watch/.MainActivity --es mqtt_url "mqtt://mosquitto.mpacer.svc:1883"
+  ```
+
+- **Cadence** : 10 s en course, 60 s en pause (auto-pause comprise, l'etat vient
+  du moteur) ; un point dont la precision GPS depasse 50 m n'est pas publie.
+- **Budget** : ~55 ko/h de trafic, un fil en priorite basse, aucune minuterie,
+  aucun wake lock, file de 16 paquets au maximum (les plus anciens sont jetes si
+  le reseau tombe). L'ecran Reglages affiche l'etat de la liaison, les points
+  publies et les points jetes.
+- **Tests** (JVM, sans montre) :
+
+  ```powershell
+  cd android
+  ./gradlew :app:testDebugUnitTest
+  ```
+
 ### Montre de developpement : ecran toujours allume
 
 Sur une montre posee sur son chargeur, Wear OS eteint l ecran et revient au cadran au
@@ -366,3 +403,8 @@ intents soient resolus.
     sur une vraie montre ronde (le code est concu pour un ecran rond).
 11. **Import `.pac`** : verifier la relecture d un fichier exporte par la montre
     (`format: "mpacer.pac"`, `version: 1`) et l envoi vers `POST /api/v1/workouts`.
+12. **Suivi en direct** : verifier sur le terrain que la trace apparait sur `/live`
+    et que le cout reste dans le bruit de mesure — comparer une seance d'une heure
+    avec et sans `mqtt_url` (`adb shell dumpsys batterystats`, voir docs/10 § 5.3).
+    Les identifiants du broker sont ranges dans `EncryptedSharedPreferences`, comme
+    le jeton d'appairage.

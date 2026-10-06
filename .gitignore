@@ -17,6 +17,11 @@ android/app/src/main/jniLibs/
 *.apk
 *.aab
 
+# Garmin Connect IQ
+garmin/build/
+garmin/developer_key.der
+garmin/developer_key.pem
+
 # Sorties du simulateur
 *.gpx
 !examples/*.gpx

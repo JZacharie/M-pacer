@@ -1,0 +1,11 @@
+# M-pacer — jungle de test unitaire Connect IQ.
+#
+# Il ajoute le dossier test/ au projet et sert à compiler les tests « Run No Evil » :
+#
+#   pwsh ./garmin/build.ps1 -Test -Device fr965
+#
+# Le résultat s'affiche dans le simulateur Connect IQ (ou dans la console de test).
+
+project.manifest = manifest.xml
+base.sourcePath = source;test
+base.resourcePath = resources

@@ -1,6 +1,6 @@
 # M-pacer
 
-**Contrôle d'allure pour montre Android (Wear OS), écrit en Rust**, avec backend,
+**Contrôle d'allure pour montres Wear OS et Garmin**, cœur écrit en Rust, avec backend,
 interface web et déploiement Kubernetes sur le cluster k3s **jo3**.
 
 Inspiré fonctionnellement de [Pace Control](https://pacecontrol.pbksoft.com/en/)
@@ -24,10 +24,12 @@ GitHub Pages est activé sur le dépôt (Settings → Pages → Source : GitHub 
 | Composant | Rôle | État |
 |---|---|---|
 | **Montre Wear OS** | Enregistre la séance (GPS 1 Hz, **fréquence cardiaque**), calcule l'allure, guide le coureur (voix, shadow runner), archive localement et synchronise | **Compilée** (APK montre et téléphone produits le 6 octobre 2026) ; validation terrain à faire |
+| **Montre Garmin** | Portage Connect IQ (Monkey C) du même cœur : GPS 1 Hz, cardio, allure lissée, tours, assistant, enregistrement **FIT** dans Garmin Connect, alertes par vibration, synchronisation au même backend | **Compilée** (SDK Connect IQ 9.2.0, `monkeyc -l 2`) ; à lancer dans le simulateur puis sur le terrain |
 | **Application téléphone** (`android/companion`) | Connexion au backend, liste et détail des séances, import d'un fichier de séance, envoi vers la montre | **Compilée** ; à valider sur appareils réels |
 | **Cœur Rust** | Tous les algorithmes : allure lissée, tours, assistant, voix, GPX, historique, **analyse de séance**, **musique et tempo** | **Fait, testé** (141 tests) |
 | **Backend Rust** | API de synchronisation, OAuth Google, interface web, PostgreSQL | **Fait, testé** (tests d'intégration exécutés contre PostgreSQL) |
 | **Analyse de séance** | Plan de course contre réalisé, fréquence cardiaque et zones, temps de pause, temps d'accélération, allure ajustée à la pente | **Fait, testé** |
+| **Suivi en direct** | Pendant la séance, la montre publie sa position sur un broker MQTT ; la page `/live` affiche la trace en temps réel (SVG, sans JavaScript ni fond de carte tiers) | **Fait, testé** (montre et service) ; à valider sur le terrain |
 | **Tableaux de bord** | Écrans composés par l'utilisateur : neuf widgets (allure, résumé, carte GPS, tours, meilleures distances, cardio, historique, statistiques, courses) choisis, ordonnés et enregistrés, avec trois gabarits prêts à l'emploi | **Fait, testé** |
 | **Courses à venir** | Fiches de course, planning des échéances, suivi des éléments à préparer, **import d'une ancienne course** (export Strava ou Garmin) comme course de référence | **Fait, testé** |
 | **Musique et BPM** | Playlists Spotify (métadonnées), appariement des MP3 du disque et **copie sur la montre par USB**, tempo cible déduit de l'allure, Boost/Relax selon le plan, écran Musique sur la montre | **Fait, testé** (cœur, outil, API, tests d'intégration) ; compilation montre et téléphone validée |
@@ -83,6 +85,16 @@ la course (ou la distance) et l'allure visée, elle répond « 1 h 12 de musique
 titres » — en comparant aussi le **BPM moyen de la playlist** au tempo cible de
 l'allure. Détail et contrat d'interface :
 [docs/07](docs/07-musique-bpm-et-playlists.md).
+
+**Le suivi en direct.** Pendant une séance, la montre publie sa position sur un
+broker **MQTT** — un point toutes les dix secondes, environ 130 octets — et le
+service s'y abonne : la page `/live` affiche la trace en temps réel, une
+polyligne SVG calculée par le service (aucun fond de carte, aucun script tiers),
+rafraîchie toute les dix secondes tant que la montre publie. Le suivi est
+**volatil** (aucune position écrite en base : la séance reste la source de
+vérité) et **désactivé par défaut** : sans adresse de broker, la montre n'ouvre
+aucune connexion et le service ne crée aucune tâche. Contrat MQTT, politique de
+cadence et budget de ressources chiffré : [docs/10](docs/10-suivi-temps-reel.md).
 
 **La montre.** Elle enregistre la séance sans le téléphone (GPS 1 Hz dans un service de
 premier plan), affiche l'allure lissée sur 2 minutes, le feu de statut GPS et un panneau
@@ -174,6 +186,8 @@ par le Data Layer Wear OS (message sous 90 Ko, sinon `DataClient` + `Asset`).
 | `src/media.rs` | Réception `multipart` (navigateur et application téléphone), écriture sur disque, nettoyage en cas d'échec |
 | `src/routes/web.rs` | Pages web (maud) : accueil, tableau de bord, **analyse de séance**, statistiques, appairage, jetons, **fiches de course, planning et suivi**, **page `/music`** (playlists, import Spotify, téléversement, tap-tempo, envoi vers la montre), connexion OAuth Google et Spotify, **pastille de compte** (photo Google) dans l'en-tête |
 | `src/dashboards.rs` | **Tableaux de bord** : catalogue des widgets, gabarits (Pace Control, Analyse, Historique), chargement des données et rendu des écrans composés |
+| `src/mqtt.rs` | **Suivi en direct** : client MQTT 3.1.1 minimal (TCP ou TLS), reconnexion avec attente progressive, `PINGREQ` périodique |
+| `src/live.rs` | Magasin en mémoire des positions reçues (anneau borné par montre), purge des montres silencieuses, résumé de trace |
 | `src/routes/mod.rs` | Routeur global, sondes `/healthz` et `/readyz` |
 | `src/assets.rs` + `static/` | CSS, JS et identité visuelle embarqués dans le binaire : `logo.svg`, `logo-mark.svg` (favicon), `illustration-usb.svg` |
 | `migrations/0001_init.sql` | Schéma initial : utilisateurs, jetons d'appareil, codes d'appairage, séances, états OAuth (idempotent, rejoué au démarrage) |
@@ -243,7 +257,25 @@ par le Data Layer Wear OS (message sous 90 Ko, sinon `DataClient` + `Asset`).
 | `android/companion/...` | Application téléphone : `AppViewModel`, `MpacerApi`, `TokenStore`, `WearSync`, écrans Compose (connexion, liste, détail, envoi) |
 | `android/README.md` | Prérequis, commandes de compilation, appairage et dépannage |
 
-### 3.6 Documentation
+### 3.6 Application montre Garmin — `garmin/` (Connect IQ, Monkey C)
+
+| Fichier | Contenu |
+|---|---|
+| `garmin/manifest.xml` | Application `watch-app`, liste des appareils ciblés, permissions (`Fit`, `Communications`, `Positioning`, `Sensor`, `SensorLogging`) |
+| `garmin/monkey.jungle` | `project.manifest` + chemins `source`/`resources` |
+| `garmin/source/MpacerUnits.mc` … `MpacerTrack.mc` | Portage du cœur : unités, Haversine, qualité GPS, allure lissée 2 min, tours, machine à états, plan de course / shadow runner, assistant, meilleures distances, zones de FC, déclencheurs d'annonces |
+| `garmin/source/MpacerEngine.mc` | Orchestrateur : un seul `step()`, comme `engine.rs` |
+| `garmin/source/MpacerApp.mc` | Capteurs (Position, Sensor), enregistrement `ActivityRecording` (FIT), vibrations, écrans, boutons |
+| `garmin/source/MpacerView.mc`, `MpacerDelegate.mc` | Écran rond (allure, distance, temps, tour, cardio, panneau d'assistant) et gestion des boutons |
+| `garmin/source/MpacerSync.mc` | Appairage (device flow RFC 8628) et `POST /api/v1/workouts` par `Communications` |
+| `garmin/source/MpacerArchive.mc`, `MpacerSettings.mc`, `MpacerText.mc` | Archive locale (Storage), lecture des réglages, textes |
+| `garmin/tests.jungle`, `garmin/test/MpacerCoreTests.mc` | Tests unitaires Monkey C : valeurs attendues reprises des tests Rust (formatage, Haversine, allure 2 min, tours, plan, meilleur km, zones FC) |
+| `garmin/resources/` | Chaînes (UTF-8), icône du lanceur, `settings.xml` + `properties.xml` (15 réglages Garmin Connect) |
+| `garmin/build.ps1`, `garmin/preflight.ps1`, `garmin/tools/` | Découverte/téléchargement du SDK, clé de signature, compilation, simulateur, copie USB, alignement des appareils, pré-vol et CI |
+| `garmin/README.md` | Prérequis, commandes, appairage, réglages, limites, dépannage |
+| [docs/09](docs/09-montre-garmin.md) | Correspondance module par module avec le cœur Rust, contraintes Connect IQ, contrat réseau |
+
+### 3.7 Documentation
 
 | Fichier | Contenu |
 |---|---|
@@ -256,6 +288,7 @@ par le Data Layer Wear OS (message sous 90 Ko, sinon `DataClient` + `Asset`).
 | `docs/06-analyse-seance.md` | Analyse d'une séance : veille concurrente (Strava, Garmin, Polar…), écrans, formules des zones FC, du découplage et de l'accélération |
 | `docs/07-musique-bpm-et-playlists.md` | Musique et BPM : playlists Spotify ou fichiers personnels, calibration tempo / allure, directeur d'orchestre, contrat FFI, API et écrans — **implémenté** |
 | `docs/README.md` | Index des documents |
+| [docs/10](docs/10-suivi-temps-reel.md) | **Suivi en direct** (MQTT) : contrat du sujet et de la charge utile, cadence et filtre de précision sur la montre, page `/live` et `/live.json`, budget de ressources, sécurité, limites |
 | [`site/`](site/) | **Documentation en ligne** (GitHub Pages) : présentation illustrée de la montre et du site web, architecture, démarrage |
 
 ## 4. Plan d'action complet
@@ -313,6 +346,7 @@ par le Data Layer Wear OS (message sous 90 Ko, sinon `DataClient` + `Asset`).
 | Capteur de fréquence cardiaque | ✅ | la montre écoute `TYPE_HEART_RATE` et pousse chaque mesure au moteur (`heart_rate`) |
 | Boutons du casque, mode ambiant | 🔲 | Séance guidée sans regarder l'écran : les commandes existent dans le cœur, aucun `MediaSession` ne les déclenche encore |
 | Validation terrain | 🔲 | Écart < 3 % avec une montre de référence, batterie < 25 %/h |
+| Portage **montre Garmin** (Connect IQ / Monkey C) | ✅ | Même cœur porté (allure, tours, assistant, shadow runner, cardio), enregistrement FIT, alertes par vibration, synchronisation identique ; `monkeyc` **BUILD SUCCESSFUL** (application **et** tests) avec le SDK 9.2.0 ; CI `garmin` |
 
 ### Phase 5 — Exploitation et durcissement 🔲 *à faire*
 
@@ -406,6 +440,13 @@ kubectl -n mpacer get cluster,pods,ingress,certificate
 curl -s https://mpacer.p.zacharie.org/readyz
 ```
 
+Le **suivi en direct** s'active avec un broker MQTT (optionnel) :
+
+```bash
+helm upgrade --install mpacer charts/mpacer -n mpacer -f charts/mpacer/values-jo3.yaml \
+  --set config.mqttUrl=mqtt://mosquitto.mpacer.svc:1883
+```
+
 Détail complet, dépannage et sauvegardes : [deploy/README.md](deploy/README.md).
 
 ## 7. Exploitation
@@ -424,7 +465,8 @@ Détail complet, dépannage et sauvegardes : [deploy/README.md](deploy/README.md
 
 | Vérification | Résultat |
 |---|---|
-| `cargo test --workspace` | **204 tests** : 141 cœur, 8 FFI, 54 backend (dont 24 d'intégration exécutés contre PostgreSQL, 1 ignoré faute de réseau) et 1 test de documentation |
+| `cargo test --workspace` | **308 tests** : 182 cœur, 8 FFI, 87 service (62 tests unitaires du backend — dont 18 sur le suivi en direct —, 18 de l'outil `mpacer-music`, 7 d'intégration musique), 30 tests d'intégration de l'API (exécutés contre PostgreSQL quand `MPACER_TEST_DATABASE_URL` est fourni, 1 ignoré faute de réseau) et 1 test de documentation |
+| `cd android && ./gradlew :app:testDebugUnitTest` | **24 tests** Kotlin de la montre : paquets MQTT 3.1.1 octet par octet, politique de cadence et de précision, charge utile JSON (locale, texte hostile) |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 avertissement |
 | `cargo fmt --all --check` | conforme sur l'état commité ; l'arbre de travail en cours peut présenter des écarts |
 | `helm lint` / `helm template` | 0 échec |

@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<resources>
+    <string id="AppName">M-pacer</string>
+
+    <!-- Statut GPS -->
+    <string id="GpsDisabled">GPS désactivé</string>
+    <string id="GpsAcquiring">Recherche GPS…</string>
+    <string id="GpsPoor">GPS faible</string>
+    <string id="GpsOk">GPS OK</string>
+
+    <!-- Écran de course -->
+    <string id="Start">START</string>
+    <string id="Pause">PAUSE</string>
+    <string id="Resume">REPRISE</string>
+    <string id="Stop">ARRÊT</string>
+    <string id="Armed">Prêt — départ au premier pas</string>
+    <string id="LapLabel">Tour</string>
+    <string id="LapCurrent">Tour en cours</string>
+    <string id="NoSignal">--</string>
+
+    <!-- Assistant -->
+    <string id="Finish">Arrivée</string>
+    <string id="Remaining">Reste</string>
+    <string id="OnPlan">Sur le plan</string>
+    <string id="Ahead">Avance</string>
+    <string id="Behind">Retard</string>
+    <string id="ConfigMissingDistance">Régler la distance</string>
+    <string id="ConfigMissingTime">Régler le temps cible</string>
+
+    <!-- Écrans secondaires -->
+    <string id="Sync">Synchronisation</string>
+    <string id="SettingsScreen">Réglages</string>
+    <string id="NotPaired">Non appairée</string>
+    <string id="Paired">Appairée</string>
+    <string id="Pending">Séance(s) à envoyer</string>
+    <string id="Synced">Séance(s) envoyée(s)</string>
+    <string id="PairingCode">Code d'appairage</string>
+    <string id="PairingHint">Saisir ce code sur la page /link du site</string>
+    <string id="PairFailed">Appairage impossible</string>
+    <string id="SyncOk">Séances envoyées</string>
+    <string id="SyncFailed">Envoi impossible</string>
+    <string id="NoBackend">Adresse du backend à régler</string>
+
+    <!-- Alertes (remplacent la voix : Garmin n'expose pas de synthèse vocale) -->
+    <string id="AlertStarted">C'est parti</string>
+    <string id="AlertPaused">Séance en pause</string>
+    <string id="AlertResumed">Reprise</string>
+    <string id="AlertStopped">Séance terminée</string>
+
+    <!-- Mots des messages composés (alertes et écrans secondaires) -->
+    <string id="WordPace">Allure</string>
+    <string id="WordDistance">Distance</string>
+    <string id="WordTime">Temps</string>
+    <string id="WordLastLap">Dernier tour</string>
+    <string id="WordPer">par</string>
+    <string id="WordRemaining">Reste</string>
+    <string id="WordAheadBy">Avance de</string>
+    <string id="WordBehindBy">Retard de</string>
+    <string id="WordAverage">Moyenne</string>
+    <string id="WordLap">Tour</string>
+    <string id="WordHeart">Cardio</string>
+    <string id="WordZone">Zone</string>
+    <string id="WordTarget">Cible</string>
+    <string id="WordPlan">Plan</string>
+    <string id="WordGps">GPS</string>
+    <string id="WordSync">Sync</string>
+    <string id="WordSettings">Réglages</string>
+    <string id="WordNoTrace">Trace GPS non enregistrée</string>
+
+    <!-- Réglages -->
+    <string id="SettingAssistant">Assistant</string>
+    <string id="SettingUnits">Unités</string>
+    <string id="SettingDetectPaceChange">Détecter les changements d'allure</string>
+    <string id="SettingAutoPause">Pause automatique</string>
+    <string id="SettingAlerts">Alertes (vibration)</string>
+    <string id="SettingAlertFrequency">Fréquence des alertes</string>
+    <string id="SettingExtendedLap">Tour : annonce détaillée</string>
+    <string id="SettingPlannedDistance">Distance visée (km)</string>
+    <string id="SettingPlannedTime">Temps visé (min)</string>
+    <string id="SettingNegativeSplit">Negative split</string>
+    <string id="SettingNegativeSplitRatio">Negative split (%)</string>
+    <string id="SettingMaxHeartRate">FC max (bpm)</string>
+    <string id="SettingBackendUrl">Adresse du backend</string>
+    <string id="SettingSyncTrace">Envoyer la trace GPS</string>
+    <string id="SettingTraceInterval">Trace : un point toutes les N s</string>
+    <string id="ModeTrackPace">Allure seule</string>
+    <string id="ModePredictFinish">Temps de finish estimé</string>
+    <string id="ModePlannedTime">Temps visé</string>
+    <string id="UnitMetric">Kilomètres</string>
+    <string id="UnitImperial">Miles</string>
+    <string id="AlertOff">Aucune</string>
+    <string id="Alert1Min">Toutes les minutes</string>
+    <string id="Alert2Min">Toutes les 2 minutes</string>
+    <string id="Alert5Min">Toutes les 5 minutes</string>
+    <string id="AlertLap">À chaque tour</string>
+
+    <string id="WordAutoPause">Pause auto</string>
+    <string id="Finished">Séance terminée</string>
+    <string id="NewWorkoutHint">START : nouvelle séance</string>
+</resources>

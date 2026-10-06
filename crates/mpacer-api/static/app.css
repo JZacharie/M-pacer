@@ -263,13 +263,18 @@ footer {
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  /* min() evite qu'une tuile depasse la largeur de l'ecran d'un petit telephone */
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
   gap: var(--gap);
   margin-bottom: 18px;
 }
 
+/* Cartes descriptives : une colonne sur telephone, texte complet lisible */
+.cards.large { grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr)); }
+
 .card {
   position: relative;
+  min-width: 0; /* sans cela, un mot long force la grille a deborder */
   background: linear-gradient(180deg, var(--surface), var(--bg-elev));
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -286,6 +291,8 @@ footer {
   background: linear-gradient(90deg, var(--orange), transparent 70%);
   opacity: .55;
 }
+
+.card p { overflow-wrap: anywhere; }
 
 .card-label {
   display: block;
@@ -338,6 +345,7 @@ footer {
 .row:active { background: var(--surface-2); }
 
 .row .row-main { flex: 1; min-width: 0; }
+.row .row-value, .row .row-sub, .row .row-title { overflow-wrap: anywhere; }
 .row .row-title { font-weight: 650; font-size: 15.5px; }
 .row .row-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
 
@@ -364,6 +372,7 @@ footer {
 /* --------------------------------------------------------------- panneaux */
 
 .panel {
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -518,6 +527,7 @@ input[name="user_code"] {
 /* --------------------------------------------------------------- tableaux */
 
 .table-wrap {
+  max-width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   border: 1px solid var(--border);

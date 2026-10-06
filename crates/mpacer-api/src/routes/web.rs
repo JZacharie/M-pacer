@@ -215,7 +215,7 @@ fn landing() -> Markup {
                     }
                 }
             }
-            section class="cards" {
+            section class="cards large" {
                 div class="card reveal" {
                     span class="card-label" { span class="icon icon-watch" {} " Montre" }
                     p { "L'application Wear OS enregistre la seance et l'envoie seule, meme si le telephone reste a la maison." }

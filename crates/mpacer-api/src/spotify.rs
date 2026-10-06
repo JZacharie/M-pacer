@@ -195,7 +195,11 @@ struct RawProfile {
 // ---------------------------------------------------------------- OAuth
 
 /// URL d'autorisation (OAuth 2.0 + PKCE, methode S256).
-pub fn authorize_url(config: &Config, oauth_state: &str, code_challenge: &str) -> AppResult<String> {
+pub fn authorize_url(
+    config: &Config,
+    oauth_state: &str,
+    code_challenge: &str,
+) -> AppResult<String> {
     let client_id = config
         .spotify_client_id
         .clone()
@@ -451,7 +455,10 @@ fn playlist_ref(raw: &RawPlaylist) -> Option<PlaylistRef> {
             .unwrap_or_else(|| "Playlist sans nom".to_string()),
         track_count: raw.tracks.as_ref().map(|tracks| tracks.total).unwrap_or(0),
         cover_url: raw.images.first().and_then(|image| image.url.clone()),
-        owner: raw.owner.as_ref().and_then(|owner| owner.display_name.clone()),
+        owner: raw
+            .owner
+            .as_ref()
+            .and_then(|owner| owner.display_name.clone()),
     })
 }
 
@@ -465,10 +472,7 @@ fn track_ref(item: &RawItem) -> Option<TrackRef> {
             .name
             .clone()
             .unwrap_or_else(|| "Titre inconnu".to_string()),
-        artist: track
-            .artists
-            .first()
-            .and_then(|artist| artist.name.clone()),
+        artist: track.artists.first().and_then(|artist| artist.name.clone()),
         album: track.album.as_ref().and_then(|album| album.name.clone()),
         duration_s: track.duration_ms.map(|ms| ms as f64 / 1000.0),
         spotify_uri: track.uri.clone(),
@@ -530,7 +534,10 @@ mod tests {
             Some(id.to_string())
         );
         assert_eq!(playlist_id_from_ref(id), Some(id.to_string()));
-        assert_eq!(playlist_id_from_ref("https://exemple.org/playlist/abc"), None);
+        assert_eq!(
+            playlist_id_from_ref("https://exemple.org/playlist/abc"),
+            None
+        );
         assert_eq!(playlist_id_from_ref("court"), None);
         assert_eq!(playlist_id_from_ref("   "), None);
     }
@@ -546,7 +553,9 @@ mod tests {
         assert!(url.contains("code_challenge=defi-1"), "{url}");
         assert!(url.contains("code_challenge_method=S256"), "{url}");
         assert!(
-            url.contains("redirect_uri=https%3A%2F%2Fmpacer.exemple.org%2Fauth%2Fspotify%2Fcallback"),
+            url.contains(
+                "redirect_uri=https%3A%2F%2Fmpacer.exemple.org%2Fauth%2Fspotify%2Fcallback"
+            ),
             "{url}"
         );
         assert!(url.contains("playlist-read-private"), "{url}");
@@ -585,7 +594,10 @@ mod tests {
         let reference = playlist_ref(&raw).expect("reference");
         assert_eq!(reference.name, "Run 170");
         assert_eq!(reference.track_count, 2);
-        assert_eq!(reference.cover_url.as_deref(), Some("https://img/cover.jpg"));
+        assert_eq!(
+            reference.cover_url.as_deref(),
+            Some("https://img/cover.jpg")
+        );
 
         let page = raw.tracks.as_ref().expect("page de titres");
         let tracks: Vec<TrackRef> = page.items.iter().filter_map(track_ref).collect();

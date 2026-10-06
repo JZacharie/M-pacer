@@ -9,8 +9,8 @@ use crate::auth::device::{
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    MusicAckRequest, MusicPlanAckRequest, MusicPlaylistDetail, MusicPlanView, MusicTrackView,
-    Race, RaceInput, UploadResponse, WorkoutUpload,
+    MusicAckRequest, MusicPlanAckRequest, MusicPlanView, MusicPlaylistDetail, MusicTrackView, Race,
+    RaceInput, UploadResponse, WorkoutUpload,
 };
 use crate::state::AppState;
 use axum::body::Body;
@@ -49,13 +49,12 @@ pub fn router() -> Router<AppState> {
             "/api/v1/music/playlists",
             get(list_music_playlists)
                 .post(upload_music_playlist)
-                .layer(DefaultBodyLimit::max(crate::models::MAX_UPLOAD_BYTES as usize)),
+                .layer(DefaultBodyLimit::max(
+                    crate::models::MAX_UPLOAD_BYTES as usize,
+                )),
         )
         .route("/api/v1/music/playlists/{id}", get(get_music_playlist))
-        .route(
-            "/api/v1/music/playlists/{id}/ack",
-            post(ack_music_playlist),
-        )
+        .route("/api/v1/music/playlists/{id}/ack", post(ack_music_playlist))
         .route("/api/v1/music/tracks/{id}/file", get(music_track_file))
         .route("/api/v1/music/prepare", get(music_prepare))
         .route("/api/v1/music/prepare/ack", post(music_prepare_ack))
@@ -442,7 +441,11 @@ async fn music_track_file(
     let track = crate::db::get_music_track(&state.pool, &user.id, &id)
         .await?
         .ok_or(AppError::NotFound)?;
-    let Some(relative) = track.storage_path.as_deref().filter(|path| !path.is_empty()) else {
+    let Some(relative) = track
+        .storage_path
+        .as_deref()
+        .filter(|path| !path.is_empty())
+    else {
         // Une playlist Spotify n'a aucun octet sur le serveur : la montre
         // telecommande l'application Spotify installee.
         return Err(AppError::NotFound);
@@ -564,7 +567,10 @@ fn parse_byte_range(value: &str, total: usize) -> Option<(usize, usize)> {
             (total.saturating_sub(suffix), total - 1)
         }
         (start, "") => (start.parse().ok()?, total - 1),
-        (start, end) => (start.parse().ok()?, end.parse::<usize>().ok()?.min(total - 1)),
+        (start, end) => (
+            start.parse().ok()?,
+            end.parse::<usize>().ok()?.min(total - 1),
+        ),
     };
     (start <= end && start < total).then_some((start, end))
 }

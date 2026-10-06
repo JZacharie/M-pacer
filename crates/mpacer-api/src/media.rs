@@ -231,10 +231,7 @@ mod tests {
             map_field_error("stream size limit exceeded").code(),
             "payload_too_large"
         );
-        assert_eq!(
-            map_field_error("corps tronque").code(),
-            "invalid_multipart"
-        );
+        assert_eq!(map_field_error("corps tronque").code(), "invalid_multipart");
         assert_eq!(payload_too_large().status().as_u16(), 413);
     }
 }

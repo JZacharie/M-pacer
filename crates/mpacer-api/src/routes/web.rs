@@ -64,8 +64,9 @@ pub fn router() -> Router<AppState> {
         // route fixe elle-meme son plafond, sans elargir le reste du service.
         .route(
             "/music/upload",
-            post(music_upload)
-                .layer(DefaultBodyLimit::max(crate::models::MAX_UPLOAD_BYTES as usize)),
+            post(music_upload).layer(DefaultBodyLimit::max(
+                crate::models::MAX_UPLOAD_BYTES as usize,
+            )),
         )
         .route("/music/playlists/{id}/track-bpm", post(music_track_bpm))
         .route("/music/playlists/{id}/target", post(music_target))
@@ -218,7 +219,12 @@ async fn dashboard(
         }
     };
 
-    Ok(page(layout("Tableau de bord", "seances", Some(&user), content)))
+    Ok(page(layout(
+        "Tableau de bord",
+        "seances",
+        Some(&user),
+        content,
+    )))
 }
 
 fn landing() -> Markup {
@@ -546,7 +552,12 @@ async fn link_page(
             }
         }
     };
-    Ok(page(layout("Appairer une montre", "link", Some(&user), content)))
+    Ok(page(layout(
+        "Appairer une montre",
+        "link",
+        Some(&user),
+        content,
+    )))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2779,7 +2790,8 @@ async fn music_page(
                     }
                 }
                 None => {
-                    search_error = Some("Session Spotify expiree : reconnectez le compte.".to_string());
+                    search_error =
+                        Some("Session Spotify expiree : reconnectez le compte.".to_string());
                 }
             }
         }
@@ -3125,14 +3137,14 @@ pub(crate) async fn spotify_callback(
         .execute(&state.pool)
         .await?;
 
-    let token = match crate::spotify::exchange_code(&state.http, &state.config, &code, &verifier).await
-    {
-        Ok(token) => token,
-        Err(error) => {
-            tracing::warn!(error = %error, "echange de jeton Spotify refuse");
-            return Ok(Redirect::to("/music?erreur=spotify_refuse").into_response());
-        }
-    };
+    let token =
+        match crate::spotify::exchange_code(&state.http, &state.config, &code, &verifier).await {
+            Ok(token) => token,
+            Err(error) => {
+                tracing::warn!(error = %error, "echange de jeton Spotify refuse");
+                return Ok(Redirect::to("/music?erreur=spotify_refuse").into_response());
+            }
+        };
     // Le profil n'est qu'un confort d'affichage : un echec ne remet pas en
     // cause la liaison, qui a bien recu ses jetons.
     let profile = crate::spotify::current_user(&state.http, &token.access_token)
@@ -3287,10 +3299,11 @@ async fn music_import(
         titres = detail.tracks.len(),
         "playlist Spotify importee"
     );
-    Ok(
-        Redirect::to(&format!("/music?playlist={}&ok=playlist_importee", playlist.id))
-            .into_response(),
-    )
+    Ok(Redirect::to(&format!(
+        "/music?playlist={}&ok=playlist_importee",
+        playlist.id
+    ))
+    .into_response())
 }
 
 /// Televersement de fichiers audio depuis le navigateur (multipart/form-data).
@@ -3311,10 +3324,10 @@ async fn music_upload(
                 titres = track_count,
                 "fichiers audio televerses"
             );
-            Ok(
-                Redirect::to(&format!("/music?playlist={playlist_id}&ok=fichiers_importes"))
-                    .into_response(),
-            )
+            Ok(Redirect::to(&format!(
+                "/music?playlist={playlist_id}&ok=fichiers_importes"
+            ))
+            .into_response())
         }
         Err(error) => {
             // Le detail est journalise ; la page affiche un message court et
@@ -3448,8 +3461,8 @@ async fn music_prepare_create(
     AuthUser(user): AuthUser,
     Form(form): Form<MusicPlanForm>,
 ) -> AppResult<Response> {
-    let Some(playlist) = crate::db::get_music_playlist(&state.pool, &user.id, &form.playlist_id)
-        .await?
+    let Some(playlist) =
+        crate::db::get_music_playlist(&state.pool, &user.id, &form.playlist_id).await?
     else {
         return Ok(Redirect::to("/music?erreur=playlist_inconnue").into_response());
     };

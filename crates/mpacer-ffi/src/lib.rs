@@ -429,7 +429,10 @@ mod tests {
         );
         assert!(configured["music"]["enabled"].as_bool().unwrap());
 
-        let empty = run(&mut handle, r#"{"cmd":"set_music_playlist","playlist":null}"#);
+        let empty = run(
+            &mut handle,
+            r#"{"cmd":"set_music_playlist","playlist":null}"#,
+        );
         assert_eq!(empty["music"]["directive"], "None");
         assert_eq!(empty["music"]["reason"], "NoPlaylist");
 
@@ -449,7 +452,10 @@ mod tests {
         assert_eq!(playing["music"]["directive"], "Keep");
         assert_eq!(playing["music"]["current"]["position_s"], 42.5);
 
-        let cadence = run(&mut handle, r#"{"cmd":"on_cadence","t_ms":1700000000000,"spm":174.0}"#);
+        let cadence = run(
+            &mut handle,
+            r#"{"cmd":"on_cadence","t_ms":1700000000000,"spm":174.0}"#,
+        );
         assert_eq!(cadence["music"]["cadence_spm"], 174.0);
 
         let cleared = run(&mut handle, r#"{"cmd":"music_now_playing","now":null}"#);

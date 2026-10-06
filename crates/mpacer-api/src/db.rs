@@ -1084,10 +1084,7 @@ pub async fn ack_music_plan(
 }
 
 /// Annule tous les plans en attente (bouton « Annuler » de la page).
-pub async fn cancel_pending_music_plans(
-    pool: &PgPool,
-    user_id: &str,
-) -> Result<u64, sqlx::Error> {
+pub async fn cancel_pending_music_plans(pool: &PgPool, user_id: &str) -> Result<u64, sqlx::Error> {
     let result =
         sqlx::query("DELETE FROM music_download_plans WHERE user_id = $1 AND acked_at_ms IS NULL")
             .bind(user_id)
@@ -1150,12 +1147,14 @@ pub async fn update_spotify_access_token(
     access_token: &str,
     expires_at_ms: i64,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE spotify_accounts SET access_token = $1, expires_at_ms = $2 WHERE user_id = $3")
-        .bind(access_token)
-        .bind(expires_at_ms)
-        .bind(user_id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE spotify_accounts SET access_token = $1, expires_at_ms = $2 WHERE user_id = $3",
+    )
+    .bind(access_token)
+    .bind(expires_at_ms)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

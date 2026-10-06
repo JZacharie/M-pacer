@@ -44,7 +44,7 @@ pub use engine::{EngineConfig, EngineOutput, PacerEngine};
 pub use gps::{GpsMonitor, GpsSample, GpsStatus, StatusLight};
 pub use music::{
     bpm_from_tags, cadence_from_speed, tap_tempo, target_bpm_for_pace, target_cadence_spm,
-    BpmSource, DirectiveReason, MusicConfig, MusicDirector, MusicDirective, MusicInput, MusicState,
+    BpmSource, DirectiveReason, MusicConfig, MusicDirective, MusicDirector, MusicInput, MusicState,
     NowPlaying, Playlist, Track,
 };
 pub use pace::PaceEngine;

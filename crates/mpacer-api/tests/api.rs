@@ -1608,9 +1608,7 @@ fn multipart_body_named(
         push_text(&mut body, &format!("--{boundary}\r\n"));
         push_text(
             &mut body,
-            &format!(
-                "Content-Disposition: form-data; name=\"files\"; filename=\"{filename}\"\r\n"
-            ),
+            &format!("Content-Disposition: form-data; name=\"files\"; filename=\"{filename}\"\r\n"),
         );
         push_text(&mut body, "Content-Type: audio/mpeg\r\n\r\n");
         body.extend_from_slice(bytes);
@@ -1694,7 +1692,11 @@ async fn music_api_serves_playlists_tracks_files_and_plans() {
     .unwrap();
 
     // 1. La liste resume la playlist.
-    let response = app.clone().oneshot(bearer("/api/v1/music/playlists", &token)).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(bearer("/api/v1/music/playlists", &token))
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let list: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
     assert_eq!(list["playlists"][0]["name"], "Ma course 10 km");
@@ -1706,7 +1708,10 @@ async fn music_api_serves_playlists_tracks_files_and_plans() {
     // 2. La fiche publie le chemin relatif de telechargement.
     let response = app
         .clone()
-        .oneshot(bearer(&format!("/api/v1/music/playlists/{}", playlist.id), &token))
+        .oneshot(bearer(
+            &format!("/api/v1/music/playlists/{}", playlist.id),
+            &token,
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -1723,13 +1728,19 @@ async fn music_api_serves_playlists_tracks_files_and_plans() {
     // 3. Le fichier est servi entier, puis par tranches (reprise du telechargement).
     let response = app
         .clone()
-        .oneshot(bearer(&format!("/api/v1/music/tracks/{track_id}/file"), &token))
+        .oneshot(bearer(
+            &format!("/api/v1/music/tracks/{track_id}/file"),
+            &token,
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[header::CONTENT_TYPE], "audio/mpeg");
     assert_eq!(response.headers()[header::ACCEPT_RANGES], "bytes");
-    assert_eq!(response.headers()[header::CONTENT_LENGTH], bytes.len().to_string());
+    assert_eq!(
+        response.headers()[header::CONTENT_LENGTH],
+        bytes.len().to_string()
+    );
     let downloaded = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(downloaded.as_ref(), bytes.as_slice());
 
@@ -1774,7 +1785,11 @@ async fn music_api_serves_playlists_tracks_files_and_plans() {
     assert_eq!(ack["downloaded"], 1);
 
     // 5. Plan de telechargement : absent, cree, acquitte.
-    let response = app.clone().oneshot(bearer("/api/v1/music/prepare", &token)).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(bearer("/api/v1/music/prepare", &token))
+        .await
+        .unwrap();
     let prepared: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
     assert!(prepared["plan"].is_null(), "{prepared}");
 
@@ -1788,7 +1803,11 @@ async fn music_api_serves_playlists_tracks_files_and_plans() {
     )
     .await
     .unwrap();
-    let response = app.clone().oneshot(bearer("/api/v1/music/prepare", &token)).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(bearer("/api/v1/music/prepare", &token))
+        .await
+        .unwrap();
     let prepared: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
     assert_eq!(prepared["plan"]["id"], plan.id.as_str());
     assert_eq!(prepared["plan"]["name"], "Ma course 10 km");
@@ -1813,9 +1832,16 @@ async fn music_api_serves_playlists_tracks_files_and_plans() {
     assert_eq!(response.status(), StatusCode::OK);
     assert!(body_text(response).await.contains("\"ok\":true"));
 
-    let response = app.clone().oneshot(bearer("/api/v1/music/prepare", &token)).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(bearer("/api/v1/music/prepare", &token))
+        .await
+        .unwrap();
     let prepared: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
-    assert!(prepared["plan"].is_null(), "le plan acquitte disparait : {prepared}");
+    assert!(
+        prepared["plan"].is_null(),
+        "le plan acquitte disparait : {prepared}"
+    );
 
     // 6. Meme garde que /api/v1/workouts : sans jeton, rien n'est accessible.
     let response = app.oneshot(get("/api/v1/music/playlists")).await.unwrap();
@@ -1849,7 +1875,10 @@ async fn music_page_has_four_blocks_and_prepares_a_race() {
         "aucun plan en attente",
         "Aucune playlist pour l'instant",
     ] {
-        assert!(body.contains(expected), "« {expected} » absent de /music : {body}");
+        assert!(
+            body.contains(expected),
+            "« {expected} » absent de /music : {body}"
+        );
     }
     // Spotify reste explicitement optionnel.
     assert!(body.contains("Spotify n'est pas configure"), "{body}");
@@ -1858,7 +1887,12 @@ async fn music_page_has_four_blocks_and_prepares_a_race() {
     let boundary = "----mpacer-test-boundary";
     let files = vec![
         ("Wake_me-up.mp3", tagged_mp3("172")),
-        ("Titre_sans_bpm.mp3", vec![0x49, 0x44, 0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02]),
+        (
+            "Titre_sans_bpm.mp3",
+            vec![
+                0x49, 0x44, 0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02,
+            ],
+        ),
     ];
     let response = app
         .clone()
@@ -1871,13 +1905,20 @@ async fn music_page_has_four_blocks_and_prepares_a_race() {
                     format!("multipart/form-data; boundary={boundary}"),
                 )
                 .header(header::COOKIE, &session)
-                .body(Body::from(multipart_body(boundary, "Ma course 10 km", &files)))
+                .body(Body::from(multipart_body(
+                    boundary,
+                    "Ma course 10 km",
+                    &files,
+                )))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let location = response.headers()[header::LOCATION].to_str().unwrap().to_string();
+    let location = response.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
     assert!(location.contains("ok=fichiers_importes"), "{location}");
     let playlist_id = location
         .split("playlist=")
@@ -1970,7 +2011,10 @@ async fn music_page_has_four_blocks_and_prepares_a_race() {
         ))
         .await
         .unwrap();
-    assert!(response.headers()[header::LOCATION].to_str().unwrap().contains("erreur=bpm_invalide"));
+    assert!(response.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .contains("erreur=bpm_invalide"));
 
     // Preparation de la course : le plan attend la montre.
     let response = app
@@ -2043,12 +2087,10 @@ async fn music_page_has_four_blocks_and_prepares_a_race() {
     // Le libelle du formulaire contient aussi « Ma course 10 km » (placeholder) :
     // on cherche donc le lien de la playlist, pas le simple texte.
     assert!(!body.contains(">Ma course 10 km</a>"), "{body}");
-    assert!(
-        mpacer_api::db::list_music_playlists(&state.pool, &_user.id)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    assert!(mpacer_api::db::list_music_playlists(&state.pool, &_user.id)
+        .await
+        .unwrap()
+        .is_empty());
     assert!(
         mpacer_api::db::list_music_tracks(&state.pool, &_user.id, &playlist_id)
             .await
@@ -2135,13 +2177,10 @@ fn multipart_request(
     body: Vec<u8>,
     token: Option<&str>,
 ) -> Request<Body> {
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header(
-            header::CONTENT_TYPE,
-            format!("multipart/form-data; boundary={boundary}"),
-        );
+    let mut builder = Request::builder().method("POST").uri(uri).header(
+        header::CONTENT_TYPE,
+        format!("multipart/form-data; boundary={boundary}"),
+    );
     if let Some(token) = token {
         builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
     }
@@ -2164,7 +2203,12 @@ async fn music_upload_endpoint_accepts_a_device_token() {
     // Sans jeton d'appareil, l'endpoint est ferme (meme garde que /api/v1/workouts).
     let response = app
         .clone()
-        .oneshot(multipart_request("/api/v1/music/playlists", boundary, body.clone(), None))
+        .oneshot(multipart_request(
+            "/api/v1/music/playlists",
+            boundary,
+            body.clone(),
+            None,
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -2205,7 +2249,11 @@ async fn music_upload_endpoint_accepts_a_device_token() {
         .as_str()
         .expect("chemin de telechargement")
         .to_string();
-    let response = app.clone().oneshot(bearer(&download, &token)).await.unwrap();
+    let response = app
+        .clone()
+        .oneshot(bearer(&download, &token))
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[header::CONTENT_TYPE], "audio/mpeg");
 
@@ -2288,11 +2336,11 @@ async fn spotify_oauth_starts_when_configured() {
         "{location}"
     );
     assert!(location.contains("client_id=client-de-test"), "{location}");
-    assert!(location.contains("code_challenge_method=S256"), "{location}");
     assert!(
-        location.contains("playlist-read-private"),
+        location.contains("code_challenge_method=S256"),
         "{location}"
     );
+    assert!(location.contains("playlist-read-private"), "{location}");
 
     // La recherche demande d'abord de connecter le compte.
     let body = body_text(

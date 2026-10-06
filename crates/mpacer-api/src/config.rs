@@ -274,7 +274,10 @@ fn redirect_path_of(uri: &str) -> String {
     let after_scheme = uri.split_once("://").map(|(_, reste)| reste).unwrap_or(uri);
     match after_scheme.find('/') {
         Some(index) => {
-            let path = after_scheme[index..].split(['?', '#']).next().unwrap_or("/");
+            let path = after_scheme[index..]
+                .split(['?', '#'])
+                .next()
+                .unwrap_or("/");
             if path.is_empty() {
                 "/".to_string()
             } else {

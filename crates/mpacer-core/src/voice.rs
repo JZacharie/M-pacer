@@ -393,8 +393,12 @@ impl VoiceCoach {
             });
         }
         let cue = match state.directive {
-            MusicDirective::Boost if previous != Some(MusicDirective::Boost) => VoiceCue::MusicBoost,
-            MusicDirective::Relax if previous != Some(MusicDirective::Relax) => VoiceCue::MusicRelax,
+            MusicDirective::Boost if previous != Some(MusicDirective::Boost) => {
+                VoiceCue::MusicBoost
+            }
+            MusicDirective::Relax if previous != Some(MusicDirective::Relax) => {
+                VoiceCue::MusicRelax
+            }
             _ => return None,
         };
         Some(VoiceMessage {
@@ -561,10 +565,7 @@ mod tests {
         let mut snapshot = snapshot();
         snapshot.music_bpm = Some(176.0);
         let fr = VoiceConfig::default();
-        assert_eq!(
-            render(VoiceCue::MusicTempo, &snapshot, &fr),
-            "Rythme 176."
-        );
+        assert_eq!(render(VoiceCue::MusicTempo, &snapshot, &fr), "Rythme 176.");
         assert_eq!(
             render(VoiceCue::MusicBoost, &snapshot, &fr),
             "Musique : on accelere."

@@ -17,7 +17,9 @@ use mpacer_core::cardio::{self, HeartRateZones, ZONE_NAMES};
 use mpacer_core::engine::{EngineConfig, PacerEngine};
 use mpacer_core::geo::Position;
 use mpacer_core::gps::GpsSample;
-use mpacer_core::music::{DirectiveReason, MusicConfig, MusicDirective, NowPlaying, Playlist, Track};
+use mpacer_core::music::{
+    DirectiveReason, MusicConfig, MusicDirective, NowPlaying, Playlist, Track,
+};
 use mpacer_core::pace::PaceConfig;
 use mpacer_core::race_plan::NegativeSplit;
 use mpacer_core::units::{format_duration, format_pace, UnitSystem};

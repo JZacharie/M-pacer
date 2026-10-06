@@ -597,7 +597,10 @@ pub fn title_from_filename(filename: &str) -> String {
         Some(index) if index > 0 => &base[..index],
         _ => base,
     };
-    let title = without_extension.replace(['_', '-'], " ").trim().to_string();
+    let title = without_extension
+        .replace(['_', '-'], " ")
+        .trim()
+        .to_string();
     if title.is_empty() {
         "Titre sans nom".to_string()
     } else {

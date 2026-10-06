@@ -646,7 +646,7 @@ mod tests {
     use super::*;
     use crate::assistant::AssistantMode;
     use crate::geo::Position;
-    use crate::music::{MusicDirective, DirectiveReason, Playlist, Track};
+    use crate::music::{DirectiveReason, MusicDirective, Playlist, Track};
     use crate::race_plan::NegativeSplit;
     use crate::voice::{VoiceCue, VoiceFrequency};
 

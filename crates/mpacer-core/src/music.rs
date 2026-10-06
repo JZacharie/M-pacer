@@ -358,7 +358,11 @@ fn bpm_from_id3v2(bytes: &[u8]) -> Option<f64> {
     }
     while pos + 6 <= end {
         let (id_len, header_len, frame_size) = if major == 2 {
-            (3usize, 6usize, be_u24(bytes.get(pos + 3..pos + 6)?)? as usize)
+            (
+                3usize,
+                6usize,
+                be_u24(bytes.get(pos + 3..pos + 6)?)? as usize,
+            )
         } else if major == 4 {
             (
                 4usize,
@@ -366,7 +370,11 @@ fn bpm_from_id3v2(bytes: &[u8]) -> Option<f64> {
                 syncsafe_u32(bytes.get(pos + 4..pos + 8)?)? as usize,
             )
         } else {
-            (4usize, 10usize, be_u32(bytes.get(pos + 4..pos + 8)?)? as usize)
+            (
+                4usize,
+                10usize,
+                be_u32(bytes.get(pos + 4..pos + 8)?)? as usize,
+            )
         };
         let id = bytes.get(pos..pos + id_len)?;
         if id.iter().all(|byte| *byte == 0) {
@@ -505,7 +513,9 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
     }
-    haystack.windows(needle.len()).position(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 fn be_u32(bytes: &[u8]) -> Option<u32> {

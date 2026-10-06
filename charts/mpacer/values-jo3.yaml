@@ -42,10 +42,9 @@ config:
   publicUrl: https://mpacer.p.zacharie.org
   cookieSecure: true
   devAuth: false
-  # Le client OAuth du projet 'mpacer' n'autorise pour l'instant que ce chemin.
-  # Pour revenir a la convention /auth/google/callback : ajouter cette URI dans
-  # la console Google, puis vider cette valeur (ou la mettre a jour).
-  googleRedirectUri: https://mpacer.p.zacharie.org/Authorized
+  # La console Google autorise https://mpacer.p.zacharie.org/auth/google/callback
+  # (verifie le 6 octobre 2026) : c'est le chemin par defaut de l'application.
+  googleRedirectUri: ""
 
 # PostgreSQL gere par l'operateur CloudNativePG (present sur jo3 : cnpg-system)
 postgresql:

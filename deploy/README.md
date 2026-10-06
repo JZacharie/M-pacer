@@ -141,10 +141,13 @@ binaire, un utilisateur non privilegie (uid 10001) et un `HEALTHCHECK` sur `/hea
 
 > **URI deja enregistree differente ?** Le service s'aligne sur ce que le client OAuth
 > autorise grace a `config.googleRedirectUri` : renseignez l'URI exacte, le callback
-> est alors servi a ce chemin (sur jo3, le client du projet `mpacer` n'autorise que
-> `https://mpacer.p.zacharie.org/Authorized`, d'ou cette valeur dans
-> `values-jo3.yaml`). Une URI non declaree provoque `redirect_uri_mismatch` : c'est
-> l'erreur la plus frequente au premier deploiement.
+> est alors servi a ce chemin. Une URI non declaree provoque `redirect_uri_mismatch`
+> : c'est l'erreur la plus frequente au premier deploiement. Sur jo3, la console
+> autorise `https://mpacer.p.zacharie.org/auth/google/callback` (chemin par defaut),
+> donc `googleRedirectUri` reste vide.
+>
+> Apres une modification dans la console, comptez de quelques minutes a quelques
+> heures avant qu'elle soit prise en compte.
 
 Le service verifie l'`id_token` contre les cles publiques de Google (JWKS), controle
 l'audience, l'emetteur, la signature et `email_verified`, puis ouvre une session

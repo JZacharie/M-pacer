@@ -22,13 +22,17 @@ android {
     namespace = "com.mpacer.companion"
     compileSdk = 35
 
+    // NDK epingle : la version documentee par local-ci.ps1 (r27) et installee par
+    // l'integration continue, qui n'a qu'un seul NDK sur le runner.
+    ndkVersion = "27.2.12479018"
+
     defaultConfig {
         // Prefixe com.mpacer partage avec la montre (voir README pour la contrainte Data Layer).
         applicationId = "com.mpacer.companion"
         minSdk = 26 // Android 8+
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
         buildConfigField("String", "DEFAULT_API_URL", "\"http://10.0.2.2:8080\"")
         buildConfigField("String", "WATCH_PACKAGE", "\"com.mpacer.watch\"")

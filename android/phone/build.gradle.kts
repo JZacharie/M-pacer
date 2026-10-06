@@ -23,12 +23,16 @@ android {
     namespace = "com.mpacer.phone"
     compileSdk = 35
 
+    // NDK epingle : la version documentee par local-ci.ps1 (r27) et installee par
+    // l'integration continue, qui n'a qu'un seul NDK sur le runner.
+    ndkVersion = "27.2.12479018"
+
     defaultConfig {
         applicationId = "com.mpacer.phone"
         minSdk = 26 // Android 8+
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
         // ABI des telephones recents, des appareils plus anciens et de l'emulateur.
         // Les .so viennent du module :core, filtres ici a l'empaquetage.

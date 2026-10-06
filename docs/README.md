@@ -19,6 +19,7 @@ Index des documents. Le point d'entrée reste le [README principal](../README.md
 | [13 - Amis et partage de la position en direct](13-amis-partage-position.md) | courir à plusieurs : cercle d'amis par code court, partage de la position pendant la séance, revendication des appareils, page `/amis`, API et carte **OpenStreetMap** sans dépendance |
 | [12 - Courir avec le téléphone](12-course-telephone.md) | courir sans montre : socle partagé `:core`, écran de course Material 3, ceinture cardiaque Bluetooth LE, permissions, réglages persistants, musique et limites connues |
 | [14 - Analyse de trace : VisuGPX](14-analyse-trace-visugpx.md) | comparer la fiche d'une trace sur **VisuGPX** (carte, profil altimétrique coloré, dénivelé horaire, vitesse maximale, KML) avec l'écran de séance de M-pacer, et savoir ce qui a été repris, comment, et ce qui reste dehors |
+| [15 - Versions et publications](15-releases.md) | publier une version : ce que contient une *release* GitHub (APK des trois applications, outils Rust, image conteneur), comment taguer, secrets de signature Android et ce qui reste à construire à la main (Garmin) |
 | [Guide de déploiement](../deploy/README.md) | déployer concrètement sur le cluster k3s **jo3** : image, secrets, Helm, ingress, TLS, sauvegardes, dépannage |
 
 ## Illustrations
@@ -48,6 +49,8 @@ du site (visionneuse plein écran) et reprises par
 **Je veux lire une trace importée** → 06 (écran d'analyse) puis 14 (carte, profil coloré, dénivelé horaire, KML).
 
 **Je veux déployer** → [deploy/README.md](../deploy/README.md).
+
+**Je veux publier une version** → 15 (tag, artefacts, signature des APK).
 
 **Je veux reprendre le développement montre ou téléphone** → 03 et 12, puis [android/README.md](../android/README.md).
 

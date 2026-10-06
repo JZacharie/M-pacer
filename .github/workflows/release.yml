@@ -1,0 +1,213 @@
+name: Publication des applications
+
+# Cree (ou met a jour) la publication GitHub d'un tag vX.Y.Z avec les binaires
+# de chaque application M-pacer :
+#   - montre Wear OS, course au telephone, application d'appoint (APK) ;
+#   - serveur et outils Rust (Linux et Windows) ;
+#   - la montre Garmin est validee ici, mais son .iq/.prg exige les profils
+#     d'appareils du SDK Manager de Garmin (voir .github/release-notes.md).
+# L'image conteneur est publiee separement par publish.yml (ghcr.io).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag a publier (ex. v0.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  API_URL: ${{ vars.MPACER_API_URL || 'https://mpacer.p.zacharie.org' }}
+
+jobs:
+  # ------------------------------------------------------------- outils Rust
+  outils:
+    name: Outils Rust (${{ matrix.cible }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            cible: linux-x86_64
+          - os: windows-latest
+            cible: windows-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compilation
+        run: cargo build --release --workspace
+
+      - name: Archive (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p dist
+          tar -czf "dist/mpacer-outils-${VERSION}-${{ matrix.cible }}.tar.gz" \
+            -C target/release mpacer-api mpacer-sim mpacer-music
+
+      - name: Archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Force -DestinationPath "dist/mpacer-outils-$env:VERSION-${{ matrix.cible }}.zip" -Path @(
+            'target/release/mpacer-api.exe',
+            'target/release/mpacer-sim.exe',
+            'target/release/mpacer-music.exe'
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: outils-${{ matrix.cible }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ------------------------------------------------------- applications APK
+  android:
+    name: Applications Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Plateforme 35, NDK 27 (cargo-ndk) et CMake 3.22.1, comme local-ci.ps1 :
+      # le coeur Rust est compile par cargo-ndk avant l'assemblage Gradle.
+      - name: SDK Android
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-35 build-tools;35.0.0 ndk;27.2.12479018 cmake;3.22.1"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      # La cle release vit hors du depot (android/keystore.properties, ignore par
+      # git). Fournie en secret, elle signe les APK ; sinon repli sur la cle de
+      # debug, installable mais sans mise a jour en place.
+      - name: Cle de signature
+        id: signature
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PROPERTIES: ${{ secrets.ANDROID_KEYSTORE_PROPERTIES }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PROPERTIES" ]; then
+            printf '%s' "$KEYSTORE_B64" | base64 -d > android/mpacer-release.jks
+            printf '%s\n' "$KEYSTORE_PROPERTIES" > android/keystore.properties
+            echo "variante=release" >> "$GITHUB_OUTPUT"
+            echo "dossier=release" >> "$GITHUB_OUTPUT"
+            echo "taches=:app:assembleRelease :phone:assembleRelease :companion:assembleRelease" >> "$GITHUB_OUTPUT"
+          else
+            echo "variante=debug" >> "$GITHUB_OUTPUT"
+            echo "dossier=debug" >> "$GITHUB_OUTPUT"
+            echo "taches=:app:assembleDebug :phone:assembleDebug :companion:assembleDebug" >> "$GITHUB_OUTPUT"
+            echo "::warning::Secret ANDROID_KEYSTORE_BASE64 absent : APK signes avec la cle de debug."
+          fi
+
+      - name: Assemblage des trois applications
+        working-directory: android
+        run: ./gradlew --no-daemon "-Pmpacer.apiUrl=${API_URL}" ${{ steps.signature.outputs.taches }}
+
+      - name: Paquet
+        shell: bash
+        run: |
+          mkdir -p dist
+          dossier="${{ steps.signature.outputs.dossier }}"
+          variante="${{ steps.signature.outputs.variante }}"
+          copier() {
+            cp "android/$1/build/outputs/apk/$dossier/$1-$variante.apk" \
+               "dist/M-pacer-$2-${VERSION}-$variante.apk"
+          }
+          copier app montre
+          copier phone telephone
+          copier companion compagnon
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: dist/*
+          if-no-files-found: error
+
+  # --------------------------------------------- montre Garmin (validation)
+  garmin:
+    name: Montre Garmin (validation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache du SDK Connect IQ
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/mpacer-connectiq-9.2.0
+          key: connectiq-sdk-9.2.0-linux
+
+      # Compilation de verification : sans profils d'appareils, monkeyc valide la
+      # syntaxe, les types et les ressources, mais ne produit pas d'archive
+      # installable (voir .github/release-notes.md).
+      - name: Compilation de verification
+        shell: pwsh
+        run: ./garmin/build.ps1 -Check -SdkVersion 9.2.0
+
+  # ------------------------------------------------------------- publication
+  publication:
+    name: Publication GitHub
+    # Une plateforme en echec ne bloque pas les autres : le journal du workflow
+    # dit ce qui manque, la publication reste utile.
+    if: ${{ !cancelled() }}
+    needs: [outils, android, garmin]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Les archives deja attachees a la publication (APK signes construits hors
+      # CI, par exemple) sont recuperees pour que l'empreinte couvre toute la
+      # release, et pas seulement les fichiers du workflow.
+      - name: Empreintes SHA-256
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ env.VERSION }}" --dir dist --clobber || true
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publication
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: M-pacer ${{ env.VERSION }}
+          body_path: .github/release-notes.md
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: dist/*

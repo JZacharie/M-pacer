@@ -19,6 +19,10 @@ android {
     namespace = "com.mpacer.core"
     compileSdk = 35
 
+    // NDK epingle : la version documentee par local-ci.ps1 (r27) et installee par
+    // l'integration continue, qui n'a qu'un seul NDK sur le runner.
+    ndkVersion = "27.2.12479018"
+
     defaultConfig {
         // Le plan le plus bas des deux applications (Android 8 pour le telephone).
         minSdk = 26

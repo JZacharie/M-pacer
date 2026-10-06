@@ -24,14 +24,18 @@ android {
     namespace = "com.mpacer.watch"
     compileSdk = 35
 
+    // NDK epingle : la version documentee par local-ci.ps1 (r27) et installee par
+    // l'integration continue, qui n'a qu'un seul NDK sur le runner.
+    ndkVersion = "27.2.12479018"
+
     defaultConfig {
         // Identifiant fige : la montre et le telephone partagent le prefixe com.mpacer.
         applicationId = "com.mpacer.watch"
         // Wear OS 3+ (Android 11) : Health Services, foreground service type, TTS modernes.
         minSdk = 30
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
         // ABI portees par les montres Wear OS 3/4 et par l emulateur x86_64.
         // Les .so viennent du module :core, filtres ici a l'empaquetage.

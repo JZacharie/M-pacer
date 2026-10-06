@@ -103,7 +103,7 @@ bande-son (playlists Spotify ou Deezer, BPM cible, manifeste à copier sur la mo
 | [`garmin/`](garmin/) | Application Connect IQ en Monkey C — voir [`garmin/README.md`](garmin/README.md) |
 | [`charts/`](charts/) | Chart Helm `mpacer` |
 | [`deploy/`](deploy/) | Dockerfile, script de construction d'image, notes GitOps — voir [`deploy/README.md`](deploy/README.md) |
-| [`docs/`](docs/) | Documentation technique (15 documents) — index : [`docs/README.md`](docs/README.md) |
+| [`docs/`](docs/) | Documentation technique (16 documents) — index : [`docs/README.md`](docs/README.md) |
 | [`site/`](site/) | Documentation illustrée publiée sur GitHub Pages |
 | [`examples/`](examples/) | Cas concrets reproductibles (pacer autour du parc de Parilly) |
 | [`simulations/`](simulations/) | Traces GPS synthétiques prêtes à importer |
@@ -216,6 +216,14 @@ Le suivi en direct s'active avec un broker MQTT (optionnel) :
 
 Détail complet (image, secrets, TLS, sauvegardes, dépannage) :
 [`deploy/README.md`](deploy/README.md).
+
+### Publier une version
+
+Un tag `vX.Y.Z` déclenche [`release.yml`](.github/workflows/release.yml) : la CI
+construit les APK des trois applications et les outils Rust (Linux et Windows),
+valide la compilation Garmin, puis crée la publication GitHub avec les empreintes
+SHA-256 ; l'image conteneur part en parallèle sur `ghcr.io`. Secrets de
+signature, variables et procédure complète : [`docs/15-releases.md`](docs/15-releases.md).
 
 ## 8. Limites et points ouverts
 

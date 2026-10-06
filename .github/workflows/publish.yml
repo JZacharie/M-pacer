@@ -39,6 +39,9 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=sha,format=short
             type=ref,event=tag
+            # v0.2.0 -> 0.2.0 : c'est le tag que le chart utilise par defaut
+            # (image.tag vide => appVersion du chart).
+            type=semver,pattern={{version}}
 
       - name: Construction et publication
         uses: docker/build-push-action@v6

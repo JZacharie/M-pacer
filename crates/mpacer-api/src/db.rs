@@ -431,7 +431,10 @@ pub async fn stats(
         workout_count: count,
         total_distance_m: distance,
         total_duration_s: duration,
-        average_pace_s_per_km: if distance > 0.0 {
+        // Sous 100 m cumules, l'allure moyenne n'a aucun sens (une seance sans
+        // GPS donnait « 579:14 /km ») : on ne l'affiche pas plutot que d'écrire
+        // un chiffre absurde.
+        average_pace_s_per_km: if distance >= 100.0 {
             Some(duration / (distance / 1000.0))
         } else {
             None

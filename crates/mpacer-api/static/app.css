@@ -631,6 +631,65 @@ tbody tr:last-child td { border-bottom: none; }
 td { font-variant-numeric: tabular-nums; }
 td a { color: var(--orange); font-weight: 600; }
 
+/* ---------------------------------------------------- volume hebdomadaire
+   Barres en HTML/CSS : elles s'adaptent a la largeur disponible, qu'il y ait
+   une seule semaine ou douze. */
+.weeks {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-height: 200px;
+  padding: 10px 4px 0;
+  margin-bottom: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
+  overflow-x: auto;
+}
+
+.week {
+  flex: 1 1 0;
+  min-width: 34px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+
+.week-value {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.week-track {
+  flex: 1;
+  width: 100%;
+  max-width: 46px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.week-bar {
+  width: 100%;
+  min-height: 6px;
+  border-radius: 6px 6px 3px 3px;
+  background: linear-gradient(180deg, var(--orange), #d8410a);
+  transform-origin: bottom;
+  animation: grow .6s var(--ease) both;
+}
+
+.week-label {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 /* --------------------------------------------------------------- graphique */
 
 .chart {

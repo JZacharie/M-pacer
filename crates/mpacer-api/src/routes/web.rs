@@ -413,35 +413,46 @@ async fn stats_page(
     Ok(page(layout("Statistiques", "stats", Some(&user), content)))
 }
 
-/// Histogramme SVG du volume hebdomadaire (aucune librairie de graphiques).
+/// Histogramme du volume hebdomadaire.
+///
+/// Rendu en HTML/CSS plutot qu'en SVG : les barres s'adaptent a la largeur de
+/// l'ecran (une seule semaine ne s'etire plus en un pave geant, l'ancien
+/// `preserveAspectRatio="none"` deformait barres et etiquettes) et le texte
+/// garde une taille de police normale.
+/// Hauteur maximale d'une barre, en pixels (le graphique est responsive en largeur).
+const CR_HAUTEUR_BARRES: f64 = 150.0;
+
 pub(crate) fn weekly_chart(weeks: &[crate::db::WeekTotal]) -> Markup {
     let max_distance = weeks
         .iter()
         .map(|week| week.distance_m)
         .fold(0.0_f64, f64::max)
         .max(1.0);
-    let width = (weeks.len() as f64 * 34.0).max(160.0);
-    let height = 150.0;
+    let total: f64 = weeks.iter().map(|week| week.distance_m).sum();
 
     html! {
-        svg class="chart" viewBox=(format!("0 0 {width} {height}")) preserveAspectRatio="none" {
-            @for (index, week) in weeks.iter().enumerate() {
+        div class="weeks" role="img"
+            aria-label=(format!(
+                "Volume hebdomadaire sur {} semaine(s), {} au total",
+                weeks.len(),
+                format_distance(total, UnitSystem::Metric)
+            )) {
+            @for week in weeks {
                 @let ratio = (week.distance_m / max_distance).clamp(0.0, 1.0);
-                @let bar_height = 12.0 + ratio * (height - 34.0);
-                rect
-                    x=(format!("{:.1}", index as f64 * 34.0 + 6.0))
-                    y=(format!("{:.1}", height - bar_height - 14.0))
-                    width="22"
-                    height=(format!("{:.1}", bar_height))
-                    rx="3" {
-                    title { (week.label) " : " (format!("{:.1}", week.distance_m / 1000.0)) " km" }
-                }
-                text
-                    x=(format!("{:.1}", index as f64 * 34.0 + 17.0))
-                    y=(format!("{:.1}", height - 2.0))
-                    text-anchor="middle"
-                    class="chart-label" {
-                    (week.label)
+                // Hauteur en pixels : le graphique est responsive en largeur, et
+                // une semaine sans course garde une barre visible de 4 px.
+                @let hauteur_px = 4.0 + ratio * (CR_HAUTEUR_BARRES - 4.0);
+                div class="week" {
+                    span class="week-value" {
+                        @if week.distance_m > 0.0 {
+                            (format!("{:.1}", week.distance_m / 1000.0)) " km"
+                        }
+                    }
+                    div class="week-track" {
+                        div class="week-bar" style=(format!("height: {hauteur_px:.0}px"))
+                            title=(format!("{} : {:.1} km", week.label, week.distance_m / 1000.0)) {}
+                    }
+                    span class="week-label" { (week.label) }
                 }
             }
         }

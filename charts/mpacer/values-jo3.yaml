@@ -5,7 +5,15 @@
 
 image:
   repository: ghcr.io/jzacharie/mpacer
-  tag: sha-7dd491a
+  # Etiquette publiee par la CI (.github/workflows/publish.yml) : « latest » sur
+  # main, plus une etiquette « sha-<court> » par commit.
+  #
+  # ATTENTION : ce tag est ce que le cluster execute. S'il pointe sur un commit
+  # ancien ou sur une autre branche, le site continue de servir l'ancienne
+  # interface meme si main est plus recent. Apres chaque publication :
+  #   git log -1 --format=%h           # le sha court du commit deploye
+  #   -> reporter la valeur ici, commit, push ; ArgoCD synchronise seul.
+  tag: sha-d2da41b
   pullPolicy: Always
 
 imagePullSecrets:

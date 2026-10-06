@@ -1,0 +1,44 @@
+# ---------------------------------------------------------------------------
+# Documentation M-pacer - site statique publie sur GitHub Pages.
+#
+# Publication : .github/workflows/pages.yml construit ce dossier avec
+# actions/jekyll-build-pages, puis le publie sur GitHub Pages.
+# Prerequis cote depot : Settings > Pages > Build and deployment > Source =
+# « GitHub Actions » (une seule fois).
+#
+# baseurl : chemin du site de projet. Pour https://<compte>.github.io/M-pacer/
+# la valeur est "/M-pacer". Avec un domaine personnalise, mettre "".
+# ---------------------------------------------------------------------------
+
+title: M-pacer
+tagline: Controle d'allure sur montre Wear OS, auto-heberge
+description: >-
+  Documentation de M-pacer : l'application montre Wear OS (allure, shadow
+  runner, voix) et le site web auto-heberge (analyse de seance, courses,
+  statistiques), avec un coeur de calcul Rust partage.
+
+lang: fr
+timezone: Europe/Paris
+
+url: https://jzacharie.github.io
+baseurl: /M-pacer
+
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
+  syntax_highlighter: rouge
+
+# Rend cliquables les liens relatifs entre pages Markdown (les fichiers
+# pointent vers "montre.md" et le lien fonctionne aussi bien sur GitHub que
+# sur le site publie).
+plugins:
+  - jekyll-relative-links
+relative_links:
+  enabled: true
+  collections: false
+
+# Le site ne publie que ce dossier.
+exclude:
+  - Gemfile
+  - vendor

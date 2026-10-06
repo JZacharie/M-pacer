@@ -124,6 +124,11 @@ spec:
             {{- if .Values.persistence.enabled }}
             - name: data
               mountPath: {{ .Values.persistence.mountPath }}
+            {{- else }}
+            # Racine en lecture seule : la musique televersee a besoin d'un volume
+            # inscriptible meme sans persistance (fichiers perdus au remplacement du pod).
+            - name: media
+              mountPath: {{ .Values.config.mediaDir }}
             {{- end }}
             # Systeme de fichiers racine en lecture seule : /tmp est un emptyDir
             - name: tmp
@@ -136,6 +141,9 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "mpacer.fullname" . }}
+        {{- else }}
+        - name: media
+          emptyDir: {}
         {{- end }}
         - name: tmp
           emptyDir: {}

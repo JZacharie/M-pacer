@@ -19,9 +19,11 @@
 
 pub mod assets;
 pub mod auth;
+pub mod bpm;
 pub mod config;
 pub mod db;
 pub mod error;
 pub mod models;
 pub mod routes;
+pub mod spotify;
 pub mod state;

@@ -18,7 +18,9 @@ path = "src/main.rs"
 mpacer-core = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-axum = { workspace = true }
+# La feature "multipart" ouvre POST /music/upload (multipart/form-data) ; elle
+# n'ajoute qu'une dependance transitive (multer), deja utilisee par axum.
+axum = { workspace = true, features = ["multipart"] }
 axum-extra = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }

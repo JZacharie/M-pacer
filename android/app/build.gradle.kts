@@ -164,6 +164,11 @@ dependencies {
     // Capteurs / seance systeme (Health Services)
     implementation(libs.androidx.health.services.client)
 
+    // Lecture audio hors ligne (Media3/ExoPlayer) et session medias du lecteur
+    implementation(libs.androidx.media3.common)
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.session)
+
     // Synchronisation vers le backend (SyncClient)
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)

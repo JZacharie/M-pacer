@@ -53,7 +53,7 @@ fun SyncScreen(onBack: () -> Unit) {
         Text("Synchronisation", fontWeight = FontWeight.Bold)
         Text(
             text = if (state.paired) "Connecte" else "Non connecte",
-            color = if (state.paired) Color(0xFF2ECC71) else Color(0xFFE67E22),
+            color = if (state.paired) Palette.ok else Palette.orange,
         )
         Text("En attente : " + state.pending + " seance(s)", textAlign = TextAlign.Center)
 
@@ -68,7 +68,7 @@ fun SyncScreen(onBack: () -> Unit) {
         }
 
         state.message?.let { message ->
-            Text(message, textAlign = TextAlign.Center, color = Color.LightGray)
+            Text(message, textAlign = TextAlign.Center, color = Palette.muted)
         }
 
         if (!state.paired) {

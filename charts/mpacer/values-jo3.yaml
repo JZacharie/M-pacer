@@ -45,6 +45,12 @@ config:
   # La console Google autorise https://mpacer.p.zacharie.org/auth/google/callback
   # (verifie le 6 octobre 2026) : c'est le chemin par defaut de l'application.
   googleRedirectUri: ""
+  # Spotify (optionnel) : renseigner apres avoir scelle les identifiants dans
+  # Vault (voir deploy/GITOPS-ET-SECRETS.md section 2) et declare l'URI de
+  # redirection https://mpacer.p.zacharie.org/auth/spotify/callback
+  # dans la console Spotify for Developers.
+  mediaDir: /data/media
+  spotifyRedirectUri: ""
 
 # PostgreSQL gere par l'operateur CloudNativePG (present sur jo3 : cnpg-system)
 postgresql:
@@ -67,9 +73,14 @@ postgresql:
   nodeSelector:
     kubernetes.io/arch: amd64
 
-# L'application n'ecrit plus rien sur disque : plus de volume applicatif
+# Volume applicatif : il porte les fichiers audio televerses (/data/media).
+# Le PVC doit rester monte, sinon les fichiers seraient perdus a chaque
+# remplacement de pod (emptyDir).
 persistence:
-  enabled: false
+  enabled: true
+  storageClass: local-path-retain
+  size: 5Gi
+  mountPath: /data
 
 # Avec PostgreSQL, l'application est sans etat : mise a jour sans coupure
 strategy:

@@ -4,7 +4,10 @@
 //! valeur n'est concatenee dans le SQL, donc aucune injection possible.
 
 use crate::config::Config;
-use crate::models::{ApiToken, Race, RaceInput, RaceTask, User, WorkoutRow};
+use crate::models::{
+    ApiToken, MusicDownloadPlan, MusicPlaylist, MusicPlaylistInput, MusicPlaylistSummary,
+    MusicTrack, MusicTrackInput, Race, RaceInput, RaceTask, SpotifyAccount, User, WorkoutRow,
+};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{PgPool, Row};
 use std::str::FromStr;
@@ -14,6 +17,8 @@ use std::time::Duration;
 const SCHEMA: &str = include_str!("../migrations/0001_init.sql");
 /// Courses a venir et suivi : meme mecanisme, rejoue juste apres le schema initial.
 const SCHEMA_RACES: &str = include_str!("../migrations/0002_races.sql");
+/// Musique : playlists, titres, plans de telechargement et comptes Spotify.
+const SCHEMA_MUSIC: &str = include_str!("../migrations/0003_music.sql");
 
 /// Ouvre le pool et applique le schema (idempotent).
 pub async fn connect(config: &Config) -> anyhow::Result<PgPool> {
@@ -30,6 +35,7 @@ pub async fn connect_with_options(options: PgConnectOptions) -> anyhow::Result<P
         .await?;
     sqlx::raw_sql(SCHEMA).execute(&pool).await?;
     sqlx::raw_sql(SCHEMA_RACES).execute(&pool).await?;
+    sqlx::raw_sql(SCHEMA_MUSIC).execute(&pool).await?;
     Ok(pool)
 }
 
@@ -711,5 +717,453 @@ pub async fn delete_race_task(
             .bind(user_id)
             .execute(pool)
             .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+// ------------------------------------------------------------------ musique
+
+/// Cree une playlist (vide) et renvoie sa ligne.
+pub async fn insert_music_playlist(
+    pool: &PgPool,
+    user_id: &str,
+    input: &MusicPlaylistInput,
+    now_ms: i64,
+) -> Result<MusicPlaylist, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO music_playlists
+             (id, user_id, name, source, spotify_id, cover_url, target_bpm, created_at_ms, updated_at_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    )
+    .bind(&id)
+    .bind(user_id)
+    .bind(&input.name)
+    .bind(&input.source)
+    .bind(input.spotify_id.as_deref())
+    .bind(input.cover_url.as_deref())
+    .bind(input.target_bpm)
+    .bind(now_ms)
+    .bind(now_ms)
+    .execute(pool)
+    .await?;
+
+    get_music_playlist(pool, user_id, &id)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)
+}
+
+pub async fn get_music_playlist(
+    pool: &PgPool,
+    user_id: &str,
+    id: &str,
+) -> Result<Option<MusicPlaylist>, sqlx::Error> {
+    sqlx::query_as::<_, MusicPlaylist>(
+        "SELECT * FROM music_playlists WHERE user_id = $1 AND id = $2",
+    )
+    .bind(user_id)
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Playlist deja importee depuis Spotify (un import deux fois ne cree pas de doublon).
+pub async fn find_music_playlist_by_spotify(
+    pool: &PgPool,
+    user_id: &str,
+    spotify_id: &str,
+) -> Result<Option<MusicPlaylist>, sqlx::Error> {
+    sqlx::query_as::<_, MusicPlaylist>(
+        "SELECT * FROM music_playlists WHERE user_id = $1 AND spotify_id = $2",
+    )
+    .bind(user_id)
+    .bind(spotify_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Toutes les playlists, de la plus recemment modifiee a la plus ancienne.
+pub async fn list_music_playlists(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<Vec<MusicPlaylist>, sqlx::Error> {
+    sqlx::query_as::<_, MusicPlaylist>(
+        "SELECT * FROM music_playlists WHERE user_id = $1 ORDER BY updated_at_ms DESC, name ASC",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Playlists avec leurs compteurs (nombre de titres, octets, pistes servables).
+///
+/// Un LEFT JOIN suffit : une playlist sans titre renvoie 0 partout, jamais NULL.
+pub async fn list_music_playlist_summaries(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<Vec<MusicPlaylistSummary>, sqlx::Error> {
+    sqlx::query_as::<_, MusicPlaylistSummary>(
+        "SELECT p.id, p.name, p.source, p.target_bpm, p.updated_at_ms,
+                COUNT(t.id)::bigint AS track_count,
+                COALESCE(SUM(t.size_bytes), 0)::bigint AS total_bytes,
+                COUNT(t.id) FILTER (WHERE t.storage_path IS NOT NULL)::bigint AS ready_track_count
+           FROM music_playlists p
+           LEFT JOIN music_tracks t ON t.playlist_id = p.id AND t.user_id = p.user_id
+          WHERE p.user_id = $1
+          GROUP BY p.id
+          ORDER BY p.updated_at_ms DESC, p.name ASC",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Consigne de tempo d'une playlist (vide = automatique).
+pub async fn set_music_playlist_target(
+    pool: &PgPool,
+    user_id: &str,
+    id: &str,
+    target_bpm: Option<f64>,
+    now_ms: i64,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE music_playlists SET target_bpm = $1, updated_at_ms = $2 WHERE id = $3 AND user_id = $4",
+    )
+    .bind(target_bpm)
+    .bind(now_ms)
+    .bind(id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Marque une playlist comme modifiee (tri de la liste).
+pub async fn touch_music_playlist(
+    pool: &PgPool,
+    user_id: &str,
+    id: &str,
+    now_ms: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE music_playlists SET updated_at_ms = $1 WHERE id = $2 AND user_id = $3")
+        .bind(now_ms)
+        .bind(id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Supprime une playlist et renvoie les chemins de ses fichiers audio.
+///
+/// Les titres et les plans partent par cascade ; les fichiers sont ensuite
+/// retires du disque par l'appelant, seuls eux ne dependent pas de la base.
+pub async fn delete_music_playlist(
+    pool: &PgPool,
+    user_id: &str,
+    id: &str,
+) -> Result<Option<Vec<String>>, sqlx::Error> {
+    let paths: Vec<String> = sqlx::query_scalar(
+        "SELECT storage_path FROM music_tracks
+          WHERE user_id = $1 AND playlist_id = $2 AND storage_path IS NOT NULL",
+    )
+    .bind(user_id)
+    .bind(id)
+    .fetch_all(pool)
+    .await?;
+
+    let result = sqlx::query("DELETE FROM music_playlists WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    Ok(Some(paths))
+}
+
+// ------------------------------------------------------------------ titres
+
+/// Insere un titre ; la position est fournie par l'appelant (ordre de playlist).
+pub async fn insert_music_track(
+    pool: &PgPool,
+    user_id: &str,
+    playlist_id: &str,
+    input: &MusicTrackInput,
+    now_ms: i64,
+) -> Result<String, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO music_tracks
+             (id, playlist_id, user_id, position, title, artist, album, duration_s, bpm,
+              bpm_source, spotify_uri, mime, size_bytes, storage_path, created_at_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+    )
+    .bind(&id)
+    .bind(playlist_id)
+    .bind(user_id)
+    .bind(input.position)
+    .bind(&input.title)
+    .bind(input.artist.as_deref())
+    .bind(input.album.as_deref())
+    .bind(input.duration_s)
+    .bind(input.bpm)
+    .bind(input.bpm_source.as_deref())
+    .bind(input.spotify_uri.as_deref())
+    .bind(input.mime.as_deref())
+    .bind(input.size_bytes)
+    .bind(input.storage_path.as_deref())
+    .bind(now_ms)
+    .execute(pool)
+    .await?;
+    Ok(id)
+}
+
+pub async fn list_music_tracks(
+    pool: &PgPool,
+    user_id: &str,
+    playlist_id: &str,
+) -> Result<Vec<MusicTrack>, sqlx::Error> {
+    sqlx::query_as::<_, MusicTrack>(
+        "SELECT * FROM music_tracks
+          WHERE user_id = $1 AND playlist_id = $2
+          ORDER BY position ASC, created_at_ms ASC, id ASC",
+    )
+    .bind(user_id)
+    .bind(playlist_id)
+    .fetch_all(pool)
+    .await
+}
+
+pub async fn get_music_track(
+    pool: &PgPool,
+    user_id: &str,
+    id: &str,
+) -> Result<Option<MusicTrack>, sqlx::Error> {
+    sqlx::query_as::<_, MusicTrack>("SELECT * FROM music_tracks WHERE user_id = $1 AND id = $2")
+        .bind(user_id)
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Enregistre un BPM (tap-tempo ou saisie manuelle) pour un titre de la playlist.
+///
+/// La source fait partie du vocabulaire gele ; une source inconnue est ignoree
+/// plutot que stockee.
+pub async fn set_music_track_bpm(
+    pool: &PgPool,
+    user_id: &str,
+    playlist_id: &str,
+    track_id: &str,
+    bpm: Option<f64>,
+    bpm_source: Option<&str>,
+    now_ms: i64,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE music_tracks SET bpm = $1, bpm_source = $2
+          WHERE id = $3 AND user_id = $4 AND playlist_id = $5",
+    )
+    .bind(bpm)
+    .bind(bpm_source)
+    .bind(track_id)
+    .bind(user_id)
+    .bind(playlist_id)
+    .execute(pool)
+    .await?;
+
+    if result.rows_affected() > 0 {
+        touch_music_playlist(pool, user_id, playlist_id, now_ms).await?;
+    }
+    Ok(result.rows_affected() > 0)
+}
+
+/// Accuse la recuperation par la montre des pistes indiquees ; renvoie le nombre
+/// de pistes effectivement marquees.
+pub async fn ack_music_tracks(
+    pool: &PgPool,
+    user_id: &str,
+    playlist_id: &str,
+    track_ids: &[String],
+    now_ms: i64,
+) -> Result<u64, sqlx::Error> {
+    if track_ids.is_empty() {
+        return Ok(0);
+    }
+    let result = sqlx::query(
+        "UPDATE music_tracks SET downloaded_at_ms = $1
+          WHERE user_id = $2 AND playlist_id = $3 AND id = ANY($4)",
+    )
+    .bind(now_ms)
+    .bind(user_id)
+    .bind(playlist_id)
+    .bind(track_ids)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+// ------------------------------------------------------------------ plans de telechargement
+
+/// Cree un plan de telechargement pour une playlist (et une course facultative).
+pub async fn insert_music_plan(
+    pool: &PgPool,
+    user_id: &str,
+    playlist_id: &str,
+    race_id: Option<&str>,
+    target_bpm: Option<f64>,
+    now_ms: i64,
+) -> Result<MusicDownloadPlan, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO music_download_plans
+             (id, user_id, playlist_id, race_id, target_bpm, requested_at_ms)
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(&id)
+    .bind(user_id)
+    .bind(playlist_id)
+    .bind(race_id)
+    .bind(target_bpm)
+    .bind(now_ms)
+    .execute(pool)
+    .await?;
+
+    get_music_plan(pool, user_id, &id)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)
+}
+
+pub async fn get_music_plan(
+    pool: &PgPool,
+    user_id: &str,
+    id: &str,
+) -> Result<Option<MusicDownloadPlan>, sqlx::Error> {
+    sqlx::query_as::<_, MusicDownloadPlan>(
+        "SELECT * FROM music_download_plans WHERE user_id = $1 AND id = $2",
+    )
+    .bind(user_id)
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Dernier plan non acquitte : c'est lui que la montre recupere au reveil.
+pub async fn pending_music_plan(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<Option<MusicDownloadPlan>, sqlx::Error> {
+    sqlx::query_as::<_, MusicDownloadPlan>(
+        "SELECT * FROM music_download_plans
+          WHERE user_id = $1 AND acked_at_ms IS NULL
+          ORDER BY requested_at_ms DESC
+          LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Acquitte un plan (la montre a termine son telechargement).
+pub async fn ack_music_plan(
+    pool: &PgPool,
+    user_id: &str,
+    plan_id: &str,
+    now_ms: i64,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE music_download_plans SET acked_at_ms = $1
+          WHERE id = $2 AND user_id = $3 AND acked_at_ms IS NULL",
+    )
+    .bind(now_ms)
+    .bind(plan_id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Annule tous les plans en attente (bouton « Annuler » de la page).
+pub async fn cancel_pending_music_plans(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<u64, sqlx::Error> {
+    let result =
+        sqlx::query("DELETE FROM music_download_plans WHERE user_id = $1 AND acked_at_ms IS NULL")
+            .bind(user_id)
+            .execute(pool)
+            .await?;
+    Ok(result.rows_affected())
+}
+
+// ------------------------------------------------------------------ comptes Spotify
+
+/// Enregistre (ou remplace) le compte Spotify lie a l'utilisateur.
+///
+/// Un rafraichissement de jeton ne renvoie pas toujours de `refresh_token` :
+/// l'ancien est alors conserve, sinon la liaison deviendrait inutilisable.
+pub async fn upsert_spotify_account(
+    pool: &PgPool,
+    account: &SpotifyAccount,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO spotify_accounts
+             (user_id, spotify_user_id, display_name, access_token, refresh_token,
+              expires_at_ms, scope, connected_at_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (user_id) DO UPDATE SET
+             spotify_user_id = EXCLUDED.spotify_user_id,
+             display_name = COALESCE(EXCLUDED.display_name, spotify_accounts.display_name),
+             access_token = EXCLUDED.access_token,
+             refresh_token = COALESCE(EXCLUDED.refresh_token, spotify_accounts.refresh_token),
+             expires_at_ms = EXCLUDED.expires_at_ms,
+             scope = COALESCE(EXCLUDED.scope, spotify_accounts.scope),
+             connected_at_ms = EXCLUDED.connected_at_ms",
+    )
+    .bind(&account.user_id)
+    .bind(account.spotify_user_id.as_deref())
+    .bind(account.display_name.as_deref())
+    .bind(&account.access_token)
+    .bind(account.refresh_token.as_deref())
+    .bind(account.expires_at_ms)
+    .bind(account.scope.as_deref())
+    .bind(account.connected_at_ms)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_spotify_account(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<Option<SpotifyAccount>, sqlx::Error> {
+    sqlx::query_as::<_, SpotifyAccount>("SELECT * FROM spotify_accounts WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Met a jour le seul jeton d'acces (rafraichissement OAuth).
+pub async fn update_spotify_access_token(
+    pool: &PgPool,
+    user_id: &str,
+    access_token: &str,
+    expires_at_ms: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE spotify_accounts SET access_token = $1, expires_at_ms = $2 WHERE user_id = $3")
+        .bind(access_token)
+        .bind(expires_at_ms)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Supprime la liaison Spotify (les jetons sont oublies).
+pub async fn delete_spotify_account(pool: &PgPool, user_id: &str) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM spotify_accounts WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
     Ok(result.rows_affected() > 0)
 }

@@ -47,7 +47,7 @@ fun MainScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Palette.encre),
         contentAlignment = Alignment.Center,
     ) {
         Column(
@@ -60,11 +60,11 @@ fun MainScreen(
                 text = MpacerFormat.pace(output?.currentPace),
                 fontSize = 54.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.White,
+                color = Palette.texte,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(MpacerFormat.distance(output?.distanceM ?: 0.0), color = Color.LightGray)
-                Text(MpacerFormat.duration(output?.elapsedS ?: 0.0), color = Color.LightGray)
+                Text(MpacerFormat.distance(output?.distanceM ?: 0.0), color = Palette.muted)
+                Text(MpacerFormat.duration(output?.elapsedS ?: 0.0), color = Palette.muted)
             }
             AssistantPanel(output)
             Controls(output, onStart, onPause, onResume, onStop, onSettings, onSync)
@@ -74,18 +74,7 @@ fun MainScreen(
 
 @Composable
 private fun StatusLight(state: WatchState) {
-    val color = when (state.output?.light) {
-        "Green" -> Color(0xFF2ECC71)
-        "Yellow" -> Color(0xFFF1C40F)
-        "Red" -> Color(0xFFE74C3C)
-        else -> Color(0xFFE67E22)
-    }
-    Box(
-        modifier = Modifier
-            .size(10.dp)
-            .clip(CircleShape)
-            .background(color)
-    )
+    GpsLight(state.output?.light)
 }
 
 @Composable
@@ -102,15 +91,15 @@ private fun AssistantPanel(output: EngineOutput?) {
         Text(
             text = text,
             color = when {
-                shadow.onPlan -> Color.LightGray
-                shadow.ahead -> Color(0xFF2ECC71)
-                else -> Color(0xFFE67E22)
+                shadow.onPlan -> Palette.muted
+                shadow.ahead -> Palette.ok
+                else -> Palette.orange
             },
             textAlign = TextAlign.Center,
         )
     } else {
         output?.estimatedFinishS?.let {
-            Text("finish ${MpacerFormat.duration(it)}", color = Color.LightGray)
+            Text("finish ${MpacerFormat.duration(it)}", color = Palette.muted)
         }
     }
 }
@@ -126,22 +115,50 @@ private fun Controls(
     onSync: () -> Unit,
 ) {
     val state = output?.state ?: "Idle"
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    // Un seul bouton porte l'accent orange : l'action principale de l'ecran.
+    val principal = ButtonDefaults.buttonColors(
+        backgroundColor = Palette.orange,
+        contentColor = Color.White,
+    )
+    val secondaire = ButtonDefaults.secondaryButtonColors(
+        backgroundColor = Palette.surface2,
+        contentColor = Palette.texte,
+    )
+    val arret = ButtonDefaults.secondaryButtonColors(
+        backgroundColor = Palette.surface2,
+        contentColor = Palette.danger,
+    )
+    // Les libelles sont raccourcis et reduits : sur un ecran rond de 450 px,
+    // trois boutons ne laissent pas la place a un mot long.
+    Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         when (state) {
             "Idle", "Finished" -> {
-                Button(onClick = onStart) { Text("Start") }
-                Button(onClick = onSync) { Text("Sync") }
-                Button(onClick = onSettings) { Text("Reglages") }
+                Button(onClick = onStart, colors = principal) {
+                    Text("Demarrer", fontSize = 12.sp, maxLines = 1)
+                }
+                Button(onClick = onSync, colors = secondaire) {
+                    Text("Sync", fontSize = 13.sp, maxLines = 1)
+                }
+                Button(onClick = onSettings, colors = secondaire) {
+                    Text("Reglages", fontSize = 10.sp, maxLines = 1)
+                }
             }
             "Running" -> {
-                Button(onClick = onPause) { Text("Pause") }
-                Button(onClick = onStop, colors = ButtonDefaults.secondaryButtonColors()) { Text("Stop") }
+                Button(onClick = onPause, colors = secondaire) {
+                    Text("Pause", fontSize = 13.sp, maxLines = 1)
+                }
+                Button(onClick = onStop, colors = arret) {
+                    Text("Stop", fontSize = 13.sp, maxLines = 1)
+                }
             }
             else -> {
-                Button(onClick = onResume) { Text("Reprendre") }
-                Button(onClick = onStop, colors = ButtonDefaults.secondaryButtonColors()) { Text("Stop") }
+                Button(onClick = onResume, colors = principal) {
+                    Text("Reprendre", fontSize = 11.sp, maxLines = 1)
+                }
+                Button(onClick = onStop, colors = arret) {
+                    Text("Stop", fontSize = 13.sp, maxLines = 1)
+                }
             }
         }
     }
-    MaterialTheme { /* theme sombre par defaut sur Wear OS */ }
 }

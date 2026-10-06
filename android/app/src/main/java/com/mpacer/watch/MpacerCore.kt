@@ -1,5 +1,9 @@
 package com.mpacer.watch
 
+import com.mpacer.watch.music.MusicConfig
+import com.mpacer.watch.music.MusicPlaylist
+import com.mpacer.watch.music.MusicState
+import com.mpacer.watch.music.NowPlaying
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -46,6 +50,43 @@ class MpacerCore : AutoCloseable {
                         .put("music_policy", config.musicPolicy.wire)
                 )
         )
+    )
+
+    // ----------------------------------------------------------------- musique
+
+    /**
+     * Reglages musique du moteur (docs/07 section 4.1). Le moteur valide les
+     * bornes (min/max BPM) et publie l'etat dans `EngineOutput.music`.
+     */
+    fun setMusic(config: MusicConfig): EngineOutput = EngineOutput(
+        send(JSONObject().put("cmd", "set_music").put("config", config.toJson()))
+    )
+
+    /** Playlist courante ; `null` la retire (le moteur repond alors NoPlaylist). */
+    fun setMusicPlaylist(playlist: MusicPlaylist?): EngineOutput = EngineOutput(
+        send(
+            JSONObject()
+                .put("cmd", "set_music_playlist")
+                .put("playlist", playlist?.toJson() ?: JSONObject.NULL)
+        )
+    )
+
+    /** Instantane de la piste jouee sur la montre ; `null` quand plus rien ne joue. */
+    fun musicNowPlaying(now: NowPlaying?): EngineOutput = EngineOutput(
+        send(
+            JSONObject()
+                .put("cmd", "music_now_playing")
+                .put("now", now?.toJson() ?: JSONObject.NULL)
+        )
+    )
+
+    /**
+     * Cadence de pas mesuree (pas par minute) et son instant.
+     * Aucun capteur de pas n'est branche en v1 : le tick du moteur estime la
+     * cadence a partir de la vitesse (docs/07 sections 4.2 et 9).
+     */
+    fun onCadence(tMs: Long, spm: Double): EngineOutput = EngineOutput(
+        send(JSONObject().put("cmd", "on_cadence").put("t_ms", tMs).put("spm", spm))
     )
 
     // ------------------------------------------------------------------ seance
@@ -204,6 +245,12 @@ data class EngineOutput(val json: JSONObject) {
     /** Evenements de seance ("Armed", "AutoPaused"...) : des chaines JSON cote coeur. */
     val events: List<String>
         get() = json.optJSONArray("events").mapObjects { it.optString("kind") }
+
+    /**
+     * Bloc musique publie par le moteur (docs/07 section 5). Toujours present cote
+     * coeur ; null seulement si le coeur est plus ancien que le contrat.
+     */
+    val music: MusicState? get() = json.optJSONObject("music")?.let(::MusicState)
 }
 
 data class Shadow(val json: JSONObject) {

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="{{ site.lang | default: 'fr' }}">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% if page.title %}{{ page.title }} - {{ site.title }}{% else %}{{ site.title }} - {{ site.tagline }}{% endif %}</title>
+    <meta name="description" content="{{ page.description | default: site.description | strip_newlines | strip }}">
+    <meta name="color-scheme" content="dark light">
+    <meta name="theme-color" content="#0b0d10" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
+    <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
+    <link rel="icon" type="image/svg+xml" href="{{ '/assets/favicon.svg' | relative_url }}">
+  </head>
+  <body>
+    <a class="skip" href="#contenu">Aller au contenu</a>
+
+    <header class="topbar">
+      <div class="wrap topbar-in">
+        <a class="brand" href="{{ '/' | relative_url }}">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-text">M-pacer<small>documentation</small></span>
+        </a>
+        <nav class="nav" aria-label="Navigation principale">
+          {%- for item in site.data.navigation %}
+          <a href="{{ item.url | relative_url }}"{% if page.url == item.url %} class="active" aria-current="page"{% endif %}>{{ item.title }}</a>
+          {%- endfor %}
+          <a class="ghost" href="https://github.com/JZacharie/M-pacer">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="contenu" class="wrap">
+      {{ content }}
+    </main>
+
+    <footer class="footer">
+      <div class="wrap">
+        <p>M-pacer : projet personnel auto-heberge. Aucune affiliation avec Pace Control (PBkSoft).</p>
+        <p class="tiny">
+          Code source :
+          <a href="https://github.com/JZacharie/M-pacer">github.com/JZacharie/M-pacer</a>
+          - licence MIT ou Apache-2.0.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>

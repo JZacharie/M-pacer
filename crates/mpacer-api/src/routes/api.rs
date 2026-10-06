@@ -8,7 +8,10 @@ use crate::auth::device::{
 };
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
-use crate::models::{Race, RaceInput, UploadResponse, WorkoutUpload};
+use crate::models::{
+    MusicAckRequest, MusicPlanAckRequest, MusicPlaylistDetail, MusicPlanView, MusicTrackView,
+    Race, RaceInput, UploadResponse, WorkoutUpload,
+};
 use crate::state::AppState;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
@@ -38,6 +41,17 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/stats", get(stats))
         .route("/api/v1/export", get(export_pac))
         .route("/api/v1/version", get(version))
+        // Musique : la montre recupere la fiche des playlists preparees puis les
+        // fichiers audio (meme jeton d'appareil que les seances).
+        .route("/api/v1/music/playlists", get(list_music_playlists))
+        .route("/api/v1/music/playlists/{id}", get(get_music_playlist))
+        .route(
+            "/api/v1/music/playlists/{id}/ack",
+            post(ack_music_playlist),
+        )
+        .route("/api/v1/music/tracks/{id}/file", get(music_track_file))
+        .route("/api/v1/music/prepare", get(music_prepare))
+        .route("/api/v1/music/prepare/ack", post(music_prepare_ack))
 }
 
 /// Demande un code d'appairage (montre).
@@ -321,4 +335,222 @@ async fn stats(
     Ok(Json(
         crate::db::stats(&state.pool, &user.id, days, state.now_ms()).await?,
     ))
+}
+
+// ------------------------------------------------------------------ musique
+
+/// Liste des playlists avec leurs compteurs (titres, octets, pistes servables).
+#[derive(Debug, Serialize)]
+struct MusicPlaylistListResponse {
+    playlists: Vec<crate::models::MusicPlaylistSummary>,
+}
+
+async fn list_music_playlists(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Json<MusicPlaylistListResponse>> {
+    let playlists = crate::db::list_music_playlist_summaries(&state.pool, &user.id).await?;
+    Ok(Json(MusicPlaylistListResponse { playlists }))
+}
+
+/// Fiche d'une playlist : ce que la montre telecharge pour une playlist Spotify.
+async fn get_music_playlist(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Json<MusicPlaylistDetail>> {
+    let playlist = crate::db::get_music_playlist(&state.pool, &user.id, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let tracks = crate::db::list_music_tracks(&state.pool, &user.id, &id).await?;
+    Ok(Json(MusicPlaylistDetail {
+        id: playlist.id,
+        name: playlist.name,
+        source: playlist.source,
+        target_bpm: playlist.target_bpm,
+        tracks: tracks.iter().map(MusicTrackView::from_track).collect(),
+    }))
+}
+
+/// Accuse la recuperation de pistes par la montre.
+async fn ack_music_playlist(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Json(request): Json<MusicAckRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    crate::db::get_music_playlist(&state.pool, &user.id, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let downloaded = crate::db::ack_music_tracks(
+        &state.pool,
+        &user.id,
+        &id,
+        &request.track_ids,
+        state.now_ms(),
+    )
+    .await?;
+    tracing::info!(user = %user.email, playlist = %id, downloaded, "pistes accusees par la montre");
+    Ok(Json(
+        serde_json::json!({ "playlist_id": id, "downloaded": downloaded }),
+    ))
+}
+
+/// Octets audio d'un titre, avec support de `Range` (reprise d'un telechargement).
+async fn music_track_file(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    headers: axum::http::HeaderMap,
+) -> AppResult<Response> {
+    let track = crate::db::get_music_track(&state.pool, &user.id, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let Some(relative) = track.storage_path.as_deref().filter(|path| !path.is_empty()) else {
+        // Une playlist Spotify n'a aucun octet sur le serveur : la montre
+        // telecommande l'application Spotify installee.
+        return Err(AppError::NotFound);
+    };
+    let path = crate::routes::media_path(&state.config.media_dir, relative)
+        .ok_or_else(|| AppError::internal("chemin de fichier audio invalide"))?;
+    let bytes = match tokio::fs::read(&path).await {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tracing::warn!(track = %id, "fichier audio absent du disque");
+            return Err(AppError::NotFound);
+        }
+        Err(error) => return Err(AppError::internal(format!("lecture audio : {error}"))),
+    };
+
+    let mime = track
+        .mime
+        .clone()
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let total = bytes.len();
+    let requested = headers
+        .get(header::RANGE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| parse_byte_range(value, total));
+
+    let (status, start, end) = match requested {
+        Some((start, end)) => (axum::http::StatusCode::PARTIAL_CONTENT, start, end),
+        None => (axum::http::StatusCode::OK, 0, total.saturating_sub(1)),
+    };
+    let body = if total == 0 {
+        Vec::new()
+    } else {
+        bytes[start..=end].to_vec()
+    };
+
+    let mut builder = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, mime)
+        .header(header::ACCEPT_RANGES, "bytes")
+        // Un fichier audio ne change jamais : la montre peut le garder en cache.
+        .header(header::CACHE_CONTROL, "private, max-age=3600")
+        .header(header::CONTENT_LENGTH, body.len().to_string());
+    if status == axum::http::StatusCode::PARTIAL_CONTENT {
+        builder = builder.header(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{total}"),
+        );
+    }
+    builder
+        .body(Body::from(body))
+        .map_err(|error| AppError::internal(error.to_string()))
+}
+
+/// Dernier plan de telechargement non acquitte (ou `{"plan": null}`).
+async fn music_prepare(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Json<serde_json::Value>> {
+    let Some(plan) = crate::db::pending_music_plan(&state.pool, &user.id).await? else {
+        return Ok(Json(serde_json::json!({ "plan": null })));
+    };
+    let playlist = crate::db::get_music_playlist(&state.pool, &user.id, &plan.playlist_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let tracks = crate::db::list_music_tracks(&state.pool, &user.id, &plan.playlist_id).await?;
+    let race_name = match plan.race_id.as_deref() {
+        Some(race_id) => crate::db::get_race(&state.pool, &user.id, race_id)
+            .await?
+            .map(|race| race.name),
+        None => None,
+    };
+    let view = MusicPlanView {
+        id: plan.id,
+        playlist_id: plan.playlist_id,
+        name: playlist.name,
+        target_bpm: plan.target_bpm,
+        race_id: plan.race_id,
+        race_name,
+        requested_at_ms: plan.requested_at_ms,
+        tracks: tracks.iter().map(MusicTrackView::from_track).collect(),
+    };
+    Ok(Json(serde_json::json!({ "plan": view })))
+}
+
+/// Acquitte un plan : la montre a termine son telechargement.
+///
+/// L'appel est idempotent : un plan deja acquitte renvoie de nouveau `ok`, ce
+/// qui evite une erreur si la montre reessaie apres une coupure reseau.
+async fn music_prepare_ack(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Json(request): Json<MusicPlanAckRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    let plan = crate::db::get_music_plan(&state.pool, &user.id, &request.plan_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if plan.acked_at_ms.is_none() {
+        crate::db::ack_music_plan(&state.pool, &user.id, &plan.id, state.now_ms()).await?;
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Analyse d'un en-tete `Range: bytes=...` (bornes incluses).
+///
+/// Seule l'unite `bytes` est acceptee ; une demande illisible est ignoree et le
+/// fichier complet est renvoye (comportement tolerant recommande par la RFC 9110).
+fn parse_byte_range(value: &str, total: usize) -> Option<(usize, usize)> {
+    let spec = value.trim().strip_prefix("bytes=")?.trim();
+    if total == 0 || spec.contains(',') {
+        return None;
+    }
+    let (start, end) = spec.split_once('-')?;
+    let (start, end) = match (start.trim(), end.trim()) {
+        ("", suffix) => {
+            let suffix: usize = suffix.parse().ok()?;
+            if suffix == 0 {
+                return None;
+            }
+            (total.saturating_sub(suffix), total - 1)
+        }
+        (start, "") => (start.parse().ok()?, total - 1),
+        (start, end) => (start.parse().ok()?, end.parse::<usize>().ok()?.min(total - 1)),
+    };
+    (start <= end && start < total).then_some((start, end))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_byte_range;
+
+    #[test]
+    fn byte_ranges_are_parsed_inclusively() {
+        assert_eq!(parse_byte_range("bytes=0-99", 1000), Some((0, 99)));
+        assert_eq!(parse_byte_range("bytes=100-", 1000), Some((100, 999)));
+        assert_eq!(parse_byte_range("bytes=-100", 1000), Some((900, 999)));
+        assert_eq!(parse_byte_range("bytes=500-99999", 1000), Some((500, 999)));
+    }
+
+    #[test]
+    fn invalid_ranges_are_ignored() {
+        assert_eq!(parse_byte_range("items=0-10", 1000), None);
+        assert_eq!(parse_byte_range("bytes=10-5", 1000), None);
+        assert_eq!(parse_byte_range("bytes=0-10,20-30", 1000), None);
+        assert_eq!(parse_byte_range("bytes=abc-def", 1000), None);
+        assert_eq!(parse_byte_range("bytes=0-0", 0), None);
+    }
 }

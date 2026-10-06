@@ -150,26 +150,34 @@ async fn dashboard(
             div class="section-head" {
                 h2 { "Historique" }
                 div class="actions" {
-                    a class="button ghost" href="/api/v1/export" { "Exporter (.pac)" }
-                    a class="button ghost" href="/link" { "Appairer une montre" }
+                    a class="button ghost small" href="/api/v1/export" {
+                        span class="icon icon-export" {} "Exporter"
+                    }
+                    a class="button ghost small" href="/link" {
+                        span class="icon icon-watch" {} "Appairer"
+                    }
                 }
             }
             @if workouts.is_empty() {
-                p class="muted" { "Aucune seance pour l'instant. Appairez votre montre pour commencer la synchronisation." }
+                div class="empty" {
+                    span class="icon icon-activity" {}
+                    p { "Aucune seance pour l'instant." }
+                    p class="tiny" { "Appairez votre montre pour lancer la synchronisation." }
+                }
             } @else {
-                table {
-                    thead {
-                        tr { th { "Date" } th { "Distance" } th { "Duree" } th { "Allure" } th {} }
-                    }
-                    tbody {
-                        @for workout in &workouts {
-                            tr {
-                                td { (format_date(workout.started_at_ms)) }
-                                td { (format_distance(workout.distance_m, units_of(&workout.unit_system))) }
-                                td { (format_duration(workout.duration_s)) }
-                                td { (format_pace(Some(workout.average_pace_s_per_km))) " /km" }
-                                td { a href={ "/workouts/" (workout.id) } { "Detail" } }
+                // Liste de cartes plutot qu'un tableau : lisible au pouce sur telephone.
+                div class="list" {
+                    @for workout in &workouts {
+                        a class="row" href={ "/workouts/" (workout.id) } {
+                            div class="row-main" {
+                                div class="row-title" { (format_date(workout.started_at_ms)) }
+                                div class="row-sub" {
+                                    (format_duration(workout.duration_s)) " - "
+                                    (format_pace(Some(workout.average_pace_s_per_km))) " /km"
+                                }
                             }
+                            span class="row-value" { (format_distance(workout.distance_m, units_of(&workout.unit_system))) }
+                            span class="icon icon-chevron chev" {}
                         }
                     }
                 }
@@ -188,31 +196,39 @@ async fn dashboard(
         }
     };
 
-    Ok(page(layout("Tableau de bord", Some(&user), content)))
+    Ok(page(layout("Tableau de bord", "seances", Some(&user), content)))
 }
 
 fn landing() -> Markup {
     layout(
         "Accueil",
+        "",
         None,
         html! {
             section class="hero" {
+                span class="badge-live" { span class="dot" {} "Auto-heberge" }
                 h1 { "M-pacer" }
-                p { "Controlez votre allure en course, suivez un plan de course et retrouvez toutes vos seances ici." }
-                a class="button" href="/login" { "Se connecter avec Google" }
+                p class="muted" {
+                    "Controlez votre allure en course, suivez un plan et retrouvez toutes vos seances."
+                }
+                div class="hero-actions" {
+                    a class="button" href="/login" {
+                        span class="icon icon-google" {} "Se connecter"
+                    }
+                }
             }
             section class="cards" {
-                div class="card" {
-                    span class="card-label" { "Montre" }
-                    p { "L'application Wear OS enregistre la seance et l'envoie par le reseau, meme si le telephone reste a la maison." }
+                div class="card reveal" {
+                    span class="card-label" { span class="icon icon-watch" {} " Montre" }
+                    p { "L'application Wear OS enregistre la seance et l'envoie seule, meme si le telephone reste a la maison." }
                 }
-                div class="card" {
-                    span class="card-label" { "Backend" }
-                    p { "Rust, une base locale et votre propre hebergement : aucune donnee revendue." }
+                div class="card reveal" {
+                    span class="card-label" { span class="icon icon-key" {} " Backend" }
+                    p { "Rust, PostgreSQL et votre hebergement : aucune donnee revendue." }
                 }
-                div class="card" {
-                    span class="card-label" { "Analyse" }
-                    p { "Tours, meilleures distances, export GPX vers Strava ou Garmin." }
+                div class="card reveal" {
+                    span class="card-label" { span class="icon icon-stats" {} " Analyse" }
+                    p { "Tours, meilleures distances, statistiques et export GPX vers Strava ou Garmin." }
                 }
             }
         },
@@ -264,6 +280,7 @@ async fn stats_page(
                 p class="muted" { "Pas encore de donnees sur la periode." }
             } @else {
                 (weekly_chart(&weekly))
+                div class="table-wrap" {
                 table {
                     thead { tr { th { "Semaine" } th { "Seances" } th { "Distance" } th { "Duree" } } }
                     tbody {
@@ -277,10 +294,11 @@ async fn stats_page(
                         }
                     }
                 }
+                }
             }
         }
     };
-    Ok(page(layout("Statistiques", Some(&user), content)))
+    Ok(page(layout("Statistiques", "stats", Some(&user), content)))
 }
 
 /// Histogramme SVG du volume hebdomadaire (aucune librairie de graphiques).
@@ -325,13 +343,20 @@ async fn login_page(Query(query): Query<LoginQuery>) -> Html<String> {
         section class="hero" {
             h1 { "Connexion" }
             @if let Some(erreur) = &query.erreur {
-                p class="alert" { (message_erreur(erreur)) }
+                p class="alert" {
+                    span class="icon icon-alert" {}
+                    span { (message_erreur(erreur)) }
+                }
             }
             p class="muted" { "L'acces se fait avec votre compte Google. Aucun mot de passe n'est stocke par M-pacer." }
-            a class="button" href="/auth/google/start" { "Continuer avec Google" }
+            div class="hero-actions" {
+                a class="button" href="/auth/google/start" {
+                    span class="icon icon-google" {} "Continuer avec Google"
+                }
+            }
         }
     };
-    Html(layout("Connexion", None, content).into_string())
+    Html(layout("Connexion", "login", None, content).into_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -499,7 +524,7 @@ async fn link_page(
             }
         }
     };
-    Ok(page(layout("Appairer une montre", Some(&user), content)))
+    Ok(page(layout("Appairer une montre", "link", Some(&user), content)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -527,7 +552,7 @@ async fn link_submit(
             };
             Ok((
                 StatusCode::BAD_REQUEST,
-                page(layout("Appairer une montre", Some(&user), content)),
+                page(layout("Appairer une montre", "link", Some(&user), content)),
             )
                 .into_response())
         }
@@ -551,6 +576,7 @@ async fn settings_page(
             p class="muted" { "Chaque montre appairee possede son propre jeton. Revoquez-le si vous perdez l'appareil." }
         }
         section {
+            div class="table-wrap" {
             table {
                 thead { tr { th { "Appareil" } th { "Cree le" } th { "Dernier envoi" } th { "Etat" } th {} } }
                 tbody {
@@ -574,9 +600,10 @@ async fn settings_page(
                     }
                 }
             }
+            }
         }
     };
-    Ok(page(layout("Jetons", Some(&user), content)))
+    Ok(page(layout("Jetons", "settings", Some(&user), content)))
 }
 
 async fn revoke_token(
@@ -864,7 +891,7 @@ async fn workout_page(
             p class="alert" { "Le detail de cette seance n'a pas pu etre relu." }
         }
     };
-    Ok(page(layout("Seance", Some(&user), content)))
+    Ok(page(layout("Seance", "seances", Some(&user), content)))
 }
 
 async fn delete_workout(
@@ -891,29 +918,53 @@ fn page(markup: Markup) -> Response {
     Html(markup.into_string()).into_response()
 }
 
-fn layout(title: &str, user: Option<&User>, content: Markup) -> Markup {
+/// Sections de navigation : cle interne, libelle, icone, chemin.
+const NAV: [(&str, &str, &str, &str); 6] = [
+    ("seances", "Seances", "icon-activity", "/"),
+    ("courses", "Courses", "icon-route", "/courses"),
+    ("planning", "Planning", "icon-clock", "/courses/planning"),
+    ("stats", "Statistiques", "icon-stats", "/stats"),
+    ("link", "Appairer", "icon-watch", "/link"),
+    ("settings", "Jetons", "icon-key", "/settings"),
+];
+
+fn layout(title: &str, active: &str, user: Option<&User>, content: Markup) -> Markup {
     html! {
         (DOCTYPE)
         html lang="fr" {
             head {
                 meta charset="utf-8";
-                meta name="viewport" content="width=device-width, initial-scale=1";
+                // viewport-fit=cover : l'encoche et la barre d'accueil iOS sont prises en
+                // compte via les variables safe-area du CSS.
+                meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover";
+                meta name="color-scheme" content="dark light";
+                meta name="theme-color" content="#0b0d10" media="(prefers-color-scheme: dark)";
+                meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)";
+                meta name="apple-mobile-web-app-capable" content="yes";
+                meta name="apple-mobile-web-app-title" content="M-pacer";
+                meta name="description" content="Suivi de course auto-heberge : seances, analyse, export GPX.";
                 title { (title) " - M-pacer" }
                 link rel="stylesheet" href="/static/app.css";
+                link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23fc4c02'/%3E%3Cpath d='M6 17h4l2.4-6 3 12 2.6-7 1.6 3H26' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E";
             }
             body {
                 header class="site" {
                     a class="brand" href="/" { "M-pacer" }
                     nav {
                         @if let Some(user) = user {
+                            @for (cle, libelle, icone, chemin) in NAV {
+                                a href=(chemin) class=(if cle == active { "active" } else { "" }) {
+                                    span class={ "icon " (icone) } {}
+                                    (libelle)
+                                }
+                            }
+                            form method="post" action="/logout" {
+                                button class="ghost" type="submit" {
+                                    span class="icon icon-logout" {}
+                                    "Deconnexion"
+                                }
+                            }
                             span class="who" { (user.name.clone().unwrap_or_else(|| user.email.clone())) }
-                            a href="/" { "Seances" }
-                            a href="/courses" { "Courses" }
-                            a href="/courses/planning" { "Planning" }
-                            a href="/stats" { "Statistiques" }
-                            a href="/link" { "Appairer" }
-                            a href="/settings" { "Jetons" }
-                            form method="post" action="/logout" { button class="ghost" type="submit" { "Deconnexion" } }
                         } @else {
                             a href="/login" { "Connexion" }
                         }
@@ -921,6 +972,16 @@ fn layout(title: &str, user: Option<&User>, content: Markup) -> Markup {
                 }
                 main { (content) }
                 footer { "M-pacer - " (mpacer_core::VERSION) " - vos donnees restent chez vous" }
+                @if user.is_some() {
+                    nav class="tabbar" aria-label="Navigation principale" {
+                        @for (cle, libelle, icone, chemin) in NAV {
+                            a href=(chemin) class=(if cle == active { "active" } else { "" }) {
+                                span class={ "icon " (icone) } {}
+                                span { (libelle) }
+                            }
+                        }
+                    }
+                }
                 script src="/static/app.js" {}
             }
         }
@@ -1811,7 +1872,7 @@ fn race_form_response(
         }
         (race_form(action, values, error, submit))
     };
-    (status, page(layout(heading, Some(user), content))).into_response()
+    (status, page(layout(heading, "", Some(user), content))).into_response()
 }
 
 /// Ligne de resume d'une course : quand et ou.
@@ -1842,7 +1903,10 @@ fn race_card(race: &Race, tasks: &[RaceTask], now_ms: i64) -> Markup {
         article class="race-card" {
             div class="race-card-head" {
                 h3 { a href={ "/courses/" (race.id) } { (race.name) } }
-                span class="countdown" { (countdown_label(race.start_at_ms, now_ms)) }
+                span class="countdown" data-at=(race.start_at_ms.unwrap_or(0)) {
+                    span class="dot" {}
+                    (countdown_label(race.start_at_ms, now_ms))
+                }
             }
             p class="muted" { (race_summary_line(race)) }
             div class="chips" {
@@ -1983,7 +2047,7 @@ async fn races_page(
             }
         }
     };
-    Ok(page(layout("Vos courses", Some(&user), content)))
+    Ok(page(layout("Vos courses", "courses", Some(&user), content)))
 }
 
 async fn planning_page(
@@ -2109,7 +2173,7 @@ async fn planning_page(
             }
         }
     };
-    Ok(page(layout("Planning", Some(&user), content)))
+    Ok(page(layout("Planning", "planning", Some(&user), content)))
 }
 
 async fn race_new_page(OptionalUser(user): OptionalUser) -> AppResult<Response> {
@@ -2250,7 +2314,10 @@ async fn race_page(
         section class="hero" {
             div class="race-title" {
                 h1 { (race.name) }
-                span class="countdown" { (countdown_label(race.start_at_ms, now)) }
+                span class="countdown" data-at=(race.start_at_ms.unwrap_or(0)) {
+                    span class="dot" {}
+                    (countdown_label(race.start_at_ms, now))
+                }
             }
             p class="muted" { (race_summary_line(&race)) }
             div class="actions" {
@@ -2372,7 +2439,7 @@ async fn race_page(
             }
         }
     };
-    Ok(page(layout(&race.name, Some(&user), content)))
+    Ok(page(layout(&race.name, "courses", Some(&user), content)))
 }
 
 #[derive(Debug, Deserialize)]

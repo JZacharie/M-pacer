@@ -46,7 +46,7 @@ expressions sont alignées sur celles des autres applications du cluster.
 
 | Secret Kubernetes | ClusterSecretStore | Clé `remoteRef` | Chemin Vault réel | Contenu |
 |---|---|---|---|---|
-| `mpacer-secrets` | `vault-apps` | `mpacer` | `apps/data/mpacer` | `MPACER_SESSION_SECRET`, `MPACER_GOOGLE_CLIENT_ID`, `MPACER_GOOGLE_CLIENT_SECRET` |
+| `mpacer-secrets` | `vault-apps` | `mpacer` | `apps/data/mpacer` | `MPACER_SESSION_SECRET`, `MPACER_GOOGLE_CLIENT_ID`, `MPACER_GOOGLE_CLIENT_SECRET` — et, si Spotify est active, `MPACER_SPOTIFY_CLIENT_ID`, `MPACER_SPOTIFY_CLIENT_SECRET` |
 
 > **Attention au piège** : dans un `ClusterSecretStore`, `provider.vault.path` désigne le
 > **montage** KV, pas un préfixe de chemin. Sur jo3, `vault-apps` est monté sur `apps/`
@@ -65,8 +65,32 @@ export VAULT_ADDR=https://vault.zacharie.org     # ou http://vault-active.vault.
 vault kv put apps/mpacer \
   MPACER_SESSION_SECRET="$(openssl rand -base64 48)" \
   MPACER_GOOGLE_CLIENT_ID="<ID>.apps.googleusercontent.com" \
-  MPACER_GOOGLE_CLIENT_SECRET="GOCSPX-<secret>"
+  MPACER_GOOGLE_CLIENT_SECRET="GOCSPX-<secret>" \
+  MPACER_SPOTIFY_CLIENT_ID="<id Spotify>" \
+  MPACER_SPOTIFY_CLIENT_SECRET="<secret Spotify>"
 ```
+
+> **Spotify est optionnel.** Si les deux cles ne sont pas scellees dans Vault,
+> laisser `externalSecrets.keys.spotifyClientId` et
+> `externalSecrets.keys.spotifyClientSecret` **vides** dans les valeurs : un
+> `remoteRef` qui pointe vers une propriete absente fait echouer la
+> synchronisation de l'ExternalSecret (`SecretSyncedError`). La page `/music`
+> reste alors utilisable pour les fichiers personnels et affiche que Spotify
+> n'est pas configure.
+
+### 2.1.1 Musique televersee : volume obligatoire
+
+Les playlists personnelles sont stockees sur disque (`MPACER_MEDIA_DIR`, defaut
+`/data/media`). La racine du conteneur etant en lecture seule
+(`securityContext.readOnlyRootFilesystem: true`), le Deployment monte :
+
+* le PVC du chart (`persistence.enabled=true`, taille a prevoir : compter
+  environ 1 Mo par minute d'audio en 128 kbit/s) ;
+* a defaut, un `emptyDir` sur `config.mediaDir` — les fichiers survivent a un
+  redemarrage du pod, pas a son remplacement.
+
+Sur jo3, `values-jo3.yaml` active la persistance (`local-path-retain`, 5Gi) :
+sans elle, il faudrait re-televerser la musique apres chaque deploiement.
 
 Puis forcer la synchronisation et vérifier :
 

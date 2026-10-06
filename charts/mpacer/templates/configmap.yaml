@@ -14,4 +14,10 @@ data:
   # Doit correspondre EXACTEMENT a une URI autorisee dans la console Google
   MPACER_GOOGLE_REDIRECT_URI: {{ .Values.config.googleRedirectUri | quote }}
   {{- end }}
+  {{- if .Values.config.spotifyRedirectUri }}
+  # Doit correspondre EXACTEMENT a une URI autorisee dans la console Spotify
+  MPACER_SPOTIFY_REDIRECT_URI: {{ .Values.config.spotifyRedirectUri | quote }}
+  {{- end }}
+  # Fichiers audio televerses (playlists personnelles)
+  MPACER_MEDIA_DIR: {{ .Values.config.mediaDir | quote }}
   RUST_LOG: {{ .Values.config.rustLog | quote }}

@@ -54,6 +54,13 @@ config:
   # Vide => <publicUrl>/auth/google/callback. A renseigner si le client OAuth
   # utilise un autre chemin (le service sert alors le callback a ce chemin).
   googleRedirectUri: ""
+  # Racine des fichiers audio televerses (playlists personnelles). Doit pointer
+  # vers un volume inscriptible : le PVC (persistence.enabled) ou, a defaut, un
+  # emptyDir monte a cet emplacement par le Deployment.
+  mediaDir: /data/media
+  # URI de redirection OAuth Spotify, declaree dans la console Spotify for
+  # Developers. Vide => <publicUrl>/auth/spotify/callback
+  spotifyRedirectUri: ""
   rustLog: "info,mpacer_api=info,tower_http=warn"
 
 auth:
@@ -62,6 +69,10 @@ auth:
   # Sinon, renseigner les identifiants Google (Console Google Cloud -> OAuth 2.0)
   googleClientId: ""
   googleClientSecret: ""
+  # OAuth Spotify (optionnel). Sans identifiants, la page /music reste utilisable
+  # pour les fichiers personnels et annonce que Spotify n'est pas configure.
+  spotifyClientId: ""
+  spotifyClientSecret: ""
   # Laissez vide : un secret de session est genere puis conserve entre les upgrades
   sessionSecret: ""
 
@@ -124,15 +135,23 @@ externalSecrets:
     sessionSecret: MPACER_SESSION_SECRET
     googleClientId: MPACER_GOOGLE_CLIENT_ID
     googleClientSecret: MPACER_GOOGLE_CLIENT_SECRET
+    # Renseigner ces deux cles seulement si Spotify est scelle dans Vault :
+    # un remoteRef absent fait echouer la synchronisation de l'ExternalSecret.
+    spotifyClientId: ""
+    spotifyClientSecret: ""
   # NB : le cluster jo3 provisionne deja 'regcred' (et 'tls-zacharie-org') dans chaque
   # namespace via ses propres ExternalSecrets. On ne les recree donc pas ici, pour
   # eviter un conflit de propriete sur un secret existant.
 
+# Volume des donnees applicatives : indispensable des que l'on televerse de la
+# musique (playlists personnelles), car la racine du conteneur est en lecture
+# seule. Avec persistence.enabled=false, un emptyDir est monte sur
+# config.mediaDir : les fichiers survivent au pod, pas a sa suppression.
 persistence:
   enabled: false
   storageClass: local-path
   accessMode: ReadWriteOnce
-  size: 1Gi
+  size: 5Gi
   mountPath: /data
   annotations: {}
 

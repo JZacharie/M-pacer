@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Lecture musicale pendant la course : service de premier plan de type mediaPlayback -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <!-- Synchronisation des seances vers le backend auto-heberge (SyncClient) -->
@@ -38,6 +40,30 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Lecture audio locale : session medias Media3 (ExoPlayer).
+             exported=true : le systeme (assistant, boutons du casque) doit pouvoir
+             se connecter a la session ; l application ne fait que la piloter. -->
+        <service
+            android:name=".music.MusicPlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
+
+        <!-- Acces aux sessions medias des autres applications (Spotify installe sur la
+             montre). Android exige un NotificationListenerService declare et autorise
+             par l utilisateur pour voir les sessions d une autre application. -->
+        <service
+            android:name=".music.MediaSessionAccessService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
 
         <!-- Seance en cours : GPS sans le telephone, ecran eteint -->
         <service

@@ -20,6 +20,9 @@ okhttp = "4.12.0"
 serializationJson = "1.7.3"
 coroutines = "1.9.0"
 
+# Lecture audio locale (Media3/ExoPlayer) et session medias
+media3 = "1.5.1"
+
 # Stockage chiffre du jeton d'appareil
 securityCrypto = "1.1.0"
 
@@ -51,6 +54,11 @@ androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
 # Wear OS : Material dedie aux ecrans ronds
 androidx-wear-compose-material = { module = "androidx.wear.compose:compose-material", version.ref = "wearCompose" }
 androidx-wear-compose-foundation = { module = "androidx.wear.compose:compose-foundation", version.ref = "wearCompose" }
+
+# Media3 : lecture des fichiers telecharges (ExoPlayer) et session/telecommande
+androidx-media3-common = { module = "androidx.media3:media3-common", version.ref = "media3" }
+androidx-media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
+androidx-media3-session = { module = "androidx.media3:media3-session", version.ref = "media3" }
 
 androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "securityCrypto" }
 androidx-browser = { module = "androidx.browser:browser", version.ref = "browser" }

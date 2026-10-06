@@ -186,6 +186,35 @@ curl -s -X POST http://<backend>/api/v1/device/token -H "Content-Type: applicati
   La montre declare la capacite `mpacer_sync` (`app/src/main/res/values/wear.xml`) et
   recoit les deux formes dans `WearSyncListener.kt`.
 
+### Montre de developpement : ecran toujours allume
+
+Sur une montre posee sur son chargeur, Wear OS eteint l ecran et revient au cadran au
+bout de quelques secondes, ce qui gene les tests (l application perd le premier plan et
+les captures d ecran reviennent vides). Deux commandes suffisent, et le script les
+applique :
+
+```powershell
+pwsh ./local-ci.ps1 -KeepAwake       # ecran jamais eteint + veille active sur chargeur
+pwsh ./local-ci.ps1 -RestoreSleep    # retour a la veille normale (15 s)
+```
+
+Ce que fait `-KeepAwake` (sur la montre selectionnee, `-AdbSerial` si plusieurs) :
+
+| Reglage | Valeur | Effet |
+|---|---|---|
+| `system screen_off_timeout` | `2147483647` | l ecran ne s eteint plus par inactivite |
+| `global stay_on_while_plugged_in` | `7` (lu `15` sur Galaxy Watch) | reste eveille sur tous les types de chargeur |
+| `svc power stayon true` | — | equivalent de l option developpeur « rester eveille » |
+
+Verifie sur une Galaxy Watch 6 (SM-R915F, Android 16) : apres **90 secondes sans aucune
+interaction**, `mWakefulness=Awake`, `Display State=ON` et l application reste au premier
+plan.
+
+> Le verrouillage de l ecran reste actif : si tu veux aussi l eviter pendant le dev,
+> desactive-le depuis la montre (Parametres > Securite > Verrouillage de l ecran > Aucun)
+> ou avec `adb shell locksettings set-disabled true` (remettre `false` ensuite).
+> Attention : ces reglages vident la batterie, ils sont destines a une montre en charge.
+
 ### Contrainte de paquet et de signature
 
 Le Data Layer Wear OS **route les messages par nom de paquet** et n accepte que des

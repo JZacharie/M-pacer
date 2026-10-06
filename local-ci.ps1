@@ -23,6 +23,8 @@
 .EXAMPLE
     pwsh ./local-ci.ps1 -Check
     pwsh ./local-ci.ps1
+    pwsh ./local-ci.ps1 -KeepAwake            # garde la montre allumee sur son chargeur (dev)
+    pwsh ./local-ci.ps1 -RestoreSleep         # retablit la veille normale
     pwsh ./local-ci.ps1 -Target all -ApiUrl http://192.168.0.152:8080 -Install
     pwsh ./local-ci.ps1 -Release -CargoProfile release -Test
 #>
@@ -49,7 +51,13 @@ param(
     [string] $JavaHome,
 
     # Installer ce qui manque (cibles rustup, cargo-ndk, paquets du SDK Android)
-    [switch] $Bootstrap
+    [switch] $Bootstrap,
+
+    # Garder la montre eveillee tant qu'elle est sur son chargeur (dev)
+    [switch] $KeepAwake,
+
+    # Retablir la veille normale de la montre
+    [switch] $RestoreSleep
 )
 
 $ErrorActionPreference = 'Stop'
@@ -148,6 +156,33 @@ function Get-UrlCmdlineTools {
         Alerte ('index SDK illisible : ' + $_.Exception.Message)
         return $null
     }
+}
+
+function Resolve-Appareil([string] $adb, [string] $serieForcee) {
+    # La montre peut apparaitre deux fois (adresse IP et nom mDNS) : on choisit
+    # l'entree IP:port quand elle est unique, sinon -AdbSerial est obligatoire.
+    $lignes = & $adb devices 2>&1
+    $series = $lignes | Where-Object { $_ -match '^\S+\s+device$' } | ForEach-Object { ($_ -split '\s+')[0] }
+    if ($serieForcee) { return $serieForcee }
+    if (-not $series) { return $null }
+    $ip = @($series | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+:\d+$' })
+    if ($ip.Count -eq 1) { Info ('appareil selectionne : ' + $ip[0]); return $ip[0] }
+    if (@($series).Count -eq 1) { return $series[0] }
+    Echec ('plusieurs appareils connectes : precisez -AdbSerial (disponibles : ' + ($series -join ', ') + ')')
+    return $null
+}
+
+function Resolve-Adb {
+    if ($script:AdbForce) { return $script:AdbForce }
+    $surPath = Get-Command 'adb' -ErrorAction SilentlyContinue
+    if ($surPath) { return $surPath.Source }
+    if ($sdk) {
+        foreach ($nom in @('adb.exe', 'adb')) {
+            $candidat = Join-Path $sdk ('platform-tools/' + $nom)
+            if (Test-Path $candidat) { return $candidat }
+        }
+    }
+    return $null
 }
 
 function Install-CmdlineTools([string] $sdk) {
@@ -349,6 +384,40 @@ if ($Bootstrap) {
     Info 'Relancez le script sans -Bootstrap pour verifier.'
 }
 
+# ---------------------------------------------------------------- 1 quater. montre
+
+if ($KeepAwake -or $RestoreSleep) {
+    Etape $(if ($KeepAwake) { 'Montre maintenue eveillee sur son chargeur' } else { 'Retablissement de la veille de la montre' })
+    $adb = Resolve-Adb
+    if (-not $adb) {
+        Echec 'adb introuvable (platform-tools) : impossible de configurer la montre'
+    } else {
+        $serie = Resolve-Appareil $adb $AdbSerial
+        if (-not $serie) {
+            Echec 'aucune montre connectee (adb devices) : branchez-la ou connectez-la en sans fil'
+        } else {
+            $argsAdb = @('-s', $serie)
+            $modele = ((& $adb @argsAdb shell getprop ro.product.model 2>&1) -join ' ').Trim()
+            Ok ('montre detectee : ' + $modele + ' (' + $serie + ')')
+            if ($KeepAwake) {
+                # Ecran jamais eteint + maintien en veille active sur tous les types de chargeur
+                & $adb @argsAdb shell settings put system screen_off_timeout 2147483647
+                & $adb @argsAdb shell settings put global stay_on_while_plugged_in 7
+                & $adb @argsAdb shell svc power stayon true
+                & $adb @argsAdb shell input keyevent 224
+                Info ('screen_off_timeout = ' + ((& $adb @argsAdb shell settings get system screen_off_timeout) -join ''))
+                Info ('stay_on_while_plugged_in = ' + ((& $adb @argsAdb shell settings get global stay_on_while_plugged_in) -join ''))
+                Info 'la montre reste affichee tant qu elle est sur son chargeur'
+            } else {
+                & $adb @argsAdb shell settings put system screen_off_timeout 15000
+                & $adb @argsAdb shell settings delete global stay_on_while_plugged_in | Out-Null
+                & $adb @argsAdb shell svc power stayon false | Out-Null
+                Info 'veille normale retablie (15 s)'
+            }
+        }
+    }
+}
+
 Etape ('Resume : cible=' + $Target + ' profil=' + $CargoProfile + ' build=' + $(if ($Release) { 'release' } else { 'debug' }))
 if ($Check) {
     Info ('Verification demandee (-Check) : arret avant compilation. Duree ' + [math]::Round($chrono.Elapsed.TotalSeconds, 1) + ' s')
@@ -357,6 +426,12 @@ if ($Check) {
         exit 1
     }
     Ok 'tous les prerequis sont presents'
+    exit 0
+}
+
+# -KeepAwake / -RestoreSleep seuls : on s'arrete apres avoir configure la montre.
+if (($KeepAwake -or $RestoreSleep) -and (-not $PSBoundParameters.ContainsKey('Target'))) {
+    Info 'configuration de la montre terminee (aucune compilation demandee)'
     exit 0
 }
 
@@ -382,6 +457,8 @@ if (-not $Check) {
     }
     Ok 'prerequis bloquants : tous presents'
 }
+
+# ---------------------------------------------------------------- 1 quater. montre
 
 # ---------------------------------------------------------------- 2. nettoyage
 
@@ -466,25 +543,24 @@ if ($taches.Count -gt 0) {
 
 if ($Install) {
     Etape 'Installation sur la montre'
-    $adb = @('adb')
-    if ($AdbSerial) { $adb += @('-s', $AdbSerial) }
-    $appareils = (& adb devices) -join ' '
-    Info ('appareils : ' + ($appareils -replace 'List of devices attached', '').Trim())
+    $adbExe = Resolve-Adb
+    if (-not $adbExe) { throw 'adb introuvable (platform-tools) : impossible d installer' }
+    $serie = Resolve-Appareil $adbExe $AdbSerial
+    if (-not $serie) { throw 'aucune montre connectee (adb devices)' }
+    $argsAdb = @('-s', $serie)
+    Info ('appareil : ' + $serie)
     $apk = Get-ChildItem (Join-Path $dossierAndroid 'app/build/outputs/apk') -Recurse -Filter '*.apk' -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -like '*debug*' } | Select-Object -First 1
     if (-not $apk) {
         $apk = Get-ChildItem (Join-Path $dossierAndroid 'app/build/outputs/apk') -Recurse -Filter '*.apk' -ErrorAction SilentlyContinue | Select-Object -First 1
     }
     if (-not $apk) { throw 'aucun APK a installer : lancez le script sans -Check' }
-    & adb @('-s', $AdbSerial) install -r $apk.FullName 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        & adb install -r $apk.FullName
-        if ($LASTEXITCODE -ne 0) { throw 'installation adb refusee' }
-    }
+    & $adbExe @argsAdb install -r $apk.FullName
+    if ($LASTEXITCODE -ne 0) { throw 'installation adb refusee' }
     Ok ('installe : ' + $apk.Name)
     if ($ApiUrl) {
         Info ('demarrage avec api_url=' + $ApiUrl)
-        & adb shell am start -n com.mpacer.watch/.MainActivity --es api_url $ApiUrl | Out-Null
+        & $adbExe @argsAdb shell am start -n com.mpacer.watch/.MainActivity --es api_url $ApiUrl | Out-Null
     }
 }
 

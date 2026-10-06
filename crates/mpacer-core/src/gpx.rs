@@ -38,12 +38,41 @@ fn escape_xml(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// Ecart maximal entre un point de trace et une mesure cardiaque (ms).
+///
+/// Au-dela, la mesure est trop ancienne : mieux vaut ne rien ecrire que
+/// d'attribuer une frequence a un moment qui ne lui correspond pas.
+const HEART_RATE_MAX_AGE_MS: i64 = 30_000;
+
+/// Derniere frequence cardiaque connue a cet instant de la trace.
+fn heart_rate_at(
+    samples: &[crate::cardio::HeartRateSample],
+    t_ms: i64,
+    index: &mut usize,
+) -> Option<u16> {
+    while *index < samples.len() && samples[*index].t_ms <= t_ms {
+        *index += 1;
+    }
+    let previous = *index;
+    if previous == 0 {
+        return None;
+    }
+    let sample = samples[previous - 1];
+    if t_ms - sample.t_ms > HEART_RATE_MAX_AGE_MS {
+        return None;
+    }
+    Some(sample.bpm)
+}
+
 /// Produit le contenu GPX d'une seance.
 pub fn export_gpx(workout: &WorkoutSummary) -> String {
     let mut out = String::with_capacity(256 + workout.track.len() * 96);
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     out.push_str(
-        "<gpx version=\"1.1\" creator=\"M-pacer\" xmlns=\"http://www.topografix.com/GPX/1/1\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:schemaLocation=\"http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd\">\n",
+        "<gpx version=\"1.1\" creator=\"M-pacer\" xmlns=\"http://www.topografix.com/GPX/1/1\" \
+         xmlns:gpxtpx=\"http://www.garmin.com/xmlschemas/TrackPointExtension/v1\" \
+         xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" \
+         xsi:schemaLocation=\"http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd\">\n",
     );
     out.push_str("  <metadata>\n");
     out.push_str(&format!("    <name>{}</name>\n", escape_xml(&workout.id)));
@@ -54,6 +83,11 @@ pub fn export_gpx(workout: &WorkoutSummary) -> String {
     out.push_str("  </metadata>\n  <trk>\n");
     out.push_str(&format!("    <name>{}</name>\n", escape_xml(&workout.id)));
     out.push_str("    <type>running</type>\n    <trkseg>\n");
+
+    // La frequence cardiaque est echantillonnee a part de la trace (1 Hz en
+    // general) : on la rattache au point de trace courant par la derniere
+    // mesure connue. Extension Garmin, reconnue par Strava et Garmin Connect.
+    let mut heart_rate_index = 0_usize;
     for point in &workout.track {
         // La trace ne stocke que les temps relatifs : on les replace dans l'absolu.
         let absolute_ms = workout.started_at_ms + point.t_ms;
@@ -68,6 +102,13 @@ pub fn export_gpx(workout: &WorkoutSummary) -> String {
             "        <time>{}</time>\n",
             iso8601_utc(absolute_ms)
         ));
+        if let Some(bpm) = heart_rate_at(&workout.heart_rate, point.t_ms, &mut heart_rate_index) {
+            out.push_str("        <extensions>\n");
+            out.push_str("          <gpxtpx:TrackPointExtension>\n");
+            out.push_str(&format!("            <gpxtpx:hr>{bpm}</gpxtpx:hr>\n"));
+            out.push_str("          </gpxtpx:TrackPointExtension>\n");
+            out.push_str("        </extensions>\n");
+        }
         out.push_str("      </trkpt>\n");
     }
     out.push_str("    </trkseg>\n  </trk>\n</gpx>\n");
@@ -126,5 +167,54 @@ mod tests {
         assert!(gpx.contains("<ele>300.0</ele>"));
         assert!(gpx.contains("<time>2023-11-14T22:14:20.000Z</time>"));
         assert_eq!(gpx.matches("<trkpt").count(), 2);
+    }
+
+    #[test]
+    fn heart_rate_is_exported_as_a_garmin_extension() {
+        let mut workout = WorkoutSummary {
+            id: "1700000000000".into(),
+            started_at_ms: 1_700_000_000_000,
+            duration_s: 60.0,
+            distance_m: 200.0,
+            average_pace_s_per_km: 300.0,
+            laps: vec![],
+            best_efforts: vec![],
+            track: vec![
+                TrackPoint {
+                    t_ms: 0,
+                    dist_m: 0.0,
+                    lat: 45.0,
+                    lon: 3.0,
+                    elevation_m: None,
+                },
+                TrackPoint {
+                    t_ms: 60_000,
+                    dist_m: 200.0,
+                    lat: 45.001,
+                    lon: 3.001,
+                    elevation_m: None,
+                },
+            ],
+            unit_system: UnitSystem::Metric,
+            elapsed_s: 60.0,
+            pauses: vec![],
+            heart_rate: vec![crate::cardio::HeartRateSample { t_ms: 0, bpm: 138 }],
+            plan: None,
+        };
+        let gpx = export_gpx(&workout);
+        assert!(gpx.contains("<gpxtpx:hr>138</gpxtpx:hr>"), "{gpx}");
+        // Deux points, mais une seule mesure : elle n'est reprise qu'a 30 s.
+        assert_eq!(gpx.matches("<gpxtpx:hr>").count(), 1, "{gpx}");
+
+        workout.heart_rate = vec![
+            crate::cardio::HeartRateSample { t_ms: 0, bpm: 138 },
+            crate::cardio::HeartRateSample {
+                t_ms: 30_000,
+                bpm: 150,
+            },
+        ];
+        let gpx = export_gpx(&workout);
+        assert_eq!(gpx.matches("<gpxtpx:hr>").count(), 2, "{gpx}");
+        assert!(gpx.contains("<gpxtpx:hr>150</gpxtpx:hr>"), "{gpx}");
     }
 }

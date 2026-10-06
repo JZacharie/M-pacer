@@ -19,7 +19,7 @@ synchronisation de vos séances.
 | Composant | Rôle | État |
 |---|---|---|
 | **Montre Wear OS** | Enregistre la séance (GPS 1 Hz), calcule l'allure, guide le coureur (voix, shadow runner) | Squelette Kotlin, non compilé ici (pas de SDK Android) |
-| **Cœur Rust** | Tous les algorithmes : allure lissée, tours, assistant, voix, GPX, historique, **analyse de séance** | **Fait, testé** (92 tests) |
+| **Cœur Rust** | Tous les algorithmes : allure lissée, tours, assistant, voix, GPX, historique, **analyse de séance** | **Fait, testé** (93 tests) |
 | **Backend Rust** | API de synchronisation, OAuth Google, interface web, PostgreSQL | **Fait, testé** (23 tests) |
 | **Analyse de séance** | Plan de course contre réalisé, fréquence cardiaque et zones, temps de pause, temps d'accélération | **Fait, testé** |
 | **Courses à venir** | Fiches de course, planning des échéances, suivi des éléments à préparer | **Fait, testé** |
@@ -330,7 +330,7 @@ Détail complet, dépannage et sauvegardes : [deploy/README.md](deploy/README.md
 
 | Vérification | Résultat |
 |---|---|
-| `cargo test --workspace` | **122 tests** : 92 cœur, 6 FFI, 23 backend (dont 18 d'intégration exécutés contre PostgreSQL), 1 test de documentation |
+| `cargo test --workspace` | **123 tests** : 93 cœur, 6 FFI, 23 backend (dont 18 d'intégration exécutés contre PostgreSQL), 1 test de documentation |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 avertissement |
 | `cargo fmt --all --check` | conforme |
 | `helm lint` / `helm template` | 0 échec |

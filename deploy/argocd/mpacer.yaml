@@ -52,7 +52,9 @@ spec:
       kind: Deployment
       jqPathExpressions:
         - .spec.replicas
-        - .spec.template.metadata.annotations
+        # NB : ne pas ignorer .spec.template.metadata.annotations, sinon l'annotation
+        # "checksum/config" n'est plus surveillee et un changement de ConfigMap ne
+        # declenche plus de redemarrage du pod.
         - .spec.template.spec.containers[].terminationMessagePath
         - .spec.template.spec.containers[].terminationMessagePolicy
         - .spec.template.spec.dnsPolicy

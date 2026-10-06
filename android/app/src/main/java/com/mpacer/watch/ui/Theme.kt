@@ -36,6 +36,24 @@ object Palette {
     val ok = Color(0xFF2FBF71)
     val attention = Color(0xFFF7B955)
     val danger = Color(0xFFFF5A5F)
+
+    // Zones de frequence cardiaque : bleu en endurance, rouge au seuil. Meme
+    // convention que les montres et que la page d'analyse du backend.
+    private val zone1 = Color(0xFF38BDF8)
+    private val zone2 = Color(0xFF4ADE80)
+    private val zone3 = Color(0xFFFACC15)
+    private val zone4 = Color(0xFFFB923C)
+    private val zone5 = Color(0xFFFF5A5F)
+
+    /** Couleur d'une zone cardiaque (1 a 5) ; gris sans mesure. */
+    fun zoneColor(zone: Int?): Color = when (zone) {
+        1 -> zone1
+        2 -> zone2
+        3 -> zone3
+        4 -> zone4
+        5 -> zone5
+        else -> muted
+    }
 }
 
 /**

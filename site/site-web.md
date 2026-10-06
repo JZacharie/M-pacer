@@ -135,6 +135,21 @@ Téléchargement du GPX 1.1 (avec l'extension de fréquence cardiaque Garmin) po
 Strava, Garmin ou OpenRunner, et suppression définitive de la séance.
 </p>
 
+## Les tableaux de bord
+
+Chaque utilisateur compose ses propres écrans à partir d'un catalogue de neuf
+widgets : allure, résumé de séance, carte GPS, tours, meilleures distances,
+cardio, historique, statistiques et courses. Les widgets s'ajoutent, se
+retirent, se réordonnent et se renomment, puis sont enregistrés.
+
+Trois gabarits recréent en un clic les écrans de l'application de référence :
+**Pace Control** (allure, tours, meilleures distances), **Analyse de séance**
+(résumé, carte, tours, cardio, meilleures distances) et **Historique** (volume,
+séances récentes, prochaines courses). Tout le constructeur fonctionne sans
+JavaScript : des formulaires, des redirections, rien d'autre.
+
+![Tableau de bord « Pace Control »]({{ '/assets/images/dashboards/pace-control.png' | relative_url }})
+
 ## Statistiques
 
 <p>

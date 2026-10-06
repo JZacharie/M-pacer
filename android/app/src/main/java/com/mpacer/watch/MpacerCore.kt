@@ -115,6 +115,17 @@ class MpacerCore : AutoCloseable {
     fun announceNow(tMs: Long) =
         EngineOutput(send(JSONObject().put("cmd", "announce_now").put("t_ms", tMs)))
 
+    /**
+     * Mesure de frequence cardiaque (bpm), a l'instant donne.
+     *
+     * Le moteur la rattache a la seance : zones, derive cardiaque, graphique et
+     * export GPX. Les mesures sont conservees meme pendant une pause (frequence
+     * de recuperation), mais elles ne comptent pas dans l'allure.
+     */
+    fun heartRate(tMs: Long, bpm: Int): EngineOutput = EngineOutput(
+        send(JSONObject().put("cmd", "heart_rate").put("t_ms", tMs).put("bpm", bpm))
+    )
+
     /** Position GPS (1 Hz). Seuls de vrais echantillons font evoluer l'allure. */
     fun gps(
         tMs: Long,
@@ -227,6 +238,12 @@ data class EngineOutput(val json: JSONObject) {
     val currentLapDistanceM: Double get() = json.optDouble("current_lap_distance_m", 0.0)
     val speedMps: Double? get() = json.doubleOrNull("speed_mps")
     val isRunning: Boolean get() = state == "Running"
+
+    /** Derniere frequence cardiaque recue (bpm), null sans capteur. */
+    val heartRateBpm: Int? get() = json.optInt("heart_rate_bpm", 0).takeIf { it > 0 }
+
+    /** Zone de la derniere frequence (1 a 5), null sous la zone 1 ou sans mesure. */
+    val heartRateZone: Int? get() = json.optInt("heart_rate_zone", 0).takeIf { it > 0 }
     val isPaused: Boolean get() = state == "Paused" || state == "AutoPaused"
 
     val estimatedFinishS: Double?

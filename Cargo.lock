@@ -1116,6 +1116,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mpacer-music"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "mpacer-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "mpacer-sim"
 version = "0.1.0"
 dependencies = [

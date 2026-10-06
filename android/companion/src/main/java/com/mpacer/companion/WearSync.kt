@@ -27,8 +27,6 @@ object WearSync {
     /** Chemin Data Layer partage avec com.mpacer.watch.WearSyncListener. */
     const val PATH_WORKOUT = "/mpacer/workout"
     const val KEY_ASSET = "workout"
-    /** Plans de preparation musicale (docs/07 section 7.3). */
-    const val PATH_MUSIC = "/mpacer/music"
 
     private const val MESSAGE_LIMIT_BYTES = 90 * 1024
     private const val WEAR_COMPANION = "com.google.android.apps.wear.companion"
@@ -52,11 +50,8 @@ object WearSync {
     /** Envoie un JSON de seance a toutes les montres joignables. */
     fun sendPayload(context: Context, payload: ByteArray): Outcome = send(context, PATH_WORKOUT, payload)
 
-    /**
-     * Envoie un plan de preparation musicale a la montre (docs/07 section 7.3).
-     * Le message reveille le service de la montre, qui met le plan en file.
-     */
-    fun sendMusicPlan(context: Context, payload: ByteArray): Outcome = send(context, PATH_MUSIC, payload)
+    // La musique ne passe plus par le Data Layer (docs/07 v2) : elle est copiee
+    // par USB avec l'outil PC mpacer-music. Seules les seances sont envoyees ici.
 
     private fun send(context: Context, path: String, payload: ByteArray): Outcome {
         val nodes = try {

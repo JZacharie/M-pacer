@@ -13,6 +13,25 @@
     });
   }
 
+  // ------------------------------------------------ menu des reglages
+  // Le menu est un `details` natif : il fonctionne sans JavaScript. Le script
+  // ne fait que le refermer quand on clique ailleurs ou qu'on appuie sur Echap.
+  var menuReglages = document.querySelector("header.site details.menu");
+  if (menuReglages) {
+    document.addEventListener("click", function (event) {
+      if (menuReglages.open && !menuReglages.contains(event.target)) {
+        menuReglages.open = false;
+      }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && menuReglages.open) {
+        menuReglages.open = false;
+        var bouton = menuReglages.querySelector("summary");
+        if (bouton) bouton.focus();
+      }
+    });
+  }
+
   // ------------------------------------------------ confirmation de suppression
   document.querySelectorAll("form[data-confirm]").forEach(function (form) {
     form.addEventListener("submit", function (event) {
@@ -158,4 +177,23 @@
       });
     });
   })();
+
+  // ------------------------------------------------ gabarits de tableau de bord
+  // Choisir un modele coche les widgets correspondants. Le formulaire reste
+  // utilisable sans JavaScript : le serveur applique alors le modele.
+  var gabarit = document.querySelector("select[data-widget-target]");
+  if (gabarit) {
+    var cibles = Array.prototype.slice.call(
+      document.querySelectorAll('input[name="' + gabarit.getAttribute("data-widget-target") + '"]')
+    );
+    gabarit.addEventListener("change", function () {
+      var option = gabarit.options[gabarit.selectedIndex];
+      var brutes = (option && option.getAttribute("data-widgets")) || "";
+      var cles = brutes.split(",").filter(Boolean);
+      if (!cles.length) return;
+      cibles.forEach(function (cible) {
+        cible.checked = cles.indexOf(cible.value) !== -1;
+      });
+    });
+  }
 })();

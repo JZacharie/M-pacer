@@ -40,12 +40,10 @@ android/
       MainActivity.kt      navigation course / reglages / synchronisation / musique
       ui/MainScreen.kt, ui/SettingsScreen.kt  ecrans ronds (existants)
       ui/SyncScreen.kt     NOUVEAU : code d appairage, etat, seances en attente
-      ui/MusicScreen.kt    NOUVEAU : bibliotheque, preparation avant course, lecture
-      music/MusicModels.kt, MusicDto.kt       modeles du contrat docs/07
-      music/MusicLibrary.kt                   fiche + fichiers telecharges (hors ligne)
+      ui/MusicScreen.kt    NOUVEAU : bibliotheque importee par USB + lecture locale
+      music/MusicModels.kt, MusicDto.kt       modeles du contrat docs/07 v2
+      music/MusicLibrary.kt                   scan du dossier Music/ (USB) + index local
       music/MusicPlayer.kt, MusicPlaybackService.kt  Media3 ExoPlayer + MediaSessionService
-      music/SpotifyRemote.kt                  telecommande de l app Spotify (session tierce)
-      music/MediaSessionAccessService.kt      acces aux sessions medias (notifications)
       music/MusicSession.kt                   pont vers le coeur (reglages, piste, cadence)
   companion/                                 module telephone
     build.gradle.kts                         Material 3, Compose, OkHttp, Wearable
@@ -57,7 +55,7 @@ android/
       MpacerApi.kt         client HTTP du backend
       ApiModels.kt         modeles JSON (serde snake_case)
       TokenStore.kt        jeton dans EncryptedSharedPreferences
-      WearSync.kt          MessageClient / DataClient + installation montre + plan musique
+      WearSync.kt          MessageClient / DataClient + installation montre
       ui/                  Theme, Format, Login, WorkoutList, WorkoutDetail, Send, Music
 ```
 
@@ -193,28 +191,30 @@ curl -s -X POST http://<backend>/api/v1/device/token -H "Content-Type: applicati
   La montre declare la capacite `mpacer_sync` (`app/src/main/res/values/wear.xml`) et
   recoit les deux formes dans `WearSyncListener.kt`.
 
-## Musique (lecture et tempo)
+## Musique (lecture locale et tempo)
 
-Le coeur Rust decide *quoi* ecouter et *a quel tempo* ; la montre ne fait que
-jouer et remonter l'etat. Contrat complet : [docs/07](../docs/07-musique-bpm-et-playlists.md).
+Le coeur Rust decide *quoi* ecouter et *a quel tempo* ; la montre ne joue que des
+fichiers presents sur son disque et remonte l'etat. Contrat complet :
+[docs/07](../docs/07-musique-bpm-et-playlists.md) (v2).
 
-- **Source locale** (fichiers que vous possedez) : `MusicLibrary.kt` telecharge la
-  fiche et les fichiers depuis `GET /api/v1/music/playlists`, puis
-  `GET /api/v1/music/tracks/{id}/file` (avec `Range`, reprise sur `.part`). Tout
-  est stocke dans `filesDir/music/` : la montre joue sans telephone ni reseau.
-- **Source Spotify** : aucun octet audio n'est telecharge (DRM). `SpotifyRemote.kt`
-  pilote l'application Spotify installee sur la montre via la session media
-  exposee par le systeme ; l'acces aux notifications doit etre accorde (l'ecran
-  Musique propose le reglage). Une session tierce n'expose que
-  lecture/pause/suivant/precedent.
-- **Preparation avant une course** : onglet Musique de la montre, ou onglet Musique
-  de l'application compagnon. Le serveur met en file un *plan de telechargement*
-  (`GET /api/v1/music/prepare`) ; la montre le voit au prochain reveil et
-  telecharge ce qu'elle peut jouer.
+- **Aucun audio sur le serveur, aucun telechargement sur la montre.** Les MP3
+  restent sur le disque de l'ordinateur et sont copies sur la montre par USB
+  (`adb push`) avec l'outil PC `mpacer-music`, qui ecrit un `manifest.json` par
+  playlist dans `context.getExternalFilesDir("Music")`
+  (`/sdcard/Android/data/com.mpacer.watch/files/Music/<playlist_id>/`).
+- **Import** : bouton « Importer (USB) » de `MusicScreen.kt`, qui relit ce dossier
+  (`MusicLibrary.kt`), construit l'index `filesDir/music-index.json` et affiche le
+  nombre de titres, l'espace utilise et l'espace libre. Une playlist importee peut
+  etre supprimee depuis la montre.
+- **Spotify est une source de metadonnees** (page `/music` du backend) : M-pacer ne
+  pilote plus l'application Spotify et ne lit aucun flux protege par DRM.
 - **Pendant la seance**, `TrackingService` applique la directive du moteur
-  (`Play`, `Keep`, `Boost`, `Relax`, `SkipTo`, `Pause`, `Resume`) et remonte la
-  piste en cours (`music_now_playing`). Le BPM cible est affiche sous le panneau
-  d'assistant, avec une fleche quand le moteur accelere ou calme la musique.
+  (`Play`, `Keep`, `Boost`, `Relax`, `SkipTo`, `Pause`, `Resume`) sur les fichiers
+  locaux et remonte la piste en cours (`music_now_playing`). Le BPM cible est
+  affiche sous le panneau d'assistant, avec une fleche quand le moteur accelere ou
+  calme la musique.
+- **Compagnon** : l'onglet Musique est informatif (playlists du backend + rappel de
+  la procedure USB), sans televersement.
 
 ### Montre de developpement : ecran toujours allume
 

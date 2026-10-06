@@ -34,6 +34,21 @@ pub struct WorkoutRow {
     pub average_pace_s_per_km: f64,
     pub unit_system: String,
     pub uploaded_at_ms: i64,
+    /// Commentaire du coureur apres la seance, ecrit depuis le navigateur.
+    pub comment: Option<String>,
+}
+
+/// Longueur maximale d'un commentaire de seance (caracteres).
+pub const WORKOUT_COMMENT_MAX_CHARS: usize = 2_000;
+
+/// Nettoie un commentaire saisi : espaces superflus retires, vide converti en
+/// `None`. Un commentaire vide n'est pas stocke comme chaine vide.
+pub fn clean_comment(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.chars().take(WORKOUT_COMMENT_MAX_CHARS).collect())
 }
 
 /// Corps de requete d'ingestion : le `WorkoutSummary` produit par le coeur.
@@ -167,6 +182,17 @@ pub struct Race {
     pub important_info: Option<String>,
     pub notes: Option<String>,
     pub goal_time_s: Option<f64>,
+    /// Origine du fichier importe ("strava", "garmin", "gpx", "tcx"), `None`
+    /// pour une course saisie a la main.
+    pub source: Option<String>,
+    /// Vrai pour une ancienne course importee, utilisee comme reference.
+    pub is_reference: bool,
+    /// Temps en mouvement releve dans l'export (s).
+    pub moving_time_s: Option<f64>,
+    /// Temps ecoule releve dans l'export (s), pauses comprises.
+    pub elapsed_time_s: Option<f64>,
+    /// Denivele positif cumule (m).
+    pub elevation_gain_m: Option<f64>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
 }
@@ -311,6 +337,23 @@ impl RaceInput {
     }
 }
 
+/// Metadonnees d'une course importee depuis un export Strava ou Garmin.
+///
+/// Elles ne passent pas par `RaceInput` : le formulaire web ne les saisit pas,
+/// et une modification ulterieure de la fiche ne doit pas les effacer.
+#[derive(Debug, Clone)]
+pub struct ImportedRaceMeta {
+    /// Code stable de l'origine ("strava", "garmin", "gpx", "tcx").
+    pub source: String,
+    pub moving_time_s: Option<f64>,
+    pub elapsed_time_s: Option<f64>,
+    pub elevation_gain_m: Option<f64>,
+    /// Trace normalisee (GPX 1.1) conservee avec la course.
+    pub gpx: String,
+    /// Nombre de points de la trace conservee.
+    pub points: i32,
+}
+
 /// Chaine nettoyee : `None` si vide apres suppression des espaces.
 fn clean(value: &Option<String>) -> Option<String> {
     value
@@ -364,20 +407,15 @@ pub const DEFAULT_RACE_TASKS: [&str; 8] = [
 // ------------------------------------------------------------------ musique
 
 /// Origines d'une playlist, telles que stockees dans `music_playlists.source`.
-pub const MUSIC_SOURCES: [&str; 3] = ["spotify", "upload", "manual"];
+///
+/// En v2 il n'y a plus de televersement : une playlist vient de Spotify ou de la
+/// saisie manuelle.
+pub const MUSIC_SOURCES: [&str; 2] = ["spotify", "manual"];
 
 /// Origines d'une valeur de BPM, alignees sur `mpacer_core::music::BpmSource` :
 /// `spotify` (audio-features), `tag` (balise du fichier), `tap` (tap-tempo),
 /// `manual` (saisie directe).
 pub const BPM_SOURCES: [&str; 4] = ["spotify", "tag", "tap", "manual"];
-
-/// Extension audio acceptee au televersement (filtre volontairement restreint :
-/// le serveur ne sert que des formats que la montre sait lire).
-pub const AUDIO_EXTENSIONS: [&str; 8] = ["mp3", "ogg", "oga", "opus", "m4a", "mp4", "flac", "wav"];
-
-/// Taille maximale d'un televersement (multipart complet), en octets.
-/// Au-dela, le serveur repond `413 payload_too_large`.
-pub const MAX_UPLOAD_BYTES: i64 = 200 * 1024 * 1024;
 
 /// Borne de plausibilite d'un BPM (identique au coeur Rust).
 pub const BPM_MIN: f64 = 30.0;
@@ -389,7 +427,7 @@ pub struct MusicPlaylist {
     pub id: String,
     pub user_id: String,
     pub name: String,
-    /// `spotify` | `upload` | `manual`.
+    /// `spotify` | `manual`.
     pub source: String,
     pub spotify_id: Option<String>,
     pub cover_url: Option<String>,
@@ -434,6 +472,9 @@ pub struct MusicTrack {
 
 /// Champs d'une piste a l'insertion : un seul endroit a corriger si une colonne
 /// s'ajoute, plutot qu'une fonction a douze parametres.
+///
+/// Le backend ne stocke aucun audio depuis la v2 : ni chemin, ni type MIME, ni
+/// taille (les colonnes existent encore en base, mais restent `NULL`).
 #[derive(Debug, Clone, Default)]
 pub struct MusicTrackInput {
     pub position: i32,
@@ -444,21 +485,6 @@ pub struct MusicTrackInput {
     pub bpm: Option<f64>,
     pub bpm_source: Option<String>,
     pub spotify_uri: Option<String>,
-    pub mime: Option<String>,
-    pub size_bytes: Option<i64>,
-    pub storage_path: Option<String>,
-}
-
-/// Plan de telechargement : ce que la montre doit recuperer avant une course.
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct MusicDownloadPlan {
-    pub id: String,
-    pub user_id: String,
-    pub playlist_id: String,
-    pub race_id: Option<String>,
-    pub target_bpm: Option<f64>,
-    pub requested_at_ms: i64,
-    pub acked_at_ms: Option<i64>,
 }
 
 /// Compte Spotify lie (jetons OAuth). Jamais expose tel quel a l'interface.
@@ -482,14 +508,12 @@ pub struct MusicPlaylistSummary {
     pub source: String,
     pub target_bpm: Option<f64>,
     pub track_count: i64,
-    pub total_bytes: i64,
-    /// Pistes dont les octets sont presents sur le serveur (une playlist Spotify
-    /// n'en a aucun : la montre ne telecharge que la fiche).
-    pub ready_track_count: i64,
+    /// Somme des durees connues des titres (0 si aucune duree).
+    pub duration_s: f64,
     pub updated_at_ms: i64,
 }
 
-/// Piste publiee a la montre (API appareil et plan de telechargement).
+/// Piste publiee dans la fiche d'une playlist (metadonnees seules).
 #[derive(Debug, Clone, Serialize)]
 pub struct MusicTrackView {
     pub id: String,
@@ -500,24 +524,10 @@ pub struct MusicTrackView {
     pub duration_s: Option<f64>,
     pub bpm: Option<f64>,
     pub bpm_source: Option<String>,
-    pub size_bytes: Option<i64>,
-    pub mime: Option<String>,
-    pub spotify_uri: Option<String>,
-    /// Chemin relatif (`/api/v1/music/tracks/{id}/file`), `null` sans fichier.
-    /// La montre resout ce chemin sur sa propre base : elle joint le serveur par
-    /// une autre URL que `MPACER_PUBLIC_URL` (IP du reseau local).
-    pub download_url: Option<String>,
 }
 
 impl MusicTrackView {
-    /// Vue publique d'une piste ; le chemin de telechargement n'est expose que
-    /// si les octets sont bien sur le serveur.
     pub fn from_track(track: &MusicTrack) -> Self {
-        let download_url = track
-            .storage_path
-            .as_ref()
-            .filter(|path| !path.trim().is_empty())
-            .map(|_| format!("/api/v1/music/tracks/{}/file", track.id));
         MusicTrackView {
             id: track.id.clone(),
             position: track.position,
@@ -527,10 +537,6 @@ impl MusicTrackView {
             duration_s: track.duration_s,
             bpm: track.bpm,
             bpm_source: track.bpm_source.clone(),
-            size_bytes: track.size_bytes,
-            mime: track.mime.clone(),
-            spotify_uri: track.spotify_uri.clone(),
-            download_url,
         }
     }
 }
@@ -542,33 +548,117 @@ pub struct MusicPlaylistDetail {
     pub name: String,
     pub source: String,
     pub target_bpm: Option<f64>,
+    /// Chemin relatif du manifeste de transfert, que `mpacer-music` consomme.
+    pub manifest_url: String,
     pub tracks: Vec<MusicTrackView>,
 }
 
-/// Plan de telechargement public (API appareil).
-#[derive(Debug, Clone, Serialize)]
-pub struct MusicPlanView {
+/// Chemin du manifeste de transfert d'une playlist.
+pub fn manifest_url(playlist_id: &str) -> String {
+    format!("/api/v1/music/playlists/{playlist_id}/manifest")
+}
+
+/// Version du manifeste de transfert produite par le backend.
+pub const TRANSFER_MANIFEST_VERSION: u32 = 1;
+
+/// Piste attendue par un manifeste de transfert (docs/07 section 3.1).
+///
+/// `file` et `size_bytes` ne sont renseignes qu'a l'ecriture sur la montre par
+/// `mpacer-music` : le backend les omet, comme le prevoit le contrat
+/// (« absents si le titre n'a pas ete trouve »).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManifestTrack {
     pub id: String,
+    pub position: u32,
+    pub title: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub duration_s: Option<f64>,
+    pub bpm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+}
+
+/// Manifeste de transfert : ce que `mpacer-music` copie sur la montre par USB.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransferManifest {
+    pub version: u32,
     pub playlist_id: String,
     pub name: String,
+    /// `spotify` | `manual`.
+    pub source: String,
     pub target_bpm: Option<f64>,
-    pub race_id: Option<String>,
-    pub race_name: Option<String>,
-    pub requested_at_ms: i64,
-    pub tracks: Vec<MusicTrackView>,
+    pub tracks: Vec<ManifestTrack>,
 }
 
-/// Corps de l'accuse de telechargement d'une playlist.
-#[derive(Debug, Clone, Deserialize)]
-pub struct MusicAckRequest {
-    #[serde(default)]
-    pub track_ids: Vec<String>,
+impl TransferManifest {
+    /// Manifeste d'une playlist et de ses titres, tel qu'exporte par le backend.
+    pub fn from_playlist(playlist: &MusicPlaylist, tracks: &[MusicTrack]) -> Self {
+        TransferManifest {
+            version: TRANSFER_MANIFEST_VERSION,
+            playlist_id: playlist.id.clone(),
+            name: playlist.name.clone(),
+            source: playlist.source.clone(),
+            target_bpm: playlist.target_bpm,
+            tracks: tracks
+                .iter()
+                .map(|track| ManifestTrack {
+                    id: track.id.clone(),
+                    position: track.position.max(0) as u32,
+                    title: track.title.clone(),
+                    artist: track.artist.clone(),
+                    album: track.album.clone(),
+                    duration_s: track.duration_s,
+                    bpm: track.bpm,
+                    file: None,
+                    size_bytes: None,
+                })
+                .collect(),
+        }
+    }
 }
 
-/// Corps de l'accuse d'un plan de telechargement.
-#[derive(Debug, Clone, Deserialize)]
-pub struct MusicPlanAckRequest {
-    pub plan_id: String,
+/// Nom de fichier du manifeste d'une playlist : "Run 170" -> "run-170.json".
+pub fn manifest_file_name(playlist_name: &str) -> String {
+    let mut slug = String::with_capacity(playlist_name.len());
+    let mut separator = false;
+    for character in playlist_name.chars() {
+        let folded = fold_ascii(character);
+        if folded.is_ascii_alphanumeric() {
+            if separator && !slug.is_empty() {
+                slug.push('-');
+            }
+            separator = false;
+            slug.push(folded);
+        } else {
+            separator = true;
+        }
+    }
+    let slug: String = slug.chars().take(60).collect();
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        "playlist.json".to_string()
+    } else {
+        format!("{slug}.json")
+    }
+}
+
+/// Replie les lettres accentuees latines sur leur equivalent ASCII.
+fn fold_ascii(character: char) -> char {
+    match character {
+        'a'..='z' | 'A'..='Z' | '0'..='9' => character.to_ascii_lowercase(),
+        'à' | 'á' | 'â' | 'ä' | 'ã' | 'å' | 'À' | 'Á' | 'Â' | 'Ä' | 'Ã' | 'Å' => 'a',
+        'ç' | 'Ç' => 'c',
+        'è' | 'é' | 'ê' | 'ë' | 'È' | 'É' | 'Ê' | 'Ë' => 'e',
+        'ì' | 'í' | 'î' | 'ï' | 'Ì' | 'Í' | 'Î' | 'Ï' => 'i',
+        'ñ' | 'Ñ' => 'n',
+        'ò' | 'ó' | 'ô' | 'ö' | 'õ' | 'Ò' | 'Ó' | 'Ô' | 'Ö' | 'Õ' => 'o',
+        'ù' | 'ú' | 'û' | 'ü' | 'Ù' | 'Ú' | 'Û' | 'Ü' => 'u',
+        'ý' | 'ÿ' | 'Ý' | 'Ÿ' => 'y',
+        other => other.to_ascii_lowercase(),
+    }
 }
 
 /// Normalise un BPM : `None` si absent ou hors bornes plausibles.
@@ -586,51 +676,63 @@ pub fn valid_bpm_source(source: Option<&str>) -> Option<String> {
         .filter(|value| BPM_SOURCES.contains(&value.as_str()))
 }
 
-/// Titre lisible deduit d'un nom de fichier televerse.
-pub fn title_from_filename(filename: &str) -> String {
-    let base = filename
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(filename)
-        .trim();
-    let without_extension = match base.rfind('.') {
-        Some(index) if index > 0 => &base[..index],
-        _ => base,
-    };
-    let title = without_extension
-        .replace(['_', '-'], " ")
-        .trim()
-        .to_string();
-    if title.is_empty() {
-        "Titre sans nom".to_string()
-    } else {
-        title.chars().take(200).collect()
+/// Tableau de bord : un ecran compose par l'utilisateur.
+///
+/// Le nom est libre ; les widgets vivent dans `dashboard_widgets`, une ligne par
+/// widget, ce qui rend l'ordre d'affichage explicite (colonne `position`).
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Dashboard {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+/// Un widget place dans un tableau de bord.
+///
+/// `kind` est une cle du catalogue (`crate::dashboards::WidgetKind`) : une cle
+/// inconnue est ignoree au rendu, jamais remplacee par un widget par defaut.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct DashboardWidget {
+    pub id: String,
+    pub dashboard_id: String,
+    pub user_id: String,
+    pub kind: String,
+    pub position: i32,
+    pub created_at_ms: i64,
+}
+
+/// Longueur maximale du nom d'un tableau de bord (caracteres).
+pub const DASHBOARD_NAME_MAX_CHARS: usize = 80;
+
+/// Nettoie un nom de tableau de bord : espaces superflus retires, chaine vide
+/// convertie en `None`. Un nom n'est pas un identifiant : il peut etre reutilise.
+pub fn clean_dashboard_name(value: &str) -> Option<String> {
+    let trimmed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if trimmed.is_empty() {
+        return None;
     }
+    Some(trimmed.chars().take(DASHBOARD_NAME_MAX_CHARS).collect())
 }
 
-/// Extension audio (minuscule) d'un nom de fichier, si elle est acceptee.
-pub fn audio_extension(filename: &str) -> Option<String> {
-    let extension = filename
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(filename)
-        .rsplit_once('.')
-        .map(|(_, extension)| extension.trim().to_ascii_lowercase())?;
-    AUDIO_EXTENSIONS
-        .contains(&extension.as_str())
-        .then_some(extension)
-}
+#[cfg(test)]
+mod dashboard_tests {
+    use super::*;
 
-/// Type MIME d'une extension audio.
-pub fn audio_mime(extension: &str) -> &'static str {
-    match extension {
-        "mp3" => "audio/mpeg",
-        "ogg" | "oga" => "audio/ogg",
-        "opus" => "audio/opus",
-        "m4a" | "mp4" => "audio/mp4",
-        "flac" => "audio/flac",
-        "wav" => "audio/wav",
-        _ => "application/octet-stream",
+    #[test]
+    fn dashboard_names_are_cleaned_and_bounded() {
+        assert_eq!(
+            clean_dashboard_name("  Pace   Control "),
+            Some("Pace Control".to_string())
+        );
+        assert_eq!(clean_dashboard_name("   "), None);
+        assert_eq!(clean_dashboard_name("\n\t"), None);
+        let long = "a".repeat(DASHBOARD_NAME_MAX_CHARS + 50);
+        assert_eq!(
+            clean_dashboard_name(&long).unwrap().chars().count(),
+            DASHBOARD_NAME_MAX_CHARS
+        );
     }
 }
 
@@ -647,43 +749,112 @@ mod music_tests {
         assert_eq!(clean_bpm(None), None);
     }
 
-    #[test]
-    fn download_url_only_exists_with_a_file() {
-        let mut track = MusicTrack {
-            id: "t1".into(),
+    /// Cles d'un objet JSON, triees (serde_json trie deja : on le rend explicite).
+    fn sorted_keys(value: &serde_json::Value) -> Vec<&str> {
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .expect("objet JSON")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    /// Piste minimale, telle que la base la renvoie.
+    fn sample_track(id: &str, position: i32) -> MusicTrack {
+        MusicTrack {
+            id: id.into(),
             playlist_id: "p1".into(),
             user_id: "u1".into(),
-            position: 0,
-            title: "Titre".into(),
-            artist: None,
-            album: None,
-            duration_s: None,
-            bpm: None,
-            bpm_source: None,
+            position,
+            title: "Wake me up".into(),
+            artist: Some("Avicii".into()),
+            album: Some("True".into()),
+            duration_s: Some(249.0),
+            bpm: Some(124.0),
+            bpm_source: Some("tag".into()),
             spotify_uri: Some("spotify:track:t1".into()),
+            // Colonnes conservees en base mais inutilisees depuis la v2.
             mime: None,
             size_bytes: None,
             storage_path: None,
             created_at_ms: 0,
             downloaded_at_ms: None,
-        };
-        assert_eq!(MusicTrackView::from_track(&track).download_url, None);
-        track.storage_path = Some("u1/fichier.mp3".into());
-        assert_eq!(
-            MusicTrackView::from_track(&track).download_url.as_deref(),
-            Some("/api/v1/music/tracks/t1/file")
-        );
+        }
     }
 
     #[test]
-    fn title_and_extension_come_from_the_filename() {
-        assert_eq!(title_from_filename("Wake_me-up.mp3"), "Wake me up");
-        assert_eq!(title_from_filename("C:\\musique\\titre.ogg"), "titre");
-        assert_eq!(title_from_filename("sans-extension"), "sans extension");
-        assert_eq!(audio_extension("a/b/TRUC.MP3"), Some("mp3".to_string()));
-        assert_eq!(audio_extension("notes.txt"), None);
-        assert_eq!(audio_extension("sanspoint"), None);
-        assert_eq!(audio_mime("m4a"), "audio/mp4");
+    fn the_manifest_follows_the_frozen_schema() {
+        let playlist = MusicPlaylist {
+            id: "p1".into(),
+            user_id: "u1".into(),
+            name: "Run 170".into(),
+            source: "spotify".into(),
+            spotify_id: Some("8f".into()),
+            cover_url: None,
+            target_bpm: Some(170.0),
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        };
+        let manifest = TransferManifest::from_playlist(
+            &playlist,
+            &[sample_track("t1", 0), sample_track("t2", 1)],
+        );
+        assert_eq!(manifest.version, 1);
+        assert_eq!(manifest.playlist_id, "p1");
+        assert_eq!(manifest.source, "spotify");
+        assert_eq!(manifest.target_bpm, Some(170.0));
+
+        // L'ordre des champs du JSON suit la declaration de la structure.
+        let text = serde_json::to_string(&manifest).expect("manifeste serialisable");
+        assert!(
+            text.starts_with(
+                r#"{"version":1,"playlist_id":"p1","name":"Run 170","source":"spotify","target_bpm":170.0,"tracks":["#
+            ),
+            "{text}"
+        );
+
+        // serde_json trie les cles d'un Value : le contenu se verifie donc comme
+        // un ensemble (l'ordre est deja couvert ci-dessus).
+        let value = serde_json::to_value(&manifest).expect("manifeste serialisable");
+        assert_eq!(
+            sorted_keys(&value),
+            vec![
+                "name",
+                "playlist_id",
+                "source",
+                "target_bpm",
+                "tracks",
+                "version"
+            ]
+        );
+        assert_eq!(
+            sorted_keys(&value["tracks"][0]),
+            vec![
+                "album",
+                "artist",
+                "bpm",
+                "duration_s",
+                "id",
+                "position",
+                "title"
+            ],
+            "file et size_bytes ne sont ecrits que par mpacer-music"
+        );
+        assert_eq!(value["tracks"][1]["position"], 1);
+    }
+
+    #[test]
+    fn manifest_file_name_is_a_readable_slug() {
+        assert_eq!(manifest_file_name("Run 170"), "run-170.json");
+        assert_eq!(
+            manifest_file_name("Ma course 10 km"),
+            "ma-course-10-km.json"
+        );
+        assert_eq!(manifest_file_name("Ete - 10 km"), "ete-10-km.json");
+        assert_eq!(manifest_file_name("  "), "playlist.json");
+        assert_eq!(manifest_file_name("A/B: C?"), "a-b-c.json");
     }
 
     #[test]

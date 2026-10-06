@@ -1,8 +1,8 @@
 package com.mpacer.watch.music
 
 import android.content.Context
+import android.os.StatFs
 import android.util.Log
-import com.mpacer.watch.SyncClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -10,37 +10,31 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
-import java.io.FileOutputStream
-import java.util.Locale
-import java.util.concurrent.TimeUnit
 
 /**
- * Bibliotheque musicale locale de la montre (docs/07 section 7.2).
+ * Bibliotheque musicale locale de la montre (docs/07 v2, sections 6.3 et 6.4).
  *
- * Responsabilites :
- *  1. lire la fiche des playlists du backend (jeton d'appareil, meme garde que
- *     /api/v1/workouts) ;
- *  2. telecharger les fichiers audio des playlists "upload" dans filesDir/music/ ;
- *  3. tenir un index JSON local (fiches + chemins des fichiers) ;
- *  4. recevoir les plans de telechargement (Data Layer ou GET /api/v1/music/prepare).
+ * La montre ne telecharge plus rien : les fichiers audio et leur `manifest.json`
+ * sont copies par USB par l'outil PC `mpacer-music` dans
+ * `context.getExternalFilesDir("Music")` :
  *
- * Aucun calcul de course ici : le BPM affiche vient du backend ou du coeur Rust.
+ * ```text
+ * /sdcard/Android/data/com.mpacer.watch/files/Music/
+ *   run-170/                      <- un dossier par playlist
+ *     01 - Avicii - Wake me up.mp3
+ *     manifest.json               <- manifeste + fichier et taille par piste
+ * ```
+ *
+ * « Importer (USB) » relit ce dossier et reconstruit l'index local
+ * (filesDir/music-index.json). Aucun acces reseau, aucun acces aux notifications.
  */
 object MusicLibrary {
 
     private const val TAG = "MusicLibrary"
-    private const val DIRECTORY = "music"
-    private const val INDEX_FILE = "index.json"
-    private const val PLANS_FILE = "plans.json"
-    private const val JSON_MEDIA = "application/json; charset=utf-8"
-
-    /** Seuil de mise a jour de la progression (evite de repeindre a chaque bloc). */
-    private const val PROGRESS_STEP_BYTES = 256L * 1024L
+    private const val USB_DIRECTORY = "Music"
+    private const val MANIFEST_FILE = "manifest.json"
+    private const val INDEX_FILE = "music-index.json"
 
     private val codec = Json {
         ignoreUnknownKeys = true
@@ -48,26 +42,18 @@ object MusicLibrary {
         explicitNulls = false
     }
 
-    private val http: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .build()
-    }
-
     private val _state = MutableStateFlow(MusicLibraryState())
     val state: StateFlow<MusicLibraryState> = _state.asStateFlow()
 
+    /** Dossier ou l'outil USB depose les playlists (.../files/Music). */
+    fun usbDirectory(context: Context): File? = context.getExternalFilesDir(USB_DIRECTORY)
+
     // ------------------------------------------------------------------ index
 
-    private fun directory(context: Context): File =
-        File(context.filesDir, DIRECTORY).apply { mkdirs() }
+    private fun indexFile(context: Context): File = File(context.filesDir, INDEX_FILE)
 
-    fun local(context: Context, playlistId: String): LocalPlaylist? =
-        readIndex(context).playlists.firstOrNull { it.id == playlistId }
-
-    private fun readIndex(context: Context): LocalIndex {
-        val file = File(directory(context), INDEX_FILE)
+    fun readIndex(context: Context): LocalIndex {
+        val file = indexFile(context)
         if (!file.exists()) return LocalIndex()
         return runCatching {
             codec.decodeFromString(LocalIndex.serializer(), file.readText())
@@ -79,395 +65,141 @@ object MusicLibrary {
 
     private fun writeIndex(context: Context, index: LocalIndex) {
         runCatching {
-            File(directory(context), INDEX_FILE).writeText(
-                codec.encodeToString(LocalIndex.serializer(), index)
-            )
+            indexFile(context).writeText(codec.encodeToString(LocalIndex.serializer(), index))
         }.onFailure { Log.w(TAG, "index musique non enregistre", it) }
-        _state.update { it.copy(downloaded = index.playlists.associateBy { playlist -> playlist.id }) }
     }
 
-    /** Recharge l'index local (appele a l'ouverture de l'ecran Musique). */
-    fun reloadLocal(context: Context) {
-        _state.update { it.copy(downloaded = readIndex(context).playlists.associateBy { playlist -> playlist.id }) }
+    /** Recharge l'index local et les espaces (ouverture de l'ecran Musique). */
+    fun reload(context: Context) {
+        _state.update { it.copy(playlists = readIndex(context).playlists, message = null) }
+        refreshSpaces(context)
     }
 
-    /** Supprime une playlist locale et ses fichiers audio. */
-    fun delete(context: Context, playlistId: String) {
-        File(directory(context), safeName(playlistId)).deleteRecursively()
-        val index = readIndex(context)
-        writeIndex(context, index.copy(playlists = index.playlists.filter { it.id != playlistId }))
-    }
-
-    // ------------------------------------------------------------------- plans
-
-    fun plans(context: Context): List<PreparePlan> = _state.value.plans
-
-    private fun readPlans(context: Context): List<PreparePlan> {
-        val file = File(directory(context), PLANS_FILE)
-        if (!file.exists()) return emptyList()
-        return runCatching {
-            codec.decodeFromString(PendingPlans.serializer(), file.readText()).plans
-        }.getOrElse { emptyList() }
-    }
-
-    private fun writePlans(context: Context, plans: List<PreparePlan>) {
-        runCatching {
-            File(directory(context), PLANS_FILE).writeText(
-                codec.encodeToString(PendingPlans.serializer(), PendingPlans(plans))
-            )
-        }.onFailure { Log.w(TAG, "plans musique non enregistres", it) }
-        _state.update { it.copy(plans = plans) }
-    }
-
-    /** Charge les plans recus precedemment (Data Layer) : survit au redemarrage. */
-    fun reloadPlans(context: Context) {
-        _state.update { it.copy(plans = readPlans(context)) }
-    }
-
-    private fun savePlan(context: Context, plan: PreparePlan) {
-        val plans = readPlans(context).filter { it.id != plan.id } + plan
-        writePlans(context, plans)
-    }
-
-    fun clearPlan(context: Context, planId: String) {
-        writePlans(context, readPlans(context).filter { it.id != planId })
-    }
+    // -------------------------------------------------------------- import USB
 
     /**
-     * Message recu du telephone sur /mpacer/music (docs/07 section 7.3).
-     * Accepte le message du compagnon (`kind=music_plan`) ou un plan complet.
-     */
-    fun onPlanMessage(context: Context, text: String): PreparePlan? {
-        val full = runCatching { codec.decodeFromString(PreparePlan.serializer(), text) }.getOrNull()
-        if (full != null && full.playlistId.isNotEmpty()) {
-            savePlan(context, full)
-            return full
-        }
-        val message = runCatching { codec.decodeFromString(MusicPlanMessage.serializer(), text) }.getOrNull()
-        if (message == null || message.playlistId.isEmpty()) {
-            Log.w(TAG, "plan musique illisible")
-            return null
-        }
-        val requested = message.requestedAtMs.takeIf { it > 0 } ?: System.currentTimeMillis()
-        val plan = PreparePlan(
-            id = "wear-" + requested,
-            playlistId = message.playlistId,
-            name = message.name,
-            targetBpm = message.targetBpm,
-            requestedAtMs = requested,
-        )
-        savePlan(context, plan)
-        return plan
-    }
-
-    // ------------------------------------------------------------------- flash
-
-    /** Liste les playlists du backend et les fusionne avec l'index local. */
-    suspend fun refresh(context: Context) {
-        if (SyncClient.token(context) == null) {
-            _state.update { it.copy(message = "Montre non appairee : ouvrez Synchronisation") }
-            return
-        }
-        _state.update { it.copy(busy = true, message = null) }
-        try {
-            val text = getText(context, "/api/v1/music/playlists")
-            val list = codec.decodeFromString(ServerPlaylistList.serializer(), text)
-            _state.update { it.copy(busy = false, playlists = list.playlists, message = null) }
-        } catch (error: Exception) {
-            _state.update {
-                it.copy(busy = false, message = "Chargement impossible : " + (error.message ?: error.javaClass.simpleName))
-            }
-        }
-        reloadLocal(context)
-        reloadPlans(context)
-    }
-
-    /** Fiche detaillee d'une playlist (titres, BPM, tailles). */
-    suspend fun open(context: Context, playlistId: String) {
-        _state.update { it.copy(busy = true, message = null) }
-        try {
-            val text = getText(context, "/api/v1/music/playlists/" + playlistId)
-            val detail = codec.decodeFromString(ServerPlaylistDetail.serializer(), text)
-            _state.update { it.copy(busy = false, detail = detail) }
-        } catch (error: Exception) {
-            _state.update {
-                it.copy(busy = false, message = "Fiche indisponible : " + (error.message ?: error.javaClass.simpleName))
-            }
-        }
-    }
-
-    /**
-     * Prepare une playlist : telecharge la fiche, puis les fichiers audio quand le
-     * backend en fournit un (`download_url`). Une playlist Spotify n'a que la fiche.
+     * « Importer (USB) » : relit `getExternalFilesDir("Music")`. Chaque
+     * sous-dossier contenant un `manifest.json` devient une playlist locale.
      *
-     * @return true si la playlist est utilisable hors ligne.
+     * @return le nombre de playlists importees.
      */
-    suspend fun download(context: Context, playlistId: String): Boolean {
-        if (SyncClient.token(context) == null) {
-            _state.update { it.copy(message = "Montre non appairee : ouvrez Synchronisation") }
-            return false
+    suspend fun scan(context: Context): Int = withContext(Dispatchers.IO) {
+        _state.update { it.copy(busy = true, message = null) }
+        val root = usbDirectory(context)
+        if (root == null || !root.isDirectory) {
+            _state.update {
+                it.copy(busy = false, usbAvailable = false, message = "Dossier Music introuvable sur la montre")
+            }
+            return@withContext 0
         }
-        _state.update { it.copy(busy = true, progress = 0.0, message = null) }
-        return try {
-            val detail = codec.decodeFromString(
-                ServerPlaylistDetail.serializer(),
-                getText(context, "/api/v1/music/playlists/" + playlistId),
-            )
-            val folder = File(directory(context), safeName(playlistId)).apply { mkdirs() }
-            val totalBytes = detail.tracks.sumOf { it.sizeBytes ?: 0L }.coerceAtLeast(1L)
-            var copied = 0L
-            var nextProgress = 0L
-            val tracks = mutableListOf<LocalTrack>()
-            val acknowledged = mutableListOf<String>()
 
-            for (row in detail.tracks.sortedBy { it.position }) {
-                val target = File(folder, fileNameFor(row))
-                val url = row.downloadUrl
-                if (url != null) {
-                    downloadFile(context, absolute(context, url), target, row.sizeBytes) { chunk ->
-                        copied += chunk
-                        if (copied >= nextProgress) {
-                            nextProgress = copied + PROGRESS_STEP_BYTES
-                            _state.update { it.copy(progress = (copied.toDouble() / totalBytes).coerceIn(0.0, 1.0)) }
-                        }
-                    }
-                    acknowledged += row.id
-                }
-                tracks += LocalTrack(
-                    id = row.id,
-                    title = row.title,
-                    artist = row.artist,
-                    durationS = row.durationS ?: 0.0,
-                    bpm = row.bpm,
-                    position = row.position,
-                    file = target.takeIf { url != null && it.exists() }?.absolutePath,
-                    sizeBytes = target.takeIf { it.exists() }?.length() ?: 0L,
-                    spotifyUri = row.spotifyUri,
+        val playlists = mutableListOf<LocalPlaylist>()
+        val folders = root.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name } ?: emptyList()
+        for (folder in folders) {
+            val manifestFile = File(folder, MANIFEST_FILE)
+            if (!manifestFile.isFile) continue
+            val manifest = runCatching {
+                codec.decodeFromString(TransferManifest.serializer(), manifestFile.readText())
+            }.getOrNull()
+            if (manifest == null || manifest.playlistId.isBlank()) {
+                Log.w(TAG, "manifeste illisible : " + manifestFile.absolutePath)
+                continue
+            }
+            playlists += toLocalPlaylist(folder, manifest, manifestFile.lastModified())
+        }
+
+        val triees = playlists.sortedByDescending { it.importedAtMs }
+        writeIndex(context, LocalIndex(playlists = triees))
+        _state.update {
+            it.copy(
+                busy = false,
+                playlists = triees,
+                usbAvailable = true,
+                message = if (triees.isEmpty()) {
+                    "Aucune playlist dans Music/ : lancez mpacer-music sur l'ordinateur"
+                } else {
+                    triees.size.toString() + " playlist(s) importee(s)"
+                },
+            )
+        }
+        refreshSpaces(context)
+        triees.size
+    }
+
+    private fun toLocalPlaylist(folder: File, manifest: TransferManifest, importedAtMs: Long): LocalPlaylist {
+        val tracks = manifest.tracks
+            .sortedBy { it.position }
+            .map { track ->
+                val audio = track.file?.let { name -> File(folder, name).takeIf { it.isFile } }
+                LocalTrack(
+                    id = track.id,
+                    title = track.title,
+                    artist = track.artist,
+                    album = track.album,
+                    durationS = track.durationS ?: 0.0,
+                    bpm = track.bpm,
+                    position = track.position,
+                    file = audio?.absolutePath,
+                    sizeBytes = audio?.length() ?: track.sizeBytes ?: 0L,
                 )
             }
-
-            val local = LocalPlaylist(
-                id = detail.id,
-                name = detail.name,
-                source = detail.source,
-                targetBpm = detail.targetBpm,
-                tracks = tracks,
-                downloadedAtMs = System.currentTimeMillis(),
-            )
-            val index = readIndex(context)
-            writeIndex(context, index.copy(playlists = index.playlists.filter { it.id != local.id } + local))
-
-            if (acknowledged.isNotEmpty()) {
-                runCatching {
-                    postJson(
-                        context,
-                        "/api/v1/music/playlists/" + detail.id + "/ack",
-                        codec.encodeToString(PlaylistAckRequest.serializer(), PlaylistAckRequest(acknowledged)),
-                    )
-                }.onFailure { Log.w(TAG, "acquittement playlist impossible", it) }
-            }
-
-            _state.update {
-                it.copy(
-                    busy = false,
-                    progress = 1.0,
-                    detail = detail,
-                    message = when {
-                        acknowledged.isEmpty() -> detail.name + " : fiche prete (" + tracks.size + " titres)"
-                        else -> detail.name + " : " + acknowledged.size + " fichier(s) telecharge(s)"
-                    },
-                )
-            }
-            true
-        } catch (error: Exception) {
-            _state.update {
-                it.copy(busy = false, message = "Preparation impossible : " + (error.message ?: error.javaClass.simpleName))
-            }
-            false
-        }
-    }
-
-    /** Recupere le dernier plan non acquitte du backend (docs/07 section 6.3). */
-    suspend fun refreshPlan(context: Context) {
-        if (SyncClient.token(context) == null) return
-        try {
-            val text = getText(context, "/api/v1/music/prepare")
-            val response = codec.decodeFromString(PrepareResponse.serializer(), text)
-            response.plan?.let { savePlan(context, it) }
-        } catch (error: Exception) {
-            Log.w(TAG, "plan de preparation indisponible", error)
-        }
-    }
-
-    /** Acquitte le plan aupres du backend (le telephone ne le renverra plus). */
-    suspend fun ackPlan(context: Context, planId: String) {
-        clearPlan(context, planId)
-        if (SyncClient.token(context) == null) return
-        runCatching {
-            postJson(
-                context,
-                "/api/v1/music/prepare/ack",
-                codec.encodeToString(PrepareAck.serializer(), PrepareAck(planId)),
-            )
-        }.onFailure { Log.w(TAG, "acquittement du plan impossible", it) }
-    }
-
-    // ------------------------------------------------------------------ reseau
-
-    private suspend fun getText(context: Context, path: String): String = withContext(Dispatchers.IO) {
-        val token = SyncClient.token(context) ?: throw IllegalStateException("montre non appairee")
-        val request = Request.Builder()
-            .url(SyncClient.baseUrl(context) + path)
-            .header("Authorization", "Bearer " + token)
-            .get()
-            .build()
-        http.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw IllegalStateException("HTTP " + response.code)
-            }
-            body
-        }
-    }
-
-    private suspend fun postJson(context: Context, path: String, body: String): Unit = withContext(Dispatchers.IO) {
-        val token = SyncClient.token(context) ?: throw IllegalStateException("montre non appairee")
-        val request = Request.Builder()
-            .url(SyncClient.baseUrl(context) + path)
-            .header("Authorization", "Bearer " + token)
-            .post(body.toRequestBody(JSON_MEDIA.toMediaType()))
-            .build()
-        http.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw IllegalStateException("HTTP " + response.code)
-            }
-        }
+        return LocalPlaylist(
+            id = manifest.playlistId,
+            name = manifest.name.ifBlank { manifest.playlistId },
+            source = manifest.source,
+            targetBpm = manifest.targetBpm,
+            tracks = tracks,
+            folder = folder.name,
+            importedAtMs = importedAtMs,
+        )
     }
 
     /**
-     * Telecharge un fichier audio. Reprend un telechargement interrompu avec
-     * l'en-tete `Range` (le backend repond 206, docs/07 section 6.3) ; si le
-     * serveur ignore la plage, on repart de zero.
+     * Supprime une playlist importee : son entree d'index et les fichiers copies
+     * sur la montre (le dossier appartient a l'application, aucune permission
+     * speciale n'est requise). Le transfert USB peut la recreer.
      */
-    private suspend fun downloadFile(
-        context: Context,
-        url: String,
-        target: File,
-        expected: Long?,
-        onChunk: (Long) -> Unit,
-    ) = withContext(Dispatchers.IO) {
-        if (target.exists() && (expected == null || target.length() == expected)) return@withContext
-        val token = SyncClient.token(context) ?: throw IllegalStateException("montre non appairee")
-        val partial = File(target.parentFile, target.name + ".part")
-        var offset = if (partial.exists()) partial.length() else 0L
-
-        val builder = Request.Builder()
-            .url(url)
-            .header("Authorization", "Bearer " + token)
-        if (offset > 0L) builder.header("Range", "bytes=" + offset + "-")
-        http.newCall(builder.build()).execute().use { response ->
-            if (response.code == 206) {
-                // reprise acceptee
-            } else if (response.isSuccessful) {
-                offset = 0L
-            } else {
-                throw IllegalStateException("HTTP " + response.code)
-            }
-            val body = response.body ?: throw IllegalStateException("reponse vide")
-            body.byteStream().use { input ->
-                FileOutputStream(partial, offset > 0L).use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read <= 0) break
-                        output.write(buffer, 0, read)
-                        onChunk(read.toLong())
-                    }
-                }
-            }
+    suspend fun delete(context: Context, playlistId: String) = withContext(Dispatchers.IO) {
+        val index = readIndex(context)
+        val cible = index.playlists.firstOrNull { it.id == playlistId } ?: return@withContext
+        val root = usbDirectory(context)
+        val dossier = cible.folder?.let { name -> root?.let { File(it, name) } }
+        if (dossier != null && root != null && dossier.canonicalPath.startsWith(root.canonicalPath)) {
+            runCatching { dossier.deleteRecursively() }
+                .onFailure { Log.w(TAG, "suppression des fichiers impossible", it) }
         }
-        if (expected != null && partial.length() != expected) {
-            throw IllegalStateException("taille inattendue : " + partial.length() + " / " + expected)
+        writeIndex(context, index.copy(playlists = index.playlists.filter { it.id != playlistId }))
+        _state.update {
+            it.copy(
+                playlists = it.playlists.filter { playlist -> playlist.id != playlistId },
+                message = "Playlist supprimee : " + cible.name,
+            )
         }
-        if (!partial.renameTo(target)) {
-            partial.copyTo(target, overwrite = true)
-            partial.delete()
-        }
+        refreshSpaces(context)
     }
 
-    private fun absolute(context: Context, url: String): String =
-        if (url.startsWith("http://") || url.startsWith("https://")) url else SyncClient.baseUrl(context) + url
+    // ------------------------------------------------------------------ espace
 
-    // ------------------------------------------------------------------ utilitaires
-
-    private fun safeName(value: String): String =
-        value.replace(Regex("[^A-Za-z0-9._-]"), "_").take(64)
-
-    private fun fileNameFor(track: ServerTrackRow): String = String.format(
-        Locale.ROOT,
-        "%03d-%s%s",
-        track.position,
-        safeName(track.id),
-        extensionFor(track.mime),
-    )
-
-    private fun extensionFor(mime: String?): String = when (mime?.lowercase(Locale.ROOT)) {
-        "audio/mpeg", "audio/mp3" -> ".mp3"
-        "audio/ogg", "application/ogg" -> ".ogg"
-        "audio/mp4", "audio/m4a", "audio/x-m4a" -> ".m4a"
-        "audio/flac", "audio/x-flac" -> ".flac"
-        "audio/wav", "audio/x-wav" -> ".wav"
-        else -> ".audio"
+    private fun refreshSpaces(context: Context) {
+        val root = usbDirectory(context)
+        val used = _state.value.playlists.sumOf { it.sizeBytes }
+        val free = runCatching {
+            StatFs((root ?: context.filesDir).absolutePath).availableBytes
+        }.getOrDefault(0L)
+        _state.update {
+            it.copy(usedBytes = used, freeBytes = free, usbAvailable = root?.isDirectory == true)
+        }
     }
-}
-
-// ---------------------------------------------------------------------- etat
-
-/** Une playlist telle que l'ecran Musique l'affiche : fiche serveur + etat local. */
-data class MusicEntry(
-    val id: String,
-    val name: String,
-    val source: String,
-    val targetBpm: Double?,
-    val trackCount: Int,
-    val totalBytes: Long,
-    val local: LocalPlaylist?,
-) {
-    val downloaded: Boolean get() = local != null
-    val playable: Boolean get() = (local?.playable?.isNotEmpty() == true) || source == "spotify"
 }
 
 /** Etat expose a l'ecran Musique. */
 data class MusicLibraryState(
-    val playlists: List<ServerPlaylistRow> = emptyList(),
-    val downloaded: Map<String, LocalPlaylist> = emptyMap(),
-    val detail: ServerPlaylistDetail? = null,
-    val plans: List<PreparePlan> = emptyList(),
+    val playlists: List<LocalPlaylist> = emptyList(),
+    /** Octets utilises par les fichiers importes. */
+    val usedBytes: Long = 0,
+    /** Octets libres sur le volume qui porte le dossier Music. */
+    val freeBytes: Long = 0,
+    val usbAvailable: Boolean = false,
     val busy: Boolean = false,
-    val progress: Double = 0.0,
     val message: String? = null,
-) {
-    /** Playlists du serveur, completees par celles deja presentes sur la montre. */
-    val entries: List<MusicEntry>
-        get() {
-            val rows = playlists.map { row ->
-                MusicEntry(
-                    id = row.id,
-                    name = row.name,
-                    source = row.source,
-                    targetBpm = row.targetBpm,
-                    trackCount = row.trackCount,
-                    totalBytes = row.totalBytes,
-                    local = downloaded[row.id],
-                )
-            }
-            val known = rows.map { it.id }.toSet()
-            val extra = downloaded.values
-                .filter { it.id !in known }
-                .map { MusicEntry(it.id, it.name, it.source, it.targetBpm, it.trackCount, 0L, it) }
-            return rows + extra
-        }
-
-    /** Dernier plan de preparation en attente. */
-    val pendingPlan: PreparePlan? get() = plans.lastOrNull()
-}
+)

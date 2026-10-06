@@ -1,16 +1,11 @@
 package com.mpacer.companion.ui
 
-import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -18,13 +13,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -34,33 +24,20 @@ import com.mpacer.companion.MusicPlaylistRow
 import com.mpacer.companion.UiState
 
 /**
- * Onglet Musique du telephone (docs/07 section 7.3).
+ * Onglet Musique du telephone (docs/07 v2, section 6.5).
  *
- * Deux actions, dans l'ordre du parcours reel :
- *  1. « Envoyer sur la montre » : met un plan de preparation en file par le
- *     Data Layer (/mpacer/music) et reveille la montre, qui telecharge en Wi-Fi ;
- *  2. « Televerser des fichiers » : endpoint appareil
- *     POST /api/v1/music/playlists (multipart name + files, jeton Bearer).
- *
- * Aucun octet audio ne transite par le telephone dans le premier cas : il ne
- * transporte qu'une fiche de quelques centaines d'octets.
+ * Onglet **informatif** : il liste les playlists du backend et rappelle la
+ * procedure de transfert. Aucun fichier audio ne passe par le telephone : les MP3
+ * restent sur le disque de l'ordinateur et sont copies sur la montre par USB avec
+ * l'outil `mpacer-music`.
  */
 @Composable
 fun MusicScreen(
     state: UiState,
     onRefresh: () -> Unit,
-    onSendPlan: (MusicPlaylistRow) -> Unit,
-    onUpload: (String, List<Uri>) -> Unit,
     onOpenPage: () -> Unit,
     onOpenWorkouts: () -> Unit,
 ) {
-    var playlistName by remember { mutableStateOf("") }
-    var picked by remember { mutableStateOf<List<Uri>>(emptyList()) }
-
-    val picker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenMultipleDocuments()
-    ) { uris -> picked = uris }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -90,80 +67,71 @@ fun MusicScreen(
             Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
-        Text("Playlists preparees sur le serveur", fontWeight = FontWeight.Bold)
+        TransferCard()
+
+        Text("Playlists du serveur", fontWeight = FontWeight.Bold)
         if (state.musicPlaylists.isEmpty()) {
             Text(
                 "Aucune playlist. Importez-en une depuis la page Musique du site.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            state.musicPlaylists.forEach { row ->
-                MusicCard(row = row, onSend = { onSendPlan(row) })
-            }
+            state.musicPlaylists.forEach { row -> MusicCard(row) }
         }
+    }
+}
 
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("Televerser des fichiers", fontWeight = FontWeight.Bold)
-                Text(
-                    "Les fichiers restent sur le serveur ; la montre ne telecharge que ce",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "dont elle a besoin, a la demande.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                OutlinedTextField(
-                    value = playlistName,
-                    onValueChange = { playlistName = it },
-                    label = { Text("Nom de la playlist") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedButton(
-                    onClick = { picker.launch(arrayOf("audio/*")) },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(
-                        if (picked.isEmpty()) {
-                            "Choisir des fichiers MP3/OGG/M4A"
-                        } else {
-                            picked.size.toString() + " fichier(s) choisi(s)"
-                        }
-                    )
-                }
-                Button(
-                    onClick = { onUpload(playlistName, picked) },
-                    enabled = picked.isNotEmpty(),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Televerser sur le serveur")
-                }
-            }
+/** Rappel de la procedure USB : c'est elle qui amene la musique sur la montre. */
+@Composable
+private fun TransferCard() {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text("Transfert vers la montre (USB)", fontWeight = FontWeight.Bold)
+            Text(
+                "1. Sur la page Musique du site, telechargez le manifeste de la playlist.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "2. Sur l'ordinateur : mpacer-music transfer --manifest run-170.json",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "    --folder \"D:\\Musique\\Course\"",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "3. Branchez la montre en USB, puis lancez la commande.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "4. Sur la montre : Musique > Importer (USB).",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "Les fichiers audio restent sur votre disque : le serveur ne stocke que les fiches.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
 
 @Composable
-private fun MusicCard(row: MusicPlaylistRow, onSend: () -> Unit) {
+private fun MusicCard(row: MusicPlaylistRow) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(row.name, fontWeight = FontWeight.Bold)
+            val duree = row.durationS?.takeIf { it > 0.0 }?.let { "  " + Format.duration(it) } ?: ""
             Text(
-                text = row.source + "  " + row.trackCount + " titre(s)  " +
-                    Format.bytes(row.totalBytes) +
+                text = row.source + "  " + row.trackCount + " titre(s)" + duree +
                     "  BPM cible " + (row.targetBpm?.toInt()?.toString() ?: "auto"),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Button(onClick = onSend, modifier = Modifier.fillMaxWidth()) {
-                Text("Envoyer sur la montre")
-            }
         }
     }
 }

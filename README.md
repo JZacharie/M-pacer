@@ -23,13 +23,14 @@ GitHub Pages est activé sur le dépôt (Settings → Pages → Source : GitHub 
 
 | Composant | Rôle | État |
 |---|---|---|
-| **Montre Wear OS** | Enregistre la séance (GPS 1 Hz), calcule l'allure, guide le coureur (voix, shadow runner), archive localement et synchronise | **Compilée** (APK montre et téléphone produits le 6 octobre 2026) ; validation terrain à faire |
+| **Montre Wear OS** | Enregistre la séance (GPS 1 Hz, **fréquence cardiaque**), calcule l'allure, guide le coureur (voix, shadow runner), archive localement et synchronise | **Compilée** (APK montre et téléphone produits le 6 octobre 2026) ; validation terrain à faire |
 | **Application téléphone** (`android/companion`) | Connexion au backend, liste et détail des séances, import d'un fichier de séance, envoi vers la montre | **Compilée** ; à valider sur appareils réels |
-| **Cœur Rust** | Tous les algorithmes : allure lissée, tours, assistant, voix, GPX, historique, **analyse de séance**, **musique et tempo** | **Fait, testé** (136 tests) |
+| **Cœur Rust** | Tous les algorithmes : allure lissée, tours, assistant, voix, GPX, historique, **analyse de séance**, **musique et tempo** | **Fait, testé** (141 tests) |
 | **Backend Rust** | API de synchronisation, OAuth Google, interface web, PostgreSQL | **Fait, testé** (tests d'intégration exécutés contre PostgreSQL) |
-| **Analyse de séance** | Plan de course contre réalisé, fréquence cardiaque et zones, temps de pause, temps d'accélération | **Fait, testé** |
-| **Courses à venir** | Fiches de course, planning des échéances, suivi des éléments à préparer | **Fait, testé** |
-| **Musique et BPM** | Playlists Spotify ou fichiers personnels, préparation hors ligne avant une course, tempo cible déduit de l'allure, Boost/Relax selon le plan, écran Musique sur la montre | **Fait, testé** (cœur, API, tests d'intégration) ; compilation montre et téléphone validée |
+| **Analyse de séance** | Plan de course contre réalisé, fréquence cardiaque et zones, temps de pause, temps d'accélération, allure ajustée à la pente | **Fait, testé** |
+| **Tableaux de bord** | Écrans composés par l'utilisateur : neuf widgets (allure, résumé, carte GPS, tours, meilleures distances, cardio, historique, statistiques, courses) choisis, ordonnés et enregistrés, avec trois gabarits prêts à l'emploi | **Fait, testé** |
+| **Courses à venir** | Fiches de course, planning des échéances, suivi des éléments à préparer, **import d'une ancienne course** (export Strava ou Garmin) comme course de référence | **Fait, testé** |
+| **Musique et BPM** | Playlists Spotify (métadonnées), appariement des MP3 du disque et **copie sur la montre par USB**, tempo cible déduit de l'allure, Boost/Relax selon le plan, écran Musique sur la montre | **Fait, testé** (cœur, outil, API, tests d'intégration) ; compilation montre et téléphone validée |
 | **PostgreSQL** | Stockage des séances, géré par CloudNativePG dans le cluster | **Déployé sur jo3** (PostgreSQL 18.6) |
 | **Chart Helm** | Déploiement complet (app + base + ingress + TLS) | **Validé** (`helm lint` + `--dry-run=server` sur jo3) |
 
@@ -38,8 +39,20 @@ d'analyse complet : résumé (temps en mouvement, temps écoulé, temps de pause
 fréquence cardiaque), **graphique multi-courbes** allure / cardio / altitude,
 **plan de course contre réalisé** avec l'écart cumulé kilomètre par kilomètre,
 **zones de fréquence cardiaque** et dérive cardiaque, **temps de passage**
-enrichis, et **chronologie** des pauses et des phases d'accélération. Détail,
-formules et veille concurrente : [docs/06](docs/06-analyse-seance.md).
+enrichis, et **chronologie** des pauses et des phases d'accélération. Chaque
+séance accepte aussi un **commentaire de course** — sensations, météo, parcours,
+matériel — conservé à part du résumé envoyé par la montre, donc jamais effacé par
+une nouvelle synchronisation. Détail, formules et veille concurrente :
+[docs/06](docs/06-analyse-seance.md).
+
+**Les tableaux de bord.** L'interface web ne se limite pas à des pages figées :
+chaque utilisateur compose ses propres écrans à partir d'un catalogue de neuf
+widgets — allure, résumé, carte GPS, tours, meilleures distances, cardio,
+historique, statistiques, courses — les ordonne, les renomme et les conserve.
+Trois gabarits créent en un clic les écrans de référence : *Pace Control*,
+*Analyse de séance* et *Historique*. Tout passe par des formulaires et des
+redirections : le constructeur fonctionne sans JavaScript. Détail :
+[docs/08](docs/08-tableaux-de-bord.md).
 
 **Les courses à venir.** L'interface web ne sert pas qu'à relire le passé : elle
 gère aussi ce que vous préparez. Chaque course a sa **fiche** — numéro de dossard,
@@ -47,20 +60,24 @@ horaire et lieu de départ, lien du live, hôtel réservé (nom, adresse, télé
 arrivée, départ), rendez-vous de prise de dossard, autres solutions pour dormir,
 nutrition et ravitaillement, informations importantes, autres informations — un
 **planning** qui met bout à bout toutes les échéances à venir, et un **suivi**
-d'éléments à cocher (« dossard retiré », « hôtel réservé »…). Détail complet :
+d'éléments à cocher (« dossard retiré », « hôtel réservé »…). Le passé s'y ajoute
+aussi : un **export Strava ou Garmin** (GPX ou TCX) s'importe d'un fichier et
+devient une **ancienne course de référence** — date, distance, temps en
+mouvement, temps écoulé, dénivelé et trace réexportable. Détail complet :
 [docs/05-courses-et-planning.md](docs/05-courses-et-planning.md).
 
 **La musique.** La montre lit la musique pendant la course, et le tempo (BPM)
 devient un outil de pacing : le moteur déduit un **BPM cible** de l'allure visée,
 choisit le morceau qui colle à ce tempo, **accélère la musique** quand le coureur
 est en retard sur son plan et la calme quand il est en avance ou que le cardio
-s'emballe. Les playlists se préparent depuis l'interface web (`/music`) :
-import d'une playlist **Spotify** (titres + BPM) ou téléversement de **fichiers
-personnels**, puis « Envoyer sur la montre » qui met en file un plan de
-téléchargement avant la course. Spotify ne prêtant pas son audio, M-pacer
-télécommande l'application Spotify de la montre et ne télécharge les octets que
-pour les fichiers que vous possédez. Détail, limites du DRM et contrat
-d'interface : [docs/07](docs/07-musique-bpm-et-playlists.md).
+s'emballe. Le parcours est simple : vous récupérez les **playlists Spotify** dans
+l'interface web (`/music`) — titres, artistes, BPM, corrigeables au tap-tempo —
+puis vous **téléchargez le manifeste**, et l'application locale
+[`mpacer-music`](crates/mpacer-music/) apparie les MP3 de **votre** dossier à ce
+manifeste et les **copie sur la montre par USB** (`adb push`). La montre joue
+ensuite **en local, hors ligne**, sans téléphone ni serveur ; M-pacer ne pilote
+pas Spotify et ne stocke aucun fichier audio. Détail et contrat d'interface :
+[docs/07](docs/07-musique-bpm-et-playlists.md).
 
 **La montre.** Elle enregistre la séance sans le téléphone (GPS 1 Hz dans un service de
 premier plan), affiche l'allure lissée sur 2 minutes, le feu de statut GPS et un panneau
@@ -118,7 +135,7 @@ par le Data Layer Wear OS (message sous 90 Ko, sinon `DataClient` + `Asset`).
 | `gps.rs` | Qualité du signal (feu rouge/orange/jaune/vert), filtre anti-aberration |
 | `pace.rs` | **Cœur du produit** : allure moyennée 2 min, détection de changement d'allure |
 | `lap.rs` | Tours km/mile, allure du tour courant et du tour précédent (temps de course, pauses exclues) |
-| `analysis.rs` | Analyse d'une séance : temps de passage, plan contre réalisé, pauses, accélération |
+| `analysis.rs` | Analyse d'une séance : temps de passage, plan contre réalisé, pauses, accélération, allure ajustée à la pente |
 | `cardio.rs` | Fréquence cardiaque : zones (% FC max et réserve de FC), bilan, dérive cardiaque |
 | `workout.rs` | Machine à états de séance : démarrage suspendu, pause, auto-pause, reprise |
 | `race_plan.rs` | Negative split et **shadow runner** (plan exact à l'arrivée) |
@@ -151,6 +168,7 @@ par le Data Layer Wear OS (message sous 90 Ko, sinon `DataClient` + `Asset`).
 | `src/bpm.rs` | BPM d'une piste : balises du fichier (délégué au cœur) et tap-tempo |
 | `src/media.rs` | Réception `multipart` (navigateur et application téléphone), écriture sur disque, nettoyage en cas d'échec |
 | `src/routes/web.rs` | Pages web (maud) : accueil, tableau de bord, **analyse de séance**, statistiques, appairage, jetons, **fiches de course, planning et suivi**, **page `/music`** (playlists, import Spotify, téléversement, tap-tempo, envoi vers la montre), connexion OAuth Google et Spotify, **pastille de compte** (photo Google) dans l'en-tête |
+| `src/dashboards.rs` | **Tableaux de bord** : catalogue des widgets, gabarits (Pace Control, Analyse, Historique), chargement des données et rendu des écrans composés |
 | `src/routes/mod.rs` | Routeur global, sondes `/healthz` et `/readyz` |
 | `src/assets.rs` + `static/` | CSS et JS embarqués dans le binaire |
 | `migrations/0001_init.sql` | Schéma initial : utilisateurs, jetons d'appareil, codes d'appairage, séances, états OAuth (idempotent, rejoué au démarrage) |
@@ -164,7 +182,8 @@ par le Data Layer Wear OS (message sous 90 Ko, sinon `DataClient` + `Asset`).
 |---|---|
 | `crates/mpacer-client/` | Client de synchronisation (appairage, envoi) utilisé par le simulateur ; la montre embarque son propre client Kotlin (`SyncClient.kt`) |
 | `crates/mpacer-ffi/` | Pont C ABI JSON exposé au shell Android (aucun panic ne traverse la frontière) |
-| `crates/mpacer-sim/` | Simulateur : rejoue une course synthétique, écrit un GPX, synchronise vers le backend |
+| `crates/mpacer-sim/` | Simulateur : rejoue une course synthétique, écrit un GPX, synchronise vers le backend, option `--music` |
+| `crates/mpacer-music/` | **Application locale** de transfert : choisit le dossier des MP3, apparie les fichiers au manifeste, copie sur la montre par USB (`adb push`). CLI + interface web locale (127.0.0.1:8077) |
 
 ### 3.4 Déploiement
 
@@ -286,7 +305,7 @@ par le Data Layer Wear OS (message sous 90 Ko, sinon `DataClient` + `Asset`).
 | Voix | ✅ | Annonces rédigées par le cœur, prononcées par le TTS, focus audio (duck / pause / ignorer) |
 | Synchronisation depuis la montre | ✅ | Appairage par code, archive locale, envoi automatique en fin de séance, idempotent |
 | Application téléphone (compagnon) | ✅ | Liste et détail des séances, import, envoi vers la montre par le Data Layer |
-| Capteur de fréquence cardiaque | 🔲 | la montre alimente le moteur (`on_heart_rate`) : zones, dérive et graphique cardio exploitables |
+| Capteur de fréquence cardiaque | ✅ | la montre écoute `TYPE_HEART_RATE` et pousse chaque mesure au moteur (`heart_rate`) |
 | Boutons du casque, mode ambiant | 🔲 | Séance guidée sans regarder l'écran : les commandes existent dans le cœur, aucun `MediaSession` ne les déclenche encore |
 | Validation terrain | 🔲 | Écart < 3 % avec une montre de référence, batterie < 25 %/h |
 
@@ -400,7 +419,7 @@ Détail complet, dépannage et sauvegardes : [deploy/README.md](deploy/README.md
 
 | Vérification | Résultat |
 |---|---|
-| `cargo test --workspace` | **123 tests** : 93 cœur, 6 FFI, 23 backend (dont 18 d'intégration exécutés contre PostgreSQL) et 1 test de documentation |
+| `cargo test --workspace` | **204 tests** : 141 cœur, 8 FFI, 54 backend (dont 24 d'intégration exécutés contre PostgreSQL, 1 ignoré faute de réseau) et 1 test de documentation |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 avertissement |
 | `cargo fmt --all --check` | conforme sur l'état commité ; l'arbre de travail en cours peut présenter des écarts |
 | `helm lint` / `helm template` | 0 échec |

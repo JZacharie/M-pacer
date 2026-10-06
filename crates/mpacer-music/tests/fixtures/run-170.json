@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "playlist_id": "run-170",
+  "name": "Run 170",
+  "source": "spotify",
+  "target_bpm": 170.0,
+  "tracks": [
+    {
+      "id": "t1",
+      "position": 1,
+      "title": "Wake me up",
+      "artist": "Avicii",
+      "album": "True",
+      "duration_s": 249.0,
+      "bpm": 124.0
+    },
+    {
+      "id": "t2",
+      "position": 2,
+      "title": "Levels",
+      "artist": "Avicii",
+      "album": "True",
+      "duration_s": 203.0,
+      "bpm": 126.0
+    },
+    {
+      "id": "t3",
+      "position": 3,
+      "title": "Hey Brother",
+      "artist": "Avicii",
+      "album": "True",
+      "duration_s": 255.0,
+      "bpm": 125.0
+    },
+    {
+      "id": "t4",
+      "position": 4,
+      "title": "Without You",
+      "artist": "Avicii",
+      "album": "True",
+      "duration_s": 181.0,
+      "bpm": 132.0
+    }
+  ]
+}

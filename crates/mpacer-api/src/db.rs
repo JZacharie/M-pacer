@@ -5,7 +5,7 @@
 
 use crate::config::Config;
 use crate::models::{
-    ApiToken, MusicDownloadPlan, MusicPlaylist, MusicPlaylistInput, MusicPlaylistSummary,
+    ApiToken, ImportedRaceMeta, MusicPlaylist, MusicPlaylistInput, MusicPlaylistSummary,
     MusicTrack, MusicTrackInput, Race, RaceInput, RaceTask, SpotifyAccount, User, WorkoutRow,
 };
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -19,6 +19,10 @@ const SCHEMA: &str = include_str!("../migrations/0001_init.sql");
 const SCHEMA_RACES: &str = include_str!("../migrations/0002_races.sql");
 /// Musique : playlists, titres, plans de telechargement et comptes Spotify.
 const SCHEMA_MUSIC: &str = include_str!("../migrations/0003_music.sql");
+/// Courses de reference importees (Strava/Garmin) et commentaires de seance.
+const SCHEMA_REFERENCES: &str = include_str!("../migrations/0004-references-et-commentaires.sql");
+/// Tableaux de bord : ecrans composes par l'utilisateur (widgets ordonnes).
+const SCHEMA_DASHBOARDS: &str = include_str!("../migrations/0005-tableaux-de-bord.sql");
 
 /// Ouvre le pool et applique le schema (idempotent).
 pub async fn connect(config: &Config) -> anyhow::Result<PgPool> {
@@ -36,6 +40,8 @@ pub async fn connect_with_options(options: PgConnectOptions) -> anyhow::Result<P
     sqlx::raw_sql(SCHEMA).execute(&pool).await?;
     sqlx::raw_sql(SCHEMA_RACES).execute(&pool).await?;
     sqlx::raw_sql(SCHEMA_MUSIC).execute(&pool).await?;
+    sqlx::raw_sql(SCHEMA_REFERENCES).execute(&pool).await?;
+    sqlx::raw_sql(SCHEMA_DASHBOARDS).execute(&pool).await?;
     Ok(pool)
 }
 
@@ -248,7 +254,7 @@ pub async fn list_workouts(
     filter: &WorkoutFilter,
 ) -> Result<Vec<WorkoutRow>, sqlx::Error> {
     sqlx::query_as::<_, WorkoutRow>(
-        "SELECT id, started_at_ms, duration_s, distance_m, average_pace_s_per_km, unit_system, uploaded_at_ms
+        "SELECT id, started_at_ms, duration_s, distance_m, average_pace_s_per_km, unit_system, uploaded_at_ms, comment
            FROM workouts
           WHERE user_id = $1
             AND ($2::bigint IS NULL OR started_at_ms >= $2)
@@ -334,7 +340,7 @@ pub async fn get_workout(
     id: &str,
 ) -> Result<Option<(WorkoutRow, String)>, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT id, started_at_ms, duration_s, distance_m, average_pace_s_per_km, unit_system, uploaded_at_ms, payload
+        "SELECT id, started_at_ms, duration_s, distance_m, average_pace_s_per_km, unit_system, uploaded_at_ms, comment, payload
            FROM workouts WHERE user_id = $1 AND id = $2",
     )
     .bind(user_id)
@@ -352,8 +358,28 @@ pub async fn get_workout(
         average_pace_s_per_km: row.try_get("average_pace_s_per_km")?,
         unit_system: row.try_get("unit_system")?,
         uploaded_at_ms: row.try_get("uploaded_at_ms")?,
+        comment: row.try_get("comment")?,
     };
     Ok(Some((workout, payload)))
+}
+
+/// Enregistre (ou efface) le commentaire d'une seance.
+///
+/// Le commentaire vit dans sa propre colonne : une nouvelle synchronisation de
+/// la montre remplace le `payload` mais ne touche pas au texte du coureur.
+pub async fn set_workout_comment(
+    pool: &PgPool,
+    user_id: &str,
+    id: &str,
+    comment: Option<&str>,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("UPDATE workouts SET comment = $1 WHERE user_id = $2 AND id = $3")
+        .bind(comment)
+        .bind(user_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 pub async fn delete_workout(pool: &PgPool, user_id: &str, id: &str) -> Result<bool, sqlx::Error> {
@@ -421,7 +447,8 @@ const RACE_COLUMNS: &str = "id, user_id, name, start_at_ms, distance_m, discipli
      start_location, bib_number, bib_pickup_at_ms, bib_pickup_location, live_url, \
      registration_url, website_url, latitude, longitude, hotel_name, hotel_address, hotel_phone, \
      hotel_url, hotel_booked, hotel_check_in_ms, hotel_check_out_ms, lodging_notes, \
-     nutrition_notes, important_info, notes, goal_time_s, created_at_ms, updated_at_ms";
+     nutrition_notes, important_info, notes, goal_time_s, source, is_reference, moving_time_s, \
+     elapsed_time_s, elevation_gain_m, created_at_ms, updated_at_ms";
 
 /// Lie les 26 champs modifiables d'une course, dans l'ordre des colonnes.
 ///
@@ -553,6 +580,86 @@ pub async fn insert_race(
     get_race(pool, user_id, &id)
         .await?
         .ok_or(sqlx::Error::RowNotFound)
+}
+
+/// Cree une course de reference a partir d'un export Strava ou Garmin.
+///
+/// Deux differences avec `insert_race` : les metadonnees de l'import sont
+/// enregistrees avec la fiche, et la trace normalisee part dans `race_tracks`
+/// dans la meme transaction. Aucun element de suivi n'est cree : la course est
+/// deja courue, il n'y a plus rien a preparer.
+pub async fn insert_imported_race(
+    pool: &PgPool,
+    user_id: &str,
+    input: &RaceInput,
+    meta: &ImportedRaceMeta,
+    now_ms: i64,
+) -> Result<Race, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut tx = pool.begin().await?;
+    bind_race_fields!(
+        sqlx::query(
+            "INSERT INTO races (
+                 id, name, start_at_ms, distance_m, discipline, location, start_location,
+                 bib_number, bib_pickup_at_ms, bib_pickup_location, live_url, registration_url,
+                 website_url, latitude, longitude, hotel_name, hotel_address, hotel_phone,
+                 hotel_url, hotel_booked, hotel_check_in_ms, hotel_check_out_ms, lodging_notes,
+                 nutrition_notes, important_info, notes, goal_time_s,
+                 source, is_reference, moving_time_s, elapsed_time_s, elevation_gain_m,
+                 user_id, created_at_ms, updated_at_ms
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                       $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27,
+                       $28, $29, $30, $31, $32, $33, $34, $35)"
+        )
+        .bind(&id),
+        input
+    )
+    .bind(&meta.source)
+    .bind(true)
+    .bind(meta.moving_time_s)
+    .bind(meta.elapsed_time_s)
+    .bind(meta.elevation_gain_m)
+    .bind(user_id)
+    .bind(now_ms)
+    .bind(now_ms)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO race_tracks (race_id, user_id, gpx, points, created_at_ms)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(&id)
+    .bind(user_id)
+    .bind(&meta.gpx)
+    .bind(meta.points)
+    .bind(now_ms)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    get_race(pool, user_id, &id)
+        .await?
+        .ok_or(sqlx::Error::RowNotFound)
+}
+
+/// Trace conservee d'une course importee : contenu GPX et nombre de points.
+pub async fn get_race_track(
+    pool: &PgPool,
+    user_id: &str,
+    race_id: &str,
+) -> Result<Option<(String, i32)>, sqlx::Error> {
+    let row =
+        sqlx::query("SELECT gpx, points FROM race_tracks WHERE user_id = $1 AND race_id = $2")
+            .bind(user_id)
+            .bind(race_id)
+            .fetch_optional(pool)
+            .await?;
+    match row {
+        Some(row) => Ok(Some((row.try_get("gpx")?, row.try_get("points")?))),
+        None => Ok(None),
+    }
 }
 
 /// Met a jour une course. Renvoie `None` si elle n'appartient pas a l'utilisateur.
@@ -794,7 +901,7 @@ pub async fn list_music_playlists(
     .await
 }
 
-/// Playlists avec leurs compteurs (nombre de titres, octets, pistes servables).
+/// Playlists avec leurs compteurs (nombre de titres et duree cumulee).
 ///
 /// Un LEFT JOIN suffit : une playlist sans titre renvoie 0 partout, jamais NULL.
 pub async fn list_music_playlist_summaries(
@@ -804,8 +911,7 @@ pub async fn list_music_playlist_summaries(
     sqlx::query_as::<_, MusicPlaylistSummary>(
         "SELECT p.id, p.name, p.source, p.target_bpm, p.updated_at_ms,
                 COUNT(t.id)::bigint AS track_count,
-                COALESCE(SUM(t.size_bytes), 0)::bigint AS total_bytes,
-                COUNT(t.id) FILTER (WHERE t.storage_path IS NOT NULL)::bigint AS ready_track_count
+                COALESCE(SUM(t.duration_s), 0)::double precision AS duration_s
            FROM music_playlists p
            LEFT JOIN music_tracks t ON t.playlist_id = p.id AND t.user_id = p.user_id
           WHERE p.user_id = $1
@@ -853,33 +959,20 @@ pub async fn touch_music_playlist(
     Ok(())
 }
 
-/// Supprime une playlist et renvoie les chemins de ses fichiers audio.
+/// Supprime une playlist (metadonnees seules : ses titres partent par cascade).
 ///
-/// Les titres et les plans partent par cascade ; les fichiers sont ensuite
-/// retires du disque par l'appelant, seuls eux ne dependent pas de la base.
+/// Renvoie `false` si la playlist n'appartient pas a l'utilisateur.
 pub async fn delete_music_playlist(
     pool: &PgPool,
     user_id: &str,
     id: &str,
-) -> Result<Option<Vec<String>>, sqlx::Error> {
-    let paths: Vec<String> = sqlx::query_scalar(
-        "SELECT storage_path FROM music_tracks
-          WHERE user_id = $1 AND playlist_id = $2 AND storage_path IS NOT NULL",
-    )
-    .bind(user_id)
-    .bind(id)
-    .fetch_all(pool)
-    .await?;
-
+) -> Result<bool, sqlx::Error> {
     let result = sqlx::query("DELETE FROM music_playlists WHERE id = $1 AND user_id = $2")
         .bind(id)
         .bind(user_id)
         .execute(pool)
         .await?;
-    if result.rows_affected() == 0 {
-        return Ok(None);
-    }
-    Ok(Some(paths))
+    Ok(result.rows_affected() > 0)
 }
 
 // ------------------------------------------------------------------ titres
@@ -893,11 +986,13 @@ pub async fn insert_music_track(
     now_ms: i64,
 ) -> Result<String, sqlx::Error> {
     let id = uuid::Uuid::new_v4().to_string();
+    // Aucun audio n'est stocke (v2) : les colonnes mime, size_bytes et
+    // storage_path restent a NULL en base.
     sqlx::query(
         "INSERT INTO music_tracks
              (id, playlist_id, user_id, position, title, artist, album, duration_s, bpm,
-              bpm_source, spotify_uri, mime, size_bytes, storage_path, created_at_ms)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+              bpm_source, spotify_uri, created_at_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
     .bind(&id)
     .bind(playlist_id)
@@ -910,9 +1005,6 @@ pub async fn insert_music_track(
     .bind(input.bpm)
     .bind(input.bpm_source.as_deref())
     .bind(input.spotify_uri.as_deref())
-    .bind(input.mime.as_deref())
-    .bind(input.size_bytes)
-    .bind(input.storage_path.as_deref())
     .bind(now_ms)
     .execute(pool)
     .await?;
@@ -933,18 +1025,6 @@ pub async fn list_music_tracks(
     .bind(playlist_id)
     .fetch_all(pool)
     .await
-}
-
-pub async fn get_music_track(
-    pool: &PgPool,
-    user_id: &str,
-    id: &str,
-) -> Result<Option<MusicTrack>, sqlx::Error> {
-    sqlx::query_as::<_, MusicTrack>("SELECT * FROM music_tracks WHERE user_id = $1 AND id = $2")
-        .bind(user_id)
-        .bind(id)
-        .fetch_optional(pool)
-        .await
 }
 
 /// Enregistre un BPM (tap-tempo ou saisie manuelle) pour un titre de la playlist.
@@ -978,120 +1058,8 @@ pub async fn set_music_track_bpm(
     Ok(result.rows_affected() > 0)
 }
 
-/// Accuse la recuperation par la montre des pistes indiquees ; renvoie le nombre
-/// de pistes effectivement marquees.
-pub async fn ack_music_tracks(
-    pool: &PgPool,
-    user_id: &str,
-    playlist_id: &str,
-    track_ids: &[String],
-    now_ms: i64,
-) -> Result<u64, sqlx::Error> {
-    if track_ids.is_empty() {
-        return Ok(0);
-    }
-    let result = sqlx::query(
-        "UPDATE music_tracks SET downloaded_at_ms = $1
-          WHERE user_id = $2 AND playlist_id = $3 AND id = ANY($4)",
-    )
-    .bind(now_ms)
-    .bind(user_id)
-    .bind(playlist_id)
-    .bind(track_ids)
-    .execute(pool)
-    .await?;
-    Ok(result.rows_affected())
-}
-
-// ------------------------------------------------------------------ plans de telechargement
-
-/// Cree un plan de telechargement pour une playlist (et une course facultative).
-pub async fn insert_music_plan(
-    pool: &PgPool,
-    user_id: &str,
-    playlist_id: &str,
-    race_id: Option<&str>,
-    target_bpm: Option<f64>,
-    now_ms: i64,
-) -> Result<MusicDownloadPlan, sqlx::Error> {
-    let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO music_download_plans
-             (id, user_id, playlist_id, race_id, target_bpm, requested_at_ms)
-         VALUES ($1, $2, $3, $4, $5, $6)",
-    )
-    .bind(&id)
-    .bind(user_id)
-    .bind(playlist_id)
-    .bind(race_id)
-    .bind(target_bpm)
-    .bind(now_ms)
-    .execute(pool)
-    .await?;
-
-    get_music_plan(pool, user_id, &id)
-        .await?
-        .ok_or(sqlx::Error::RowNotFound)
-}
-
-pub async fn get_music_plan(
-    pool: &PgPool,
-    user_id: &str,
-    id: &str,
-) -> Result<Option<MusicDownloadPlan>, sqlx::Error> {
-    sqlx::query_as::<_, MusicDownloadPlan>(
-        "SELECT * FROM music_download_plans WHERE user_id = $1 AND id = $2",
-    )
-    .bind(user_id)
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-}
-
-/// Dernier plan non acquitte : c'est lui que la montre recupere au reveil.
-pub async fn pending_music_plan(
-    pool: &PgPool,
-    user_id: &str,
-) -> Result<Option<MusicDownloadPlan>, sqlx::Error> {
-    sqlx::query_as::<_, MusicDownloadPlan>(
-        "SELECT * FROM music_download_plans
-          WHERE user_id = $1 AND acked_at_ms IS NULL
-          ORDER BY requested_at_ms DESC
-          LIMIT 1",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-}
-
-/// Acquitte un plan (la montre a termine son telechargement).
-pub async fn ack_music_plan(
-    pool: &PgPool,
-    user_id: &str,
-    plan_id: &str,
-    now_ms: i64,
-) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
-        "UPDATE music_download_plans SET acked_at_ms = $1
-          WHERE id = $2 AND user_id = $3 AND acked_at_ms IS NULL",
-    )
-    .bind(now_ms)
-    .bind(plan_id)
-    .bind(user_id)
-    .execute(pool)
-    .await?;
-    Ok(result.rows_affected() > 0)
-}
-
-/// Annule tous les plans en attente (bouton « Annuler » de la page).
-pub async fn cancel_pending_music_plans(pool: &PgPool, user_id: &str) -> Result<u64, sqlx::Error> {
-    let result =
-        sqlx::query("DELETE FROM music_download_plans WHERE user_id = $1 AND acked_at_ms IS NULL")
-            .bind(user_id)
-            .execute(pool)
-            .await?;
-    Ok(result.rows_affected())
-}
+// La table music_download_plans (plan de telechargement v1) n'est plus lue ni
+// ecrite : le transfert passe par le manifeste et l'outil local mpacer-music.
 
 // ------------------------------------------------------------------ comptes Spotify
 
@@ -1165,4 +1133,305 @@ pub async fn delete_spotify_account(pool: &PgPool, user_id: &str) -> Result<bool
         .execute(pool)
         .await?;
     Ok(result.rows_affected() > 0)
+}
+
+// ------------------------------------------------------------ tableaux de bord
+
+/// Tableaux de bord de l'utilisateur, du plus recent au plus ancien.
+pub async fn list_dashboards(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<Vec<crate::models::Dashboard>, sqlx::Error> {
+    sqlx::query_as::<_, crate::models::Dashboard>(
+        "SELECT id, user_id, name, created_at_ms, updated_at_ms
+           FROM dashboards
+          WHERE user_id = $1
+          ORDER BY created_at_ms DESC, name ASC",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Un tableau precis, verifie comme appartenant a l'utilisateur.
+pub async fn get_dashboard(
+    pool: &PgPool,
+    user_id: &str,
+    id: &str,
+) -> Result<Option<crate::models::Dashboard>, sqlx::Error> {
+    sqlx::query_as::<_, crate::models::Dashboard>(
+        "SELECT id, user_id, name, created_at_ms, updated_at_ms
+           FROM dashboards
+          WHERE user_id = $1 AND id = $2",
+    )
+    .bind(user_id)
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Widgets d'un tableau, dans l'ordre d'affichage.
+pub async fn list_dashboard_widgets(
+    pool: &PgPool,
+    user_id: &str,
+    dashboard_id: &str,
+) -> Result<Vec<crate::models::DashboardWidget>, sqlx::Error> {
+    sqlx::query_as::<_, crate::models::DashboardWidget>(
+        "SELECT id, dashboard_id, user_id, kind, position, created_at_ms
+           FROM dashboard_widgets
+          WHERE user_id = $1 AND dashboard_id = $2
+          ORDER BY position ASC, created_at_ms ASC",
+    )
+    .bind(user_id)
+    .bind(dashboard_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Nombre de widgets par tableau : une seule requete pour la page de liste.
+pub async fn dashboard_widget_counts(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<Vec<(String, i64)>, sqlx::Error> {
+    sqlx::query_as::<_, (String, i64)>(
+        "SELECT dashboard_id, COUNT(*)::bigint
+           FROM dashboard_widgets
+          WHERE user_id = $1
+          GROUP BY dashboard_id",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Cree un tableau et ses widgets, en une transaction.
+///
+/// `name` est deja nettoye par l'appelant (`clean_dashboard_name`) et `kinds`
+/// ne contient que des cles du catalogue.
+pub async fn insert_dashboard(
+    pool: &PgPool,
+    user_id: &str,
+    name: &str,
+    kinds: &[String],
+    now_ms: i64,
+) -> Result<crate::models::Dashboard, sqlx::Error> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO dashboards (id, user_id, name, created_at_ms, updated_at_ms)
+         VALUES ($1, $2, $3, $4, $4)",
+    )
+    .bind(&id)
+    .bind(user_id)
+    .bind(name)
+    .bind(now_ms)
+    .execute(&mut *tx)
+    .await?;
+    for (position, kind) in kinds.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO dashboard_widgets (id, dashboard_id, user_id, kind, position, created_at_ms)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&id)
+        .bind(user_id)
+        .bind(kind)
+        .bind(position as i32)
+        .bind(now_ms)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(crate::models::Dashboard {
+        id,
+        user_id: user_id.to_string(),
+        name: name.to_string(),
+        created_at_ms: now_ms,
+        updated_at_ms: now_ms,
+    })
+}
+
+/// Renomme un tableau. `false` s'il n'appartient pas a l'utilisateur.
+pub async fn rename_dashboard(
+    pool: &PgPool,
+    user_id: &str,
+    id: &str,
+    name: &str,
+    now_ms: i64,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE dashboards SET name = $1, updated_at_ms = $2 WHERE user_id = $3 AND id = $4",
+    )
+    .bind(name)
+    .bind(now_ms)
+    .bind(user_id)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Supprime un tableau ; ses widgets partent avec lui (ON DELETE CASCADE).
+pub async fn delete_dashboard(pool: &PgPool, user_id: &str, id: &str) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM dashboards WHERE user_id = $1 AND id = $2")
+        .bind(user_id)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Ajoute un widget en fin de tableau. `None` si le tableau n'est pas au coureur.
+pub async fn add_dashboard_widget(
+    pool: &PgPool,
+    user_id: &str,
+    dashboard_id: &str,
+    kind: &str,
+    now_ms: i64,
+) -> Result<Option<String>, sqlx::Error> {
+    if get_dashboard(pool, user_id, dashboard_id).await?.is_none() {
+        return Ok(None);
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO dashboard_widgets (id, dashboard_id, user_id, kind, position, created_at_ms)
+         VALUES ($1, $2, $3, $4,
+                 COALESCE((SELECT MAX(position) + 1 FROM dashboard_widgets WHERE dashboard_id = $2), 0),
+                 $5)",
+    )
+    .bind(&id)
+    .bind(dashboard_id)
+    .bind(user_id)
+    .bind(kind)
+    .bind(now_ms)
+    .execute(&mut *tx)
+    .await?;
+    touch_dashboard(&mut tx, user_id, dashboard_id, now_ms).await?;
+    tx.commit().await?;
+    Ok(Some(id))
+}
+
+/// Retire un widget ; les suivants remontent d'un cran pour combler le trou.
+pub async fn remove_dashboard_widget(
+    pool: &PgPool,
+    user_id: &str,
+    dashboard_id: &str,
+    widget_id: &str,
+    now_ms: i64,
+) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let position: Option<i32> = sqlx::query_scalar(
+        "SELECT position FROM dashboard_widgets
+          WHERE id = $1 AND dashboard_id = $2 AND user_id = $3",
+    )
+    .bind(widget_id)
+    .bind(dashboard_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(position) = position else {
+        tx.rollback().await?;
+        return Ok(false);
+    };
+    sqlx::query("DELETE FROM dashboard_widgets WHERE id = $1 AND user_id = $2")
+        .bind(widget_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE dashboard_widgets SET position = position - 1
+          WHERE dashboard_id = $1 AND user_id = $2 AND position > $3",
+    )
+    .bind(dashboard_id)
+    .bind(user_id)
+    .bind(position)
+    .execute(&mut *tx)
+    .await?;
+    touch_dashboard(&mut tx, user_id, dashboard_id, now_ms).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Deplace un widget d'un cran (haut ou bas). `false` s'il est deja au bord.
+pub async fn move_dashboard_widget(
+    pool: &PgPool,
+    user_id: &str,
+    dashboard_id: &str,
+    widget_id: &str,
+    up: bool,
+    now_ms: i64,
+) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let current: Option<i32> = sqlx::query_scalar(
+        "SELECT position FROM dashboard_widgets
+          WHERE id = $1 AND dashboard_id = $2 AND user_id = $3",
+    )
+    .bind(widget_id)
+    .bind(dashboard_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(current) = current else {
+        tx.rollback().await?;
+        return Ok(false);
+    };
+    let neighbour: Option<(String, i32)> = if up {
+        sqlx::query_as(
+            "SELECT id, position FROM dashboard_widgets
+              WHERE dashboard_id = $1 AND user_id = $2 AND position < $3
+              ORDER BY position DESC LIMIT 1",
+        )
+        .bind(dashboard_id)
+        .bind(user_id)
+        .bind(current)
+        .fetch_optional(&mut *tx)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT id, position FROM dashboard_widgets
+              WHERE dashboard_id = $1 AND user_id = $2 AND position > $3
+              ORDER BY position ASC LIMIT 1",
+        )
+        .bind(dashboard_id)
+        .bind(user_id)
+        .bind(current)
+        .fetch_optional(&mut *tx)
+        .await?
+    };
+    let Some((neighbour_id, neighbour_position)) = neighbour else {
+        tx.rollback().await?;
+        return Ok(false);
+    };
+    sqlx::query("UPDATE dashboard_widgets SET position = $1 WHERE id = $2 AND user_id = $3")
+        .bind(neighbour_position)
+        .bind(widget_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE dashboard_widgets SET position = $1 WHERE id = $2 AND user_id = $3")
+        .bind(current)
+        .bind(neighbour_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    touch_dashboard(&mut tx, user_id, dashboard_id, now_ms).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Marque un tableau comme modifie ; silencieux si le tableau n'existe plus.
+async fn touch_dashboard(
+    tx: &mut sqlx::PgConnection,
+    user_id: &str,
+    dashboard_id: &str,
+    now_ms: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE dashboards SET updated_at_ms = $1 WHERE id = $2 AND user_id = $3")
+        .bind(now_ms)
+        .bind(dashboard_id)
+        .bind(user_id)
+        .execute(tx)
+        .await?;
+    Ok(())
 }

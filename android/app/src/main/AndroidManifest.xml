@@ -3,6 +3,9 @@
 
     <uses-feature android:name="android.hardware.type.watch" />
     <uses-feature android:name="android.hardware.location.gps" android:required="true" />
+    <!-- Le capteur cardiaque n'est pas obligatoire : sans lui la seance est complete,
+         il manque seulement les zones et la derive cardiaque. -->
+    <uses-feature android:name="android.hardware.sensor.heartrate" android:required="false" />
 
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
@@ -15,6 +18,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <!-- Frequence cardiaque (capteur de la montre) : zones, derive, export GPX -->
+    <uses-permission android:name="android.permission.BODY_SENSORS" />
     <!-- Synchronisation des seances vers le backend auto-heberge (SyncClient) -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -42,26 +47,14 @@
         </activity>
 
         <!-- Lecture audio locale : session medias Media3 (ExoPlayer).
-             exported=true : le systeme (assistant, boutons du casque) doit pouvoir
-             se connecter a la session ; l application ne fait que la piloter. -->
+             Les fichiers joues sont ceux copies par USB dans Music/ (docs/07 v2) ;
+             aucune application tierce n est pilotee. -->
         <service
             android:name=".music.MusicPlaybackService"
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaSessionService" />
-            </intent-filter>
-        </service>
-
-        <!-- Acces aux sessions medias des autres applications (Spotify installe sur la
-             montre). Android exige un NotificationListenerService declare et autorise
-             par l utilisateur pour voir les sessions d une autre application. -->
-        <service
-            android:name=".music.MediaSessionAccessService"
-            android:exported="true"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
 

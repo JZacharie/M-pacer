@@ -140,8 +140,6 @@ pub struct Config {
     /// URI de redirection OAuth explicitement enregistree dans la console Google.
     /// Vide => `{public_url}/auth/google/callback`.
     pub google_redirect_uri: Option<String>,
-    /// Racine des fichiers audio televerses (aucun fichier n'est stocke en base).
-    pub media_dir: std::path::PathBuf,
     /// Identifiants de l'application Spotify (absents = fonctionnalite desactivee).
     pub spotify_client_id: Option<String>,
     pub spotify_client_secret: Option<String>,
@@ -196,9 +194,6 @@ impl Config {
             google_client_id,
             google_client_secret,
             google_redirect_uri: env_var("MPACER_GOOGLE_REDIRECT_URI"),
-            media_dir: std::path::PathBuf::from(
-                env_var("MPACER_MEDIA_DIR").unwrap_or_else(|| "./media".to_string()),
-            ),
             spotify_client_id: env_var("MPACER_SPOTIFY_CLIENT_ID"),
             spotify_client_secret: env_var("MPACER_SPOTIFY_CLIENT_SECRET"),
             spotify_redirect_uri: env_var("MPACER_SPOTIFY_REDIRECT_URI"),
@@ -315,7 +310,6 @@ impl Config {
             google_client_id: Some("client-de-test".to_string()),
             google_client_secret: Some("secret-de-test".to_string()),
             google_redirect_uri: None,
-            media_dir: std::env::temp_dir().join("mpacer-media-tests"),
             spotify_client_id: None,
             spotify_client_secret: None,
             spotify_redirect_uri: None,

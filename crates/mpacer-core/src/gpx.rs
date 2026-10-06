@@ -3,6 +3,7 @@
 //! Implementation minimale et sans dependance : le GPX produit est valide et
 //! suffisant pour les services de partage d'activite.
 
+use crate::best_distances::TrackPoint;
 use crate::history::WorkoutSummary;
 
 /// Convertit un timestamp UNIX (ms) en date ISO 8601 UTC.
@@ -27,6 +28,81 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
     let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Algorithme inverse de `civil_from_days` : date civile -> jours depuis l'epoque.
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let yoe = year - era * 400;
+    let doy =
+        (153 * (if month > 2 { month - 3 } else { month + 9 }) as i64 + 2) / 5 + day as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Lit un horodatage ISO 8601 (UTC) et le convertit en millisecondes UNIX.
+///
+/// Accepte la forme produite par Strava et Garmin Connect
+/// (`2024-04-07T08:30:00.000Z`) comme un decalage horaire explicite
+/// (`2024-04-07T10:30:00+02:00`). Une valeur illisible renvoie `None` : mieux
+/// vaut une date absente qu'une date inventee.
+pub fn parse_iso8601_utc(value: &str) -> Option<i64> {
+    let text = value.trim();
+    // Annee-mois-jour
+    let (date, rest) = text.split_once(['T', 't', ' '])?;
+    let mut date_parts = date.split('-');
+    let year: i64 = date_parts.next()?.parse().ok()?;
+    let month: u32 = date_parts.next()?.parse().ok()?;
+    let day: u32 = date_parts.next()?.parse().ok()?;
+    if date_parts.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+
+    // Heure, minutes, secondes, fraction.
+    let (time, offset) = match rest.find(['Z', 'z']) {
+        Some(index) => (&rest[..index], 0_i64),
+        None => {
+            // Decalage explicite (+HH:MM / -HH:MM), cherche apres l'heure.
+            let sign_index = rest
+                .get(1..)
+                .unwrap_or("")
+                .find(['+', '-'])
+                .map(|index| index + 1);
+            match sign_index {
+                Some(index) => {
+                    let (time, zone) = rest.split_at(index);
+                    let sign = if zone.starts_with('-') { -1 } else { 1 };
+                    let zone = &zone[1..];
+                    let (hours, minutes) = zone.split_once(':')?;
+                    let hours: i64 = hours.parse().ok()?;
+                    let minutes: i64 = minutes.parse().ok()?;
+                    (time, sign * (hours * 3600 + minutes * 60) * 1000)
+                }
+                None => (rest, 0_i64),
+            }
+        }
+    };
+    let mut time_parts = time.split(':');
+    let hour: i64 = time_parts.next()?.parse().ok()?;
+    let minute: i64 = time_parts.next()?.parse().ok()?;
+    let seconds_text = time_parts.next().unwrap_or("0");
+    let (seconds_text, millis) = match seconds_text.split_once(['.', ',']) {
+        Some((seconds, fraction)) => {
+            let digits: String = fraction.chars().filter(|c| c.is_ascii_digit()).collect();
+            let millis: i64 = format!("{digits:0<3}")[..3].parse().ok()?;
+            (seconds, millis)
+        }
+        None => (seconds_text, 0),
+    };
+    let second: i64 = seconds_text.parse().ok()?;
+    if time_parts.next().is_some() || hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
+
+    let days = days_from_civil(year, month, day);
+    let ms = days * 86_400_000 + hour * 3_600_000 + minute * 60_000 + second * 1000 + millis;
+    Some(ms - offset)
 }
 
 /// Echappe les caracteres XML d'un nom de trace.
@@ -115,6 +191,47 @@ pub fn export_gpx(workout: &WorkoutSummary) -> String {
     out
 }
 
+/// Produit un GPX 1.1 a partir d'une trace seule (sans seance complete).
+///
+/// Sert a conserver et a reexporter la trace d'une course importee : le fichier
+/// reste valide pour Strava, Garmin ou Google Earth.
+pub fn export_points_gpx(name: &str, points: &[TrackPoint], started_at_ms: Option<i64>) -> String {
+    let mut out = String::with_capacity(200 + points.len() * 96);
+    out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    out.push_str(
+        "<gpx version=\"1.1\" creator=\"M-pacer\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n",
+    );
+    out.push_str("  <metadata>\n");
+    out.push_str(&format!("    <name>{}</name>\n", escape_xml(name)));
+    if let Some(started_at_ms) = started_at_ms {
+        out.push_str(&format!(
+            "    <time>{}</time>\n",
+            iso8601_utc(started_at_ms)
+        ));
+    }
+    out.push_str("  </metadata>\n  <trk>\n");
+    out.push_str(&format!("    <name>{}</name>\n", escape_xml(name)));
+    out.push_str("    <type>running</type>\n    <trkseg>\n");
+    for point in points {
+        out.push_str(&format!(
+            "      <trkpt lat=\"{:.7}\" lon=\"{:.7}\">\n",
+            point.lat, point.lon
+        ));
+        if let Some(elevation) = point.elevation_m {
+            out.push_str(&format!("        <ele>{elevation:.1}</ele>\n"));
+        }
+        if let Some(started_at_ms) = started_at_ms {
+            out.push_str(&format!(
+                "        <time>{}</time>\n",
+                iso8601_utc(started_at_ms + point.t_ms)
+            ));
+        }
+        out.push_str("      </trkpt>\n");
+    }
+    out.push_str("    </trkseg>\n  </trk>\n</gpx>\n");
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,6 +244,61 @@ mod tests {
         assert_eq!(iso8601_utc(1_700_000_000_000), "2023-11-14T22:13:20.000Z");
         // Annee bissextile
         assert_eq!(iso8601_utc(1_582_934_400_000), "2020-02-29T00:00:00.000Z");
+    }
+
+    #[test]
+    fn iso8601_parsing_round_trips_and_handles_offsets() {
+        for ms in [
+            0_i64,
+            1_700_000_000_000,
+            1_582_934_400_000,
+            1_775_000_000_123,
+            -86_400_000,
+        ] {
+            let text = iso8601_utc(ms);
+            assert_eq!(parse_iso8601_utc(&text), Some(ms), "{text}");
+        }
+        // Decalage horaire explicite : 10:30+02:00 = 08:30 UTC.
+        assert_eq!(
+            parse_iso8601_utc("2026-04-05T10:30:00+02:00"),
+            parse_iso8601_utc("2026-04-05T08:30:00Z")
+        );
+        // Secondes fractionnaires, virgule ou point.
+        assert_eq!(
+            parse_iso8601_utc("2026-04-05T08:30:00,500Z"),
+            parse_iso8601_utc("2026-04-05T08:30:00.5Z")
+        );
+        assert_eq!(parse_iso8601_utc("pas une date"), None);
+        assert_eq!(parse_iso8601_utc("2026-04-05T25:00:00Z"), None);
+        assert_eq!(parse_iso8601_utc(""), None);
+    }
+
+    #[test]
+    fn standalone_track_export_is_a_valid_gpx() {
+        let points = vec![
+            TrackPoint {
+                t_ms: 0,
+                dist_m: 0.0,
+                lat: 44.84,
+                lon: -0.57,
+                elevation_m: Some(10.0),
+            },
+            TrackPoint {
+                t_ms: 60_000,
+                dist_m: 200.0,
+                lat: 44.841,
+                lon: -0.57,
+                elevation_m: None,
+            },
+        ];
+        let gpx = export_points_gpx("Marathon & Cie", &points, Some(1_700_000_000_000));
+        assert!(gpx.contains("<name>Marathon &amp; Cie</name>"));
+        assert!(gpx.contains("<time>2023-11-14T22:13:20.000Z</time>"));
+        assert!(gpx.contains("<time>2023-11-14T22:14:20.000Z</time>"));
+        assert_eq!(gpx.matches("<trkpt").count(), 2);
+        // Sans date de depart, les points restent exportes sans horodatage.
+        let gpx = export_points_gpx("Trace", &points, None);
+        assert!(!gpx.contains("<time>"));
     }
 
     #[test]

@@ -57,25 +57,29 @@ pub async fn gpx_response(state: &AppState, user_id: &str, id: &str) -> AppResul
         .map_err(|error| AppError::internal(error.to_string()))
 }
 
-/// Resout un chemin de media relatif sous la racine autorisee.
+/// Manifeste de transfert d'une playlist, en piece jointe JSON.
 ///
-/// Renvoie `None` des qu'une composante sort de la racine (`..`, chemin absolu,
-/// prefixe Windows) : un fichier audio ne doit jamais pouvoir etre lu ou
-/// supprime hors de `MPACER_MEDIA_DIR`, meme si la base etait corrompue.
-pub fn media_path(root: &std::path::Path, relative: &str) -> Option<std::path::PathBuf> {
-    let relative = std::path::Path::new(relative);
-    if relative.is_absolute() {
-        return None;
-    }
-    let mut path = std::path::PathBuf::from(root);
-    for component in relative.components() {
-        match component {
-            std::path::Component::Normal(part) => path.push(part),
-            // CurDir, ParentDir, RootDir et Prefix sont refuses.
-            _ => return None,
-        }
-    }
-    Some(path)
+/// Partage par l'API (jeton) et l'interface web (session) : c'est exactement le
+/// fichier que `mpacer-music` consomme pour copier l'audio par USB.
+pub async fn manifest_response(state: &AppState, user_id: &str, id: &str) -> AppResult<Response> {
+    let playlist = crate::db::get_music_playlist(&state.pool, user_id, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let tracks = crate::db::list_music_tracks(&state.pool, user_id, id).await?;
+    let manifest = crate::models::TransferManifest::from_playlist(&playlist, &tracks);
+    let body = serde_json::to_string_pretty(&manifest)
+        .map_err(|error| AppError::internal(format!("manifeste illisible : {error}")))?;
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!(
+                "attachment; filename=\"{}\"",
+                crate::models::manifest_file_name(&playlist.name)
+            ),
+        )
+        .body(Body::from(body))
+        .map_err(|error| AppError::internal(error.to_string()))
 }
 
 /// Vivacite : le processus repond.

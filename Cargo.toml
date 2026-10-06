@@ -6,6 +6,7 @@ members = [
     "crates/mpacer-ffi",
     "crates/mpacer-client",
     "crates/mpacer-api",
+    "crates/mpacer-music",
 ]
 
 [workspace.package]

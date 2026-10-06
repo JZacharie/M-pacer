@@ -913,6 +913,351 @@ impl MusicDirector {
     }
 }
 
+// ------------------------------------------- appariement fichiers <-> pistes
+
+/// Extensions audio reconnues par l'appariement (contrat, section 3.1).
+pub const AUDIO_EXTENSIONS: [&str; 6] = ["mp3", "m4a", "ogg", "opus", "flac", "wav"];
+/// Seuil de validation d'un appariement : une piste sous ce score reste non
+/// appariee et renommee, plutot que copiee au hasard.
+pub const MATCH_THRESHOLD: f64 = 0.60;
+/// Score de base quand le nom de fichier porte le titre.
+const TITLE_SCORE: f64 = 0.60;
+/// Bonus quand le nom porte aussi l'artiste.
+const ARTIST_BONUS: f64 = 0.25;
+/// Bonus quand la duree du fichier colle a moins de 3 s.
+const DURATION_BONUS: f64 = 0.15;
+/// Score de repli (artiste + duree a moins de 2 s) : volontairement **sous**
+/// le seuil, pour demander a l'utilisateur de renommer son fichier.
+const ARTIST_DURATION_SCORE: f64 = 0.55;
+/// Tolerance de duree qui donne le bonus complet (s).
+const DURATION_BONUS_TOLERANCE_S: f64 = 3.0;
+/// Tolerance de duree du repli artiste seul (s).
+const ARTIST_DURATION_TOLERANCE_S: f64 = 2.0;
+
+/// Fichier audio trouve sur le disque de l'utilisateur.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LocalFile {
+    /// Chemin complet.
+    pub path: String,
+    pub file_name: String,
+    pub size_bytes: u64,
+    /// Duree estimee du fichier, si elle est connue.
+    #[serde(default)]
+    pub duration_s: Option<f64>,
+    /// BPM lu dans les balises du fichier, sinon None.
+    #[serde(default)]
+    pub bpm: Option<f64>,
+}
+
+/// Piste attendue par un manifeste de transfert.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WantedTrack {
+    pub id: String,
+    #[serde(default)]
+    pub position: u32,
+    pub title: String,
+    #[serde(default)]
+    pub artist: Option<String>,
+    #[serde(default)]
+    pub album: Option<String>,
+    #[serde(default)]
+    pub duration_s: Option<f64>,
+    #[serde(default)]
+    pub bpm: Option<f64>,
+    /// Nom du fichier une fois copie sur la montre (None tant qu'il est inconnu).
+    #[serde(default)]
+    pub file: Option<String>,
+    /// Taille du fichier copie (None tant qu'il est inconnu).
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+}
+
+/// Manifeste de transfert (produit par le backend, ecrit sur la montre).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TransferManifest {
+    /// Version du format : 1.
+    #[serde(default = "default_manifest_version")]
+    pub version: u32,
+    pub playlist_id: String,
+    pub name: String,
+    /// "spotify" | "manual".
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub target_bpm: Option<f64>,
+    #[serde(default)]
+    pub tracks: Vec<WantedTrack>,
+}
+
+fn default_manifest_version() -> u32 {
+    1
+}
+
+/// Resultat de l'appariement d'une piste : fichier trouve, ou None.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FileMatch {
+    pub track_id: String,
+    #[serde(default)]
+    pub file: Option<LocalFile>,
+    /// Score du couple, entre 0.0 et 1.0.
+    pub score: f64,
+}
+
+/// Normalise un libelle pour l'appariement : minuscules, sans accents,
+/// ponctuation reduite a des espaces, suffixes (feat., remaster, official
+/// video, lyrics) retires, numero de piste en tete retire.
+///
+/// La fonction est stable : deux libelles equivalents donnent la meme chaine.
+pub fn normalize_label(text: &str) -> String {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    for character in fold_text(text).chars() {
+        if character.is_ascii_alphanumeric() {
+            current.push(character);
+        } else if !current.is_empty() {
+            tokens.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    // "feat. ..." : l'invite et tout ce qui suit sont retires du libelle.
+    if let Some(index) = tokens.iter().position(|token| is_featured_token(token)) {
+        tokens.truncate(index);
+    }
+    // Bruit des noms de fichiers (remaster, official video, lyrics...).
+    tokens.retain(|token| !is_noise_token(token));
+    // Numero de piste en tete ("01 - ...", "12. ...").
+    let start = tokens
+        .iter()
+        .position(|token| !token.chars().all(|c| c.is_ascii_digit()))
+        .unwrap_or(tokens.len());
+    tokens.drain(..start);
+    tokens.join(" ")
+}
+
+/// Minuscules sans accents : chaque caractere accentue devient sa lettre de
+/// base (oe pour oe-ligature, ss pour eszett).
+fn fold_text(text: &str) -> String {
+    let mut folded = String::with_capacity(text.len());
+    for character in text.chars() {
+        for lowered in character.to_lowercase() {
+            match lowered {
+                'a' | '\u{e0}' | '\u{e1}' | '\u{e2}' | '\u{e3}' | '\u{e4}' | '\u{e5}' => {
+                    folded.push('a')
+                }
+                'c' | '\u{e7}' => folded.push('c'),
+                'e' | '\u{e8}' | '\u{e9}' | '\u{ea}' | '\u{eb}' => folded.push('e'),
+                'i' | '\u{ec}' | '\u{ed}' | '\u{ee}' | '\u{ef}' => folded.push('i'),
+                'n' | '\u{f1}' => folded.push('n'),
+                'o' | '\u{f2}' | '\u{f3}' | '\u{f4}' | '\u{f5}' | '\u{f6}' | '\u{f8}' => {
+                    folded.push('o')
+                }
+                'u' | '\u{f9}' | '\u{fa}' | '\u{fb}' | '\u{fc}' => folded.push('u'),
+                'y' | '\u{fd}' | '\u{ff}' => folded.push('y'),
+                '\u{153}' => folded.push_str("oe"),
+                '\u{df}' => folded.push_str("ss"),
+                other => folded.push(other),
+            }
+        }
+    }
+    folded
+}
+
+/// Vrai pour les marqueurs d'invite : feat, feat., featuring, ft.
+fn is_featured_token(token: &str) -> bool {
+    matches!(token, "feat" | "featuring" | "ft")
+}
+
+/// Vrai pour le bruit courant d'un nom de fichier.
+fn is_noise_token(token: &str) -> bool {
+    matches!(
+        token,
+        "remaster" | "remastered" | "official" | "video" | "lyrics" | "lyric" | "hd" | "hq"
+    )
+}
+
+/// Vrai si `haystack` contient `needle` comme suite de mots entiers.
+fn contains_phrase(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let padded_haystack = format!(" {haystack} ");
+    let padded_needle = format!(" {needle} ");
+    padded_haystack.contains(&padded_needle)
+}
+
+/// Nom de fichier sans son extension.
+fn file_stem(file_name: &str) -> &str {
+    match file_name.rfind('.') {
+        Some(index) if index > 0 => &file_name[..index],
+        _ => file_name,
+    }
+}
+
+/// Score d'un couple (piste, fichier), de 0.0 a 1.0.
+fn match_score(wanted: &WantedTrack, file: &LocalFile) -> f64 {
+    let file_label = normalize_label(file_stem(&file.file_name));
+    let title = normalize_label(&wanted.title);
+    let artist = wanted
+        .artist
+        .as_deref()
+        .map(normalize_label)
+        .unwrap_or_default();
+    let title_found = contains_phrase(&file_label, &title);
+    let artist_found = contains_phrase(&file_label, &artist);
+    let duration_gap = match (wanted.duration_s, file.duration_s) {
+        (Some(wanted), Some(found)) if wanted.is_finite() && found.is_finite() => {
+            Some((wanted - found).abs())
+        }
+        _ => None,
+    };
+
+    if title_found {
+        let mut score = TITLE_SCORE;
+        if artist_found {
+            score += ARTIST_BONUS;
+        }
+        if duration_gap.is_some_and(|gap| gap < DURATION_BONUS_TOLERANCE_S) {
+            score += DURATION_BONUS;
+        }
+        return score;
+    }
+    if artist_found && duration_gap.is_some_and(|gap| gap < ARTIST_DURATION_TOLERANCE_S) {
+        return ARTIST_DURATION_SCORE;
+    }
+    0.0
+}
+
+/// Apparie des pistes a des fichiers. Deterministe : les couples
+/// (piste, fichier) sont tries par score decroissant puis par position de
+/// piste ; un fichier ne sert qu'a une piste ; seuil de validation 0.6.
+///
+/// Renvoie une entree par piste, dans l'ordre du manifeste. Une piste non
+/// appariee porte `file: None` et le meilleur score rencontre.
+pub fn match_tracks(wanted: &[WantedTrack], files: &[LocalFile]) -> Vec<FileMatch> {
+    struct Candidate {
+        track_index: usize,
+        file_index: usize,
+        score: f64,
+    }
+
+    let mut best = vec![0.0_f64; wanted.len()];
+    let mut candidates = Vec::new();
+    for (track_index, track) in wanted.iter().enumerate() {
+        for (file_index, file) in files.iter().enumerate() {
+            let score = match_score(track, file);
+            if score > best[track_index] {
+                best[track_index] = score;
+            }
+            if score >= MATCH_THRESHOLD {
+                candidates.push(Candidate {
+                    track_index,
+                    file_index,
+                    score,
+                });
+            }
+        }
+    }
+
+    candidates.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                wanted[left.track_index]
+                    .position
+                    .cmp(&wanted[right.track_index].position)
+            })
+            .then_with(|| {
+                files[left.file_index]
+                    .file_name
+                    .cmp(&files[right.file_index].file_name)
+            })
+            .then_with(|| {
+                files[left.file_index]
+                    .path
+                    .cmp(&files[right.file_index].path)
+            })
+    });
+
+    let mut file_taken = vec![false; files.len()];
+    let mut assigned: Vec<Option<(usize, f64)>> = vec![None; wanted.len()];
+    for candidate in candidates {
+        if assigned[candidate.track_index].is_some() || file_taken[candidate.file_index] {
+            continue;
+        }
+        assigned[candidate.track_index] = Some((candidate.file_index, candidate.score));
+        file_taken[candidate.file_index] = true;
+    }
+
+    wanted
+        .iter()
+        .enumerate()
+        .map(|(index, track)| match assigned[index] {
+            Some((file_index, score)) => FileMatch {
+                track_id: track.id.clone(),
+                file: Some(files[file_index].clone()),
+                score,
+            },
+            None => FileMatch {
+                track_id: track.id.clone(),
+                file: None,
+                score: best[index],
+            },
+        })
+        .collect()
+}
+
+/// Lit un manifeste JSON (format ci-dessus). None si illisible.
+pub fn parse_manifest(json: &str) -> Option<TransferManifest> {
+    serde_json::from_str(json).ok()
+}
+
+/// Nom de fichier propose pour la montre : "01 - Artiste - Titre.mp3"
+/// (extension conservee a l'ecriture reelle).
+pub fn suggested_file_name(track: &WantedTrack, extension: &str) -> String {
+    let extension = extension.trim_start_matches('.');
+    let number = track.position.max(1);
+    let title = sanitise_file_part(&track.title, "Titre");
+    match track
+        .artist
+        .as_deref()
+        .map(|artist| sanitise_file_part(artist, ""))
+        .filter(|artist| !artist.is_empty())
+    {
+        Some(artist) => format!("{number:02} - {artist} - {title}.{extension}"),
+        None => format!("{number:02} - {title}.{extension}"),
+    }
+}
+
+/// Nettoie un fragment de nom de fichier : caracteres interdits, espaces
+/// multiples, bords. `fallback` evite un nom vide.
+fn sanitise_file_part(text: &str, fallback: &str) -> String {
+    let mut cleaned = String::with_capacity(text.len());
+    for character in text.chars() {
+        if character.is_control()
+            || matches!(
+                character,
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+            )
+        {
+            cleaned.push(' ');
+        } else {
+            cleaned.push(character);
+        }
+    }
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = collapsed.trim_matches(['.', ' ']).trim();
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1456,5 +1801,260 @@ mod tests {
         assert!(cfg.enabled);
         assert_eq!(cfg.avoid_last, 5);
         assert!((cfg.reference_bpm - 170.0).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod match_tests {
+    use super::*;
+
+    fn wanted(id: &str, position: u32, title: &str) -> WantedTrack {
+        WantedTrack {
+            id: id.to_string(),
+            position,
+            title: title.to_string(),
+            artist: None,
+            album: None,
+            duration_s: None,
+            bpm: None,
+            file: None,
+            size_bytes: None,
+        }
+    }
+
+    fn local(file_name: &str) -> LocalFile {
+        LocalFile {
+            path: format!("D:/Musique/{file_name}"),
+            file_name: file_name.to_string(),
+            size_bytes: 4_523_112,
+            duration_s: None,
+            bpm: None,
+        }
+    }
+
+    fn matched(matches: &[FileMatch], index: usize) -> &LocalFile {
+        matches[index]
+            .file
+            .as_ref()
+            .unwrap_or_else(|| panic!("piste {} non appariee", matches[index].track_id))
+    }
+
+    // ----------------------------------------------------------- normalisation
+
+    #[test]
+    fn normalize_label_folds_accents_and_case() {
+        assert_eq!(normalize_label("Été ÉTÉ"), "ete ete");
+        assert_eq!(normalize_label("Ça va, déjà ?"), "ca va deja");
+        assert_eq!(normalize_label("Cœur"), "coeur");
+    }
+
+    #[test]
+    fn normalize_label_drops_track_numbers_and_noise() {
+        assert_eq!(normalize_label("01 - Wake Me Up"), "wake me up");
+        assert_eq!(normalize_label("12. Titre (Remastered)"), "titre");
+        assert_eq!(normalize_label("03_Titre_Officiel"), "titre officiel");
+        assert_eq!(normalize_label("Wake Me Up (Official Video)"), "wake me up");
+    }
+
+    #[test]
+    fn normalize_label_strips_the_featured_credit() {
+        assert_eq!(
+            normalize_label("Wake Me Up (feat. Aloe Blacc)"),
+            "wake me up"
+        );
+        assert_eq!(normalize_label("Titre featuring Invite"), "titre");
+        assert_eq!(normalize_label("Titre ft. Invite"), "titre");
+    }
+
+    // -------------------------------------------------------------- appariement
+
+    #[test]
+    fn matching_ignores_accents_case_and_track_numbers() {
+        let tracks = vec![wanted("t1", 1, "Soleil d'été")];
+        let files = vec![local("01 - Artiste - SOLEIL D'ETE.mp3")];
+        let result = match_tracks(&tracks, &files);
+        assert_eq!(
+            matched(&result, 0).file_name,
+            "01 - Artiste - SOLEIL D'ETE.mp3"
+        );
+        assert!((result[0].score - 0.60).abs() < 1e-9);
+    }
+
+    #[test]
+    fn matching_uses_artist_and_duration_bonuses() {
+        let mut track = wanted("t1", 1, "Wake me up");
+        track.artist = Some("Avicii".to_string());
+        track.duration_s = Some(249.0);
+
+        let mut file = local("01 - Avicii - Wake me up.mp3");
+        file.duration_s = Some(250.0);
+        let result = match_tracks(&[track.clone()], &[file]);
+        assert!((result[0].score - 1.0).abs() < 1e-9);
+
+        let mut without_duration = local("01 - Avicii - Wake me up.mp3");
+        without_duration.duration_s = None;
+        let result = match_tracks(&[track.clone()], &[without_duration]);
+        assert!((result[0].score - 0.85).abs() < 1e-9);
+
+        let mut far = local("01 - Avicii - Wake me up.mp3");
+        far.duration_s = Some(260.0);
+        let result = match_tracks(&[track], &[far]);
+        assert!((result[0].score - 0.85).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_title_alone_reaches_the_threshold() {
+        let result = match_tracks(&[wanted("t1", 1, "Niveau")], &[local("Niveau.mp3")]);
+        assert!((result[0].score - MATCH_THRESHOLD).abs() < 1e-9);
+        assert!(result[0].file.is_some());
+    }
+
+    #[test]
+    fn artist_and_duration_without_the_title_stay_below_the_threshold() {
+        let mut track = wanted("t1", 1, "Levels");
+        track.artist = Some("Avicii".to_string());
+        track.duration_s = Some(200.0);
+
+        let mut near = local("Avicii - Autre morceau.mp3");
+        near.duration_s = Some(201.0);
+        let result = match_tracks(&[track.clone()], &[near]);
+        assert!((result[0].score - 0.55).abs() < 1e-9);
+        assert!(result[0].file.is_none());
+
+        let mut far = local("Avicii - Autre morceau.mp3");
+        far.duration_s = Some(203.0);
+        let result = match_tracks(&[track], &[far]);
+        assert!(result[0].score.abs() < 1e-9);
+        assert!(result[0].file.is_none());
+    }
+
+    #[test]
+    fn a_file_is_used_by_a_single_track_only() {
+        let tracks = vec![wanted("t1", 1, "Meme titre"), wanted("t2", 2, "Meme titre")];
+        let files = vec![local("Meme titre.mp3")];
+        let result = match_tracks(&tracks, &files);
+        assert_eq!(result.len(), 2);
+        assert!(result[0].file.is_some());
+        assert!(result[1].file.is_none());
+        assert_eq!(result[1].track_id, "t2");
+        assert!((result[1].score - 0.60).abs() < 1e-9);
+    }
+
+    #[test]
+    fn matching_is_deterministic() {
+        let tracks = vec![
+            wanted("t1", 1, "Alpha"),
+            wanted("t2", 2, "Beta"),
+            wanted("t3", 3, "Gamma"),
+        ];
+        let files = vec![
+            local("Beta - copie a.mp3"),
+            local("Beta - copie b.mp3"),
+            local("Alpha.mp3"),
+        ];
+        let first = match_tracks(&tracks, &files);
+        let second = match_tracks(&tracks, &files);
+        assert_eq!(first, second);
+        assert_eq!(matched(&first, 0).file_name, "Alpha.mp3");
+        // Deux candidats de meme score pour Beta : le nom de fichier tranche.
+        assert_eq!(matched(&first, 1).file_name, "Beta - copie a.mp3");
+        assert!(first[2].file.is_none());
+    }
+
+    #[test]
+    fn empty_inputs_never_panic() {
+        assert!(match_tracks(&[], &[]).is_empty());
+        let result = match_tracks(&[wanted("t1", 1, "Titre")], &[]);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].file.is_none());
+        assert!(result[0].score.abs() < 1e-9);
+
+        let empty: TransferManifest =
+            parse_manifest(r#"{"playlist_id":"p","name":"Vide"}"#).unwrap();
+        assert_eq!(empty.version, 1);
+        assert!(empty.tracks.is_empty());
+        assert!(match_tracks(&empty.tracks, &[]).is_empty());
+    }
+
+    // ---------------------------------------------------------------- manifeste
+
+    #[test]
+    fn parse_manifest_reads_the_contract_schema() {
+        let json = r#"{
+            "version": 1,
+            "playlist_id": "run-170",
+            "name": "Run 170",
+            "source": "spotify",
+            "target_bpm": 170.0,
+            "tracks": [
+                {
+                    "id": "t1",
+                    "position": 1,
+                    "title": "Wake me up",
+                    "artist": "Avicii",
+                    "album": "True",
+                    "duration_s": 249.0,
+                    "bpm": 124.0
+                }
+            ]
+        }"#;
+        let manifest = parse_manifest(json).expect("manifeste valide");
+        assert_eq!(manifest.version, 1);
+        assert_eq!(manifest.playlist_id, "run-170");
+        assert_eq!(manifest.name, "Run 170");
+        assert_eq!(manifest.source, "spotify");
+        assert_eq!(manifest.target_bpm, Some(170.0));
+        assert_eq!(manifest.tracks.len(), 1);
+        let track = &manifest.tracks[0];
+        assert_eq!(track.position, 1);
+        assert_eq!(track.artist.as_deref(), Some("Avicii"));
+        assert!(track.file.is_none());
+        assert!(track.size_bytes.is_none());
+    }
+
+    #[test]
+    fn parse_manifest_rejects_unreadable_json() {
+        assert!(parse_manifest("").is_none());
+        assert!(parse_manifest("pas du json").is_none());
+        assert!(parse_manifest("{").is_none());
+        // JSON valide mais sans playlist : inutilisable pour un transfert.
+        assert!(parse_manifest(r#"{"titre":"sans playlist"}"#).is_none());
+    }
+
+    // ------------------------------------------------------------- nom de fichier
+
+    #[test]
+    fn suggested_file_name_follows_the_watch_scheme() {
+        let mut track = wanted("t1", 1, "Wake me up");
+        track.artist = Some("Avicii".to_string());
+        assert_eq!(
+            suggested_file_name(&track, "mp3"),
+            "01 - Avicii - Wake me up.mp3"
+        );
+        assert_eq!(
+            suggested_file_name(&track, ".m4a"),
+            "01 - Avicii - Wake me up.m4a"
+        );
+
+        let mut without_artist = wanted("t2", 2, "Titre");
+        assert_eq!(
+            suggested_file_name(&without_artist, "mp3"),
+            "02 - Titre.mp3"
+        );
+
+        without_artist.position = 0;
+        assert_eq!(
+            suggested_file_name(&without_artist, "mp3"),
+            "01 - Titre.mp3"
+        );
+
+        let mut unsafe_title = wanted("t3", 12, "AC/DC: Live");
+        assert_eq!(
+            suggested_file_name(&unsafe_title, "mp3"),
+            "12 - AC DC Live.mp3"
+        );
+
+        unsafe_title.title = "   ".to_string();
+        assert_eq!(suggested_file_name(&unsafe_title, "mp3"), "12 - Titre.mp3");
     }
 }

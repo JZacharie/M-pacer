@@ -21,8 +21,9 @@ import java.io.File
  *    SkipTo/Pause/Resume) ; cette classe ne fait que l'executer ;
  *  - la position et la piste en cours remontent au moteur via [MusicSession].
  *
- * Les fichiers joues sont locaux (filesDir/music) : la lecture reste possible
- * sans le telephone, en Wi-Fi coupe.
+ * Les fichiers joues sont ceux copies par USB dans le dossier Music/ de la montre
+ * (docs/07 v2) : la lecture reste possible sans telephone, sans serveur, hors
+ * ligne. Aucune source distante n'est pilotee.
  */
 object MusicPlayer {
 
@@ -84,7 +85,7 @@ object MusicPlayer {
                 playlistName = playlist.name,
                 source = playlist.source,
                 count = tracks.size,
-                message = if (tracks.isEmpty()) "Aucun fichier telecharge pour cette playlist" else null,
+                message = if (tracks.isEmpty()) "Aucun fichier sur la montre pour cette playlist" else null,
             )
         }
         withController { mediaController ->
@@ -201,7 +202,7 @@ data class MusicPlayerState(
     val playing: Boolean = false,
     val playlistId: String? = null,
     val playlistName: String? = null,
-    val source: String = "upload",
+    val source: String = "manual",
     val track: LocalTrack? = null,
     val index: Int = 0,
     val count: Int = 0,

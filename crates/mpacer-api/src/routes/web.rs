@@ -10,6 +10,7 @@ use crate::models::{
     MusicPlaylistInput, MusicTrackInput, Race, RaceInput, RaceTask, SpotifyAccount, User,
 };
 use crate::state::AppState;
+use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
@@ -26,6 +27,34 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(dashboard))
         .route("/stats", get(stats_page))
+        // Tableaux de bord : ecrans composes par l'utilisateur (docs/08).
+        .route("/dashboards", get(dashboards_page))
+        .route(
+            "/dashboards/nouveau",
+            get(dashboard_new_page).post(dashboard_create),
+        )
+        .route("/dashboards/{id}", get(dashboard_page))
+        .route(
+            "/dashboards/{id}/modifier",
+            get(dashboard_edit_page).post(dashboard_rename),
+        )
+        .route("/dashboards/{id}/supprimer", post(dashboard_delete))
+        .route(
+            "/dashboards/{id}/widgets/ajouter",
+            post(dashboard_widget_add),
+        )
+        .route(
+            "/dashboards/{id}/widgets/{widget}/retirer",
+            post(dashboard_widget_remove),
+        )
+        .route(
+            "/dashboards/{id}/widgets/{widget}/monter",
+            post(dashboard_widget_move_up),
+        )
+        .route(
+            "/dashboards/{id}/widgets/{widget}/descendre",
+            post(dashboard_widget_move_down),
+        )
         .route("/login", get(login_page))
         .route("/auth/google/start", get(google_start))
         .route("/auth/google/callback", get(google_callback))
@@ -38,10 +67,22 @@ pub fn router() -> Router<AppState> {
         .route("/workouts/{id}", get(workout_page))
         .route("/workouts/{id}/gpx", get(workout_gpx))
         .route("/workouts/{id}/delete", post(delete_workout))
+        .route("/workouts/{id}/comment", post(workout_comment))
         .route("/courses", get(races_page))
         .route("/courses/planning", get(planning_page))
         .route("/courses/nouvelle", get(race_new_page).post(race_create))
+        // Import d'une ancienne course (export Strava/Garmin) : la route fixe
+        // elle-meme le plafond du corps, sans elargir le reste du service.
+        .route(
+            "/courses/importer",
+            get(race_import_page)
+                .post(race_import_submit)
+                .layer(DefaultBodyLimit::max(
+                    mpacer_core::race_import::MAX_IMPORT_BYTES,
+                )),
+        )
         .route("/courses/{id}", get(race_page))
+        .route("/courses/{id}/trace.gpx", get(race_track_gpx))
         .route(
             "/courses/{id}/modifier",
             get(race_edit_page).post(race_update),
@@ -53,26 +94,18 @@ pub fn router() -> Router<AppState> {
             "/courses/{id}/suivi/{task}/supprimer",
             post(race_task_delete),
         )
-        // Musique : page unique a quatre blocs (docs/07 section 7.1).
+        // Musique : metadonnees seulement, le transfert audio passe par USB
+        // (outil local mpacer-music et manifeste de transfert).
         .route("/music", get(music_page))
         .route("/music/search", get(music_search))
         .route("/auth/spotify", get(spotify_start))
         .route("/auth/spotify/callback", get(spotify_callback))
         .route("/music/spotify/disconnect", post(spotify_disconnect))
         .route("/music/import", post(music_import))
-        // Le corps multipart peut depasser la limite par defaut (2 Mo) : la
-        // route fixe elle-meme son plafond, sans elargir le reste du service.
-        .route(
-            "/music/upload",
-            post(music_upload).layer(DefaultBodyLimit::max(
-                crate::models::MAX_UPLOAD_BYTES as usize,
-            )),
-        )
+        .route("/music/playlists/{id}/manifest", get(music_manifest))
         .route("/music/playlists/{id}/track-bpm", post(music_track_bpm))
         .route("/music/playlists/{id}/target", post(music_target))
         .route("/music/playlists/{id}/delete", post(music_delete))
-        .route("/music/prepare", post(music_prepare_create))
-        .route("/music/prepare/cancel", post(music_prepare_cancel))
         .route("/static/app.css", get(stylesheet))
         .route("/static/app.js", get(script))
 }
@@ -136,6 +169,7 @@ async fn dashboard(
             .await?;
     let last_page = ((total_workouts + PAGE_SIZE - 1) / PAGE_SIZE).max(1) as u32;
     let stats = crate::db::stats(&state.pool, &user.id, 30, state.now_ms()).await?;
+    let user_dashboards = crate::db::list_dashboards(&state.pool, &user.id).await?;
     let tokens = crate::db::list_tokens(&state.pool, &user.id).await?;
     let active_tokens = tokens
         .iter()
@@ -146,6 +180,16 @@ async fn dashboard(
         section class="hero" {
             h1 { "Vos seances" }
             p class="muted" { "Synchronisees depuis la montre, stockees chez vous." }
+            div class="actions" {
+                @for dashboard in &user_dashboards {
+                    a class="button ghost small" href={ "/dashboards/" (dashboard.id) } {
+                        span class="icon icon-grid" {} (dashboard.name)
+                    }
+                }
+                a class="button ghost small" href="/dashboards/nouveau" {
+                    span class="icon icon-plus" {} "Nouveau tableau de bord"
+                }
+            }
         }
         section class="cards" {
             div class="card" {
@@ -197,6 +241,9 @@ async fn dashboard(
                                 div class="row-sub" {
                                     (format_duration(workout.duration_s)) " - "
                                     (format_pace(Some(workout.average_pace_s_per_km))) " /km"
+                                }
+                                @if let Some(comment) = &workout.comment {
+                                    div class="row-sub row-comment" { (comment) }
                                 }
                             }
                             span class="row-value" { (format_distance(workout.distance_m, units_of(&workout.unit_system))) }
@@ -330,7 +377,7 @@ async fn stats_page(
 }
 
 /// Histogramme SVG du volume hebdomadaire (aucune librairie de graphiques).
-fn weekly_chart(weeks: &[crate::db::WeekTotal]) -> Markup {
+pub(crate) fn weekly_chart(weeks: &[crate::db::WeekTotal]) -> Markup {
     let max_distance = weeks
         .iter()
         .map(|week| week.distance_m)
@@ -362,6 +409,468 @@ fn weekly_chart(weeks: &[crate::db::WeekTotal]) -> Markup {
             }
         }
     }
+}
+
+// ------------------------------------------------------------ tableaux de bord
+//
+// Un tableau de bord est une liste ordonnee de widgets (docs/08). Le catalogue
+// des widgets et leur rendu vivent dans `crate::dashboards` : ici, on lit le
+// formulaire, on persiste et on redirige.
+
+use crate::dashboards::WidgetKind;
+
+/// Formulaire de creation : nom, gabarit eventuel et widgets coches.
+///
+/// Les cases a cocher portent toutes le meme nom : le corps est donc relu comme
+/// une suite de paires (cle, valeur), seul moyen de conserver les repetitions,
+/// et donc l'ordre dans lequel le coureur a coche ses widgets.
+#[derive(Debug, Deserialize)]
+#[serde(transparent)]
+struct DashboardForm(Vec<(String, String)>);
+
+impl DashboardForm {
+    /// Champs utiles, dans l'ordre du formulaire.
+    fn fields(&self) -> (String, Option<String>, Vec<String>) {
+        let mut name = String::new();
+        let mut template = None;
+        let mut widgets = Vec::new();
+        for (key, value) in &self.0 {
+            match key.as_str() {
+                "name" => name = value.clone(),
+                "template" => {
+                    if !value.trim().is_empty() {
+                        template = Some(value.clone());
+                    }
+                }
+                "widgets" => widgets.extend(
+                    value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|item| !item.is_empty())
+                        .map(str::to_string),
+                ),
+                _ => {}
+            }
+        }
+        (name, template, widgets)
+    }
+}
+
+/// Formulaire de renommage.
+#[derive(Debug, Deserialize)]
+struct DashboardRenameForm {
+    #[serde(default)]
+    name: String,
+}
+
+/// Formulaire d'ajout d'un widget.
+#[derive(Debug, Deserialize)]
+struct WidgetAddForm {
+    #[serde(default)]
+    kind: String,
+}
+
+/// Cases a cocher des widgets disponibles.
+fn widget_picker(selected: &[WidgetKind]) -> Markup {
+    html! {
+        fieldset class="widget-picker" {
+            legend { "Widgets a afficher" }
+            @for kind in WidgetKind::ALL {
+                label class="check" {
+                    input type="checkbox" name="widgets" value=(kind.key())
+                          checked[selected.contains(&kind)] {}
+                    span class="check-label" {
+                        span class={ "icon " (kind.icon()) } {}
+                        span { (kind.label()) }
+                    }
+                    small { (kind.description()) }
+                }
+            }
+        }
+    }
+}
+
+/// Choix d'un gabarit pret a l'emploi. Le gabarit coche les cases correspondantes
+/// cote navigateur ; sans JavaScript, le serveur l'applique si rien n'est coche.
+fn template_picker() -> Markup {
+    html! {
+        div class="template-picker" {
+            label for="template" { "Partir d'un modele" }
+            select id="template" name="template" data-widget-target="widgets" {
+                option value="" { "Choisir moi-meme" }
+                @for template in crate::dashboards::TEMPLATES {
+                    @let keys = crate::dashboards::keys_of(template.widgets).join(",");
+                    option value=(template.key) data-widgets=(keys) { (template.name) }
+                }
+            }
+            ul class="template-notes" {
+                @for template in crate::dashboards::TEMPLATES {
+                    li { strong { (template.name) } " - " (template.description) }
+                }
+            }
+        }
+    }
+}
+
+async fn dashboards_page(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let dashboards = crate::db::list_dashboards(&state.pool, &user.id).await?;
+    let counts = crate::db::dashboard_widget_counts(&state.pool, &user.id).await?;
+
+    let content = html! {
+        section class="hero" {
+            h1 { "Tableaux de bord" }
+            p class="muted" {
+                "Composez vos ecrans : allure, carte, tours, meilleures distances, cardio, historique."
+            }
+            div class="actions" {
+                a class="button" href="/dashboards/nouveau" {
+                    span class="icon icon-plus" {} "Nouveau tableau de bord"
+                }
+            }
+        }
+        @if dashboards.is_empty() {
+            div class="empty" {
+                span class="icon icon-grid" {}
+                p { "Aucun tableau de bord pour l'instant." }
+                p class="tiny" {
+                    "Creez-en un depuis un modele : Pace Control, analyse de seance ou historique."
+                }
+            }
+        } @else {
+            div class="list" {
+                @for dashboard in &dashboards {
+                    @let widget_count = counts
+                        .iter()
+                        .find(|(id, _)| id == &dashboard.id)
+                        .map(|(_, count)| *count)
+                        .unwrap_or(0);
+                    a class="row" href={ "/dashboards/" (dashboard.id) } {
+                        div class="row-main" {
+                            div class="row-title" { (dashboard.name) }
+                            div class="row-sub" {
+                                (widget_count) " widget" @if widget_count > 1 { "s" }
+                                " - modifie le " (format_date(dashboard.updated_at_ms))
+                            }
+                        }
+                        span class="icon icon-chevron chev" {}
+                    }
+                }
+            }
+        }
+    };
+    Ok(page(layout(
+        "Tableaux de bord",
+        "dashboards",
+        Some(&user),
+        content,
+    )))
+}
+
+async fn dashboard_new_page(OptionalUser(user): OptionalUser) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let content = html! {
+        section class="hero" {
+            h1 { "Nouveau tableau de bord" }
+            p class="muted" { "Un nom, des widgets, et l'ordre que vous voulez." }
+        }
+        section class="panel" {
+            form method="post" action="/dashboards/nouveau" {
+                (template_picker())
+                label for="name" { "Nom du tableau de bord" }
+                input id="name" name="name" maxlength="80" required placeholder="Pace Control" {}
+                (widget_picker(&[]))
+                div class="actions" {
+                    button type="submit" { "Creer" }
+                    a class="button ghost" href="/dashboards" { "Annuler" }
+                }
+            }
+        }
+    };
+    Ok(page(layout(
+        "Nouveau tableau de bord",
+        "dashboards",
+        Some(&user),
+        content,
+    )))
+}
+
+async fn dashboard_create(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Form(form): Form<DashboardForm>,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let (raw_name, raw_template, widget_keys) = form.fields();
+    let name = crate::models::clean_dashboard_name(&raw_name)
+        .ok_or_else(|| AppError::bad_request("donnez un nom au tableau de bord"))?;
+    let mut kinds = crate::dashboards::normalize(&widget_keys);
+    if kinds.is_empty() {
+        if let Some(template) = raw_template
+            .as_deref()
+            .and_then(crate::dashboards::template)
+        {
+            kinds = template.widgets.to_vec();
+        }
+    }
+    let dashboard = crate::db::insert_dashboard(
+        &state.pool,
+        &user.id,
+        &name,
+        &crate::dashboards::keys_of(&kinds),
+        state.now_ms(),
+    )
+    .await?;
+    // Un tableau vide s'ouvre directement sur l'edition : il n'y a rien a voir.
+    let target = if kinds.is_empty() {
+        format!("/dashboards/{}/modifier", dashboard.id)
+    } else {
+        format!("/dashboards/{}", dashboard.id)
+    };
+    Ok(Redirect::to(&target).into_response())
+}
+
+async fn dashboard_page(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let dashboard = crate::db::get_dashboard(&state.pool, &user.id, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let widgets = crate::db::list_dashboard_widgets(&state.pool, &user.id, &dashboard.id).await?;
+    let kinds: Vec<WidgetKind> = widgets
+        .iter()
+        .filter_map(|widget| WidgetKind::from_key(&widget.kind))
+        .collect();
+    let data = crate::dashboards::load(&state, &user, &kinds).await?;
+
+    let content = html! {
+        section class="hero" {
+            h1 { (dashboard.name) }
+            p class="muted" {
+                @if let Some(workout) = &data.workout {
+                    "Derniere seance : " (format_date(workout.started_at_ms))
+                } @else {
+                    "Aucune seance synchronisee pour l'instant."
+                }
+            }
+            div class="actions" {
+                a class="button ghost" href={ "/dashboards/" (dashboard.id) "/modifier" } {
+                    span class="icon icon-settings" {} "Modifier"
+                }
+                form method="post" action={ "/dashboards/" (dashboard.id) "/supprimer" }
+                     data-confirm="Supprimer ce tableau de bord ?" {
+                    button class="ghost danger" type="submit" { "Supprimer" }
+                }
+            }
+        }
+        (crate::dashboards::render_widgets(&widgets, &data))
+    };
+    Ok(page(layout(
+        &dashboard.name,
+        "dashboards",
+        Some(&user),
+        content,
+    )))
+}
+
+async fn dashboard_edit_page(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let dashboard = crate::db::get_dashboard(&state.pool, &user.id, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let widgets = crate::db::list_dashboard_widgets(&state.pool, &user.id, &dashboard.id).await?;
+
+    let content = html! {
+        section class="hero" {
+            h1 { "Modifier " (dashboard.name) }
+            p class="muted" { "Renommez, ajoutez, retirez et ordonnez les widgets." }
+            div class="actions" {
+                a class="button ghost" href={ "/dashboards/" (dashboard.id) } { "Voir le tableau" }
+            }
+        }
+        section class="panel" {
+            form method="post" action={ "/dashboards/" (dashboard.id) "/modifier" } {
+                label for="name" { "Nom" }
+                input id="name" name="name" maxlength="80" required value=(dashboard.name) {}
+                div class="actions" { button type="submit" { "Renommer" } }
+            }
+        }
+        section class="panel" {
+            div class="section-head" {
+                h2 { "Widgets" }
+                span class="muted" { (widgets.len()) " en place" }
+            }
+            @if widgets.is_empty() {
+                p class="muted" { "Aucun widget : choisissez-en un ci-dessous." }
+            } @else {
+                ol class="widget-list" {
+                    @for (index, widget) in widgets.iter().enumerate() {
+                        @let kind = WidgetKind::from_key(&widget.kind);
+                        @let icon = kind.map(|kind| kind.icon()).unwrap_or("icon-grid");
+                        @let label = kind.map(|kind| kind.label()).unwrap_or("Widget inconnu");
+                        li class="widget-row" {
+                            span class="widget-name" {
+                                span class={ "icon " (icon) } {}
+                                (label)
+                            }
+                            div class="widget-actions" {
+                                @if index > 0 {
+                                    form method="post"
+                                         action={ "/dashboards/" (dashboard.id) "/widgets/" (widget.id) "/monter" } {
+                                        button class="ghost small" type="submit" { "Monter" }
+                                    }
+                                }
+                                @if index + 1 < widgets.len() {
+                                    form method="post"
+                                         action={ "/dashboards/" (dashboard.id) "/widgets/" (widget.id) "/descendre" } {
+                                        button class="ghost small" type="submit" { "Descendre" }
+                                    }
+                                }
+                                form method="post"
+                                     action={ "/dashboards/" (dashboard.id) "/widgets/" (widget.id) "/retirer" } {
+                                    button class="ghost small danger" type="submit" { "Retirer" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            form class="widget-add" method="post"
+                 action={ "/dashboards/" (dashboard.id) "/widgets/ajouter" } {
+                label for="kind" { "Ajouter un widget" }
+                select id="kind" name="kind" {
+                    @for kind in WidgetKind::ALL {
+                        option value=(kind.key()) { (kind.label()) " - " (kind.description()) }
+                    }
+                }
+                button type="submit" { "Ajouter" }
+            }
+        }
+    };
+    Ok(page(layout(
+        "Modifier un tableau de bord",
+        "dashboards",
+        Some(&user),
+        content,
+    )))
+}
+
+async fn dashboard_rename(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Path(id): Path<String>,
+    Form(form): Form<DashboardRenameForm>,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let name = crate::models::clean_dashboard_name(&form.name)
+        .ok_or_else(|| AppError::bad_request("donnez un nom au tableau de bord"))?;
+    if !crate::db::rename_dashboard(&state.pool, &user.id, &id, &name, state.now_ms()).await? {
+        return Err(AppError::NotFound);
+    }
+    Ok(Redirect::to(&format!("/dashboards/{id}/modifier")).into_response())
+}
+
+async fn dashboard_delete(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    if !crate::db::delete_dashboard(&state.pool, &user.id, &id).await? {
+        return Err(AppError::NotFound);
+    }
+    Ok(Redirect::to("/dashboards").into_response())
+}
+
+async fn dashboard_widget_add(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Path(id): Path<String>,
+    Form(form): Form<WidgetAddForm>,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let Some(kind) = WidgetKind::from_key(form.kind.trim()) else {
+        return Err(AppError::bad_request("widget inconnu"));
+    };
+    crate::db::add_dashboard_widget(&state.pool, &user.id, &id, kind.key(), state.now_ms())
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(Redirect::to(&format!("/dashboards/{id}/modifier")).into_response())
+}
+
+async fn dashboard_widget_remove(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Path((id, widget)): Path<(String, String)>,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    if !crate::db::remove_dashboard_widget(&state.pool, &user.id, &id, &widget, state.now_ms())
+        .await?
+    {
+        return Err(AppError::NotFound);
+    }
+    Ok(Redirect::to(&format!("/dashboards/{id}/modifier")).into_response())
+}
+
+async fn dashboard_widget_move_up(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Path((id, widget)): Path<(String, String)>,
+) -> AppResult<Response> {
+    dashboard_widget_move(state, user, id, widget, true).await
+}
+
+async fn dashboard_widget_move_down(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Path((id, widget)): Path<(String, String)>,
+) -> AppResult<Response> {
+    dashboard_widget_move(state, user, id, widget, false).await
+}
+
+/// Deplace un widget d'un cran. Un deplacement impossible (deja en tete ou en
+/// queue) ramene simplement a l'edition : ce n'est pas une erreur.
+async fn dashboard_widget_move(
+    state: AppState,
+    user: Option<User>,
+    id: String,
+    widget: String,
+    up: bool,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    crate::db::move_dashboard_widget(&state.pool, &user.id, &id, &widget, up, state.now_ms())
+        .await?;
+    Ok(Redirect::to(&format!("/dashboards/{id}/modifier")).into_response())
 }
 
 // ------------------------------------------------------------------ connexion
@@ -712,6 +1221,13 @@ async fn workout_page(
         .as_ref()
         .map(|summary| mpacer_core::analysis::elevation_gain_m(&summary.track))
         .unwrap_or(0.0);
+    // Allure ajustee a la pente : seulement si la montre a enregistre l'altitude.
+    let gap = summary
+        .as_ref()
+        .and_then(mpacer_core::analysis::grade_adjusted);
+    let has_gap = split_list
+        .iter()
+        .any(|split| split.gap_pace_s_per_km.is_some());
     let plan = summary.as_ref().and_then(|summary| summary.plan);
 
     let content = html! {
@@ -730,6 +1246,26 @@ async fn workout_page(
                 }
             }
         }
+        section class="panel" {
+            div class="section-head" {
+                h2 { "Commentaire de course" }
+                @if workout.comment.is_some() {
+                    span class="pill on" { "enregistre" }
+                }
+            }
+            // Le commentaire est un champ a part du resume envoye par la montre :
+            // une nouvelle synchronisation de la seance ne l'efface pas.
+            form method="post" action={ "/workouts/" (workout.id) "/comment" } {
+                label for="comment" { "Sensations, meteo, parcours, materiel" }
+                textarea id="comment" name="comment" rows="4" maxlength="2000"
+                    placeholder="Ce qu'il faut retenir de cette seance." {
+                    (workout.comment.clone().unwrap_or_default())
+                }
+                div class="actions" {
+                    button type="submit" { "Enregistrer le commentaire" }
+                }
+            }
+        }
         @if let Some(summary) = &summary {
             // -------------------------------------------- en-tete de resume
             section class="mini-cards" {
@@ -737,6 +1273,9 @@ async fn workout_page(
                 (mini_card("Temps en mouvement", &format_duration(summary.duration_s)))
                 (mini_card("Temps ecoule", &format_duration(elapsed_total_s)))
                 (mini_card("Allure moyenne", &format!("{} /{}", format_pace(summary.average_pace(units)), units.label())))
+                @if let Some(gap) = &gap {
+                    (mini_card("Allure ajustee (GAP)", &format!("{} /{}", format_pace(Some(gap.pace_s_per_km)), units.label())))
+                }
                 @if let Some(heart) = &heart {
                     (mini_card("FC moyenne", &format!("{:.0} bpm", heart.average_bpm)))
                     (mini_card("FC max", &format!("{} bpm", heart.max_bpm)))
@@ -815,6 +1354,8 @@ async fn workout_page(
                                 th { "Ecart" }
                                 @if heart.is_some() { th { "FC" } }
                                 @if elevation_gain > 0.5 { th { "D+" } }
+                                @if has_gap { th { "GAP" } }
+                                @if has_gap { th { "Pente" } }
                                 @if plan.is_some() { th { "Plan" } }
                             }
                         }
@@ -841,6 +1382,22 @@ async fn workout_page(
                                     }
                                     @if elevation_gain > 0.5 {
                                         td { (format!("{:.0} m", split.elevation_gain_m)) }
+                                    }
+                                    @if has_gap {
+                                        td {
+                                            @match split.gap_pace_s_per_km {
+                                                Some(pace) => (format_pace(Some(pace))),
+                                                None => "-",
+                                            }
+                                        }
+                                    }
+                                    @if has_gap {
+                                        td {
+                                            @match split.grade_percent {
+                                                Some(grade) => (format!("{:+.1} %", grade * 100.0)),
+                                                None => "-",
+                                            }
+                                        }
                                     }
                                     @if plan.is_some() {
                                         td {
@@ -950,6 +1507,27 @@ async fn delete_workout(
     Ok(Redirect::to("/").into_response())
 }
 
+#[derive(Debug, Deserialize)]
+struct WorkoutCommentForm {
+    #[serde(default)]
+    comment: String,
+}
+
+/// Enregistre le commentaire d'une seance (texte vide pour l'effacer).
+async fn workout_comment(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Form(form): Form<WorkoutCommentForm>,
+) -> AppResult<Response> {
+    let comment = crate::models::clean_comment(&form.comment);
+    if !crate::db::set_workout_comment(&state.pool, &user.id, &id, comment.as_deref()).await? {
+        return Err(AppError::NotFound);
+    }
+    tracing::info!(user = %user.email, seance = %id, "commentaire de seance enregistre");
+    Ok(Redirect::to(&format!("/workouts/{id}")).into_response())
+}
+
 /// Telechargement GPX depuis le navigateur (session, pas de jeton a copier).
 async fn workout_gpx(
     State(state): State<AppState>,
@@ -1008,15 +1586,55 @@ fn page(markup: Markup) -> Response {
 }
 
 /// Sections de navigation : cle interne, libelle, icone, chemin.
-const NAV: [(&str, &str, &str, &str); 7] = [
+///
+/// L'appairage et les jetons n'y figurent plus : ce sont des reglages, pas des
+/// ecrans de consultation. Ils vivent dans le menu unique `settings_menu`.
+const NAV: [(&str, &str, &str, &str); 6] = [
     ("seances", "Seances", "icon-activity", "/"),
+    ("dashboards", "Tableaux", "icon-grid", "/dashboards"),
     ("courses", "Courses", "icon-route", "/courses"),
     ("planning", "Planning", "icon-clock", "/courses/planning"),
     ("stats", "Statistiques", "icon-stats", "/stats"),
     ("music", "Musique", "icon-music", "/music"),
+];
+
+/// Entrees du menu des reglages : cle interne, libelle, icone, chemin.
+const SETTINGS_NAV: [(&str, &str, &str, &str); 2] = [
     ("link", "Appairer", "icon-watch", "/link"),
     ("settings", "Jetons", "icon-key", "/settings"),
 ];
+
+/// Menu des reglages : appairage, jetons et deconnexion derriere une seule
+/// entree. Un `details` natif fonctionne sans JavaScript ; le script ne fait
+/// que refermer le menu quand on clique ailleurs.
+fn settings_menu(active: &str) -> Markup {
+    let open = SETTINGS_NAV.iter().any(|(cle, ..)| *cle == active);
+    html! {
+        details class="menu" {
+            summary class=(if open { "active" } else { "" }) {
+                span class="icon icon-settings" {}
+                span { "Reglages" }
+            }
+            div class="menu-panel" {
+                @for (cle, libelle, icone, chemin) in SETTINGS_NAV {
+                    a class="menu-item" href=(chemin) {
+                        span class={ "icon " (icone) } {}
+                        span { (libelle) }
+                        @if cle == active {
+                            span class="menu-current muted" { "actuel" }
+                        }
+                    }
+                }
+                form method="post" action="/logout" {
+                    button class="menu-item danger" type="submit" {
+                        span class="icon icon-logout" {}
+                        span { "Deconnexion" }
+                    }
+                }
+            }
+        }
+    }
+}
 
 fn layout(title: &str, active: &str, user: Option<&User>, content: Markup) -> Markup {
     html! {
@@ -1048,12 +1666,6 @@ fn layout(title: &str, active: &str, user: Option<&User>, content: Markup) -> Ma
                                     (libelle)
                                 }
                             }
-                            form method="post" action="/logout" {
-                                button class="ghost" type="submit" {
-                                    span class="icon icon-logout" {}
-                                    "Deconnexion"
-                                }
-                            }
                         } @else {
                             a href="/login" { "Connexion" }
                         }
@@ -1065,6 +1677,9 @@ fn layout(title: &str, active: &str, user: Option<&User>, content: Markup) -> Ma
                             img class="avatar" src="/avatar" alt="" width="32" height="32" decoding="async";
                             span class="who" { (user.name.clone().unwrap_or_else(|| user.email.clone())) }
                         }
+                        // Hors du `nav` : les reglages restent accessibles sur
+                        // telephone, ou la navigation par onglets prend le relais.
+                        (settings_menu(active))
                     }
                 }
                 main { (content) }
@@ -1101,7 +1716,7 @@ const CHART_LEFT: f64 = 64.0;
 const CHART_RIGHT: f64 = 14.0;
 
 /// Petite carte de statistique (en-tete de resume).
-fn mini_card(label: &str, value: &str) -> Markup {
+pub(crate) fn mini_card(label: &str, value: &str) -> Markup {
     html! {
         div class="mini-card" {
             span class="card-label" { (label) }
@@ -1160,7 +1775,7 @@ fn band_points(
 }
 
 /// Attribut "points" d'une polyligne SVG.
-fn polyline_points(points: &[(f64, f64)]) -> String {
+pub(crate) fn polyline_points(points: &[(f64, f64)]) -> String {
     points
         .iter()
         .map(|(x, y)| format!("{x:.1},{y:.1}"))
@@ -1434,12 +2049,12 @@ fn pace_of(time_s: f64, distance_m: f64, units: UnitSystem) -> Option<f64> {
     Some(seconds_per_meter * units.meters_per_unit())
 }
 
-fn format_distance(meters: f64, units: UnitSystem) -> String {
+pub(crate) fn format_distance(meters: f64, units: UnitSystem) -> String {
     units.format_distance(meters)
 }
 
 /// Systeme d'unites stocke en base ("Metric" / "Imperial").
-fn units_of(value: &str) -> UnitSystem {
+pub(crate) fn units_of(value: &str) -> UnitSystem {
     match value {
         "Imperial" | "imperial" => UnitSystem::Imperial,
         _ => UnitSystem::Metric,
@@ -1447,7 +2062,7 @@ fn units_of(value: &str) -> UnitSystem {
 }
 
 /// Date lisible en francais, a partir d'un horodatage UNIX (ms).
-fn format_date(timestamp_ms: i64) -> String {
+pub(crate) fn format_date(timestamp_ms: i64) -> String {
     match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
         Some(datetime) => datetime
             .with_timezone(&chrono::Local)
@@ -2103,13 +2718,18 @@ async fn races_page(
                 h2 { "Cartes des courses" }
                 div class="actions" {
                     a class="button ghost" href="/courses/planning" { "Planning" }
+                    a class="button ghost" href="/courses/importer" {
+                        span class="icon icon-export" {}
+                        "Importer une course"
+                    }
                     a class="button" href="/courses/nouvelle" { "Ajouter une course" }
                 }
             }
             @if cards.is_empty() {
                 p class="muted" {
                     "Aucune course enregistree. Ajoutez votre prochaine course pour suivre son dossard, "
-                    "son horaire, son lieu de depart, son live et votre hebergement."
+                    "son horaire, son lieu de depart, son live et votre hebergement, ou importez une "
+                    "ancienne course depuis un export Strava ou Garmin."
                 }
             } @else {
                 div class="race-grid" {
@@ -2128,7 +2748,13 @@ async fn races_page(
                         @for race in &past {
                             tr {
                                 td { (race.start_at_ms.map(format_datetime_short).unwrap_or_else(|| "-".into())) }
-                                td { (race.name) }
+                                td {
+                                    (race.name)
+                                    @if race.is_reference {
+                                        " "
+                                        span class="pill brand" { "Reference" }
+                                    }
+                                }
                                 td {
                                     @match race.distance_m {
                                         Some(distance) => (format_distance(distance, UnitSystem::Metric)),
@@ -2381,10 +3007,127 @@ async fn race_delete(
     Ok(Redirect::to("/courses").into_response())
 }
 
+/// Page d'import d'une ancienne course (export Strava ou Garmin).
+async fn race_import_page(OptionalUser(user): OptionalUser) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    Ok(race_import_response(&user, None, StatusCode::OK))
+}
+
+/// Formulaire d'import, avec le message d'erreur eventuel.
+fn race_import_response(user: &User, error: Option<&str>, status: StatusCode) -> Response {
+    let content = html! {
+        section class="hero" {
+            h1 { "Importer une ancienne course" }
+            p class="muted" {
+                "Deposez un export Strava ou Garmin (GPX ou TCX) : la course rejoint "
+                "\"deja courues\" avec sa date, sa distance, ses temps et son denivele. "
+                "Elle sert ensuite de course de reference."
+            }
+        }
+        section class="panel form" {
+            @if let Some(error) = error {
+                p class="alert" { (error) }
+            }
+            form method="post" action="/courses/importer" enctype="multipart/form-data" {
+                label for="file" { "Fichier exporte (GPX ou TCX)" }
+                input type="file" id="file" name="file" accept=".gpx,.tcx,application/gpx+xml,application/xml" required;
+                p class="muted tiny" {
+                    "Strava : ouvrez la course, puis \"Exporter le GPX\". "
+                    "Garmin Connect : \"Exporter au format GPX\" ou \"TCX\"."
+                }
+                div class="actions" {
+                    button type="submit" { "Importer la course" }
+                    a class="button ghost" href="/courses" { "Annuler" }
+                }
+            }
+        }
+        section class="panel" {
+            h2 { "Ce qui est repris du fichier" }
+            ul class="muted tiny" {
+                li { "Le nom de la trace, sinon le nom du fichier." }
+                li { "La date et l'heure de depart." }
+                li { "La distance, le temps en mouvement, le temps ecoule et le denivele positif." }
+                li { "La trace, reexportable en GPX depuis la fiche." }
+            }
+            p class="muted tiny" {
+                "Le reste de la fiche reste vide : dossard, notes et objectif se "
+                "completent a la main, comme pour toute course."
+            }
+        }
+    };
+    (
+        status,
+        page(layout(
+            "Importer une course",
+            "courses",
+            Some(user),
+            content,
+        )),
+    )
+        .into_response()
+}
+
+/// Traite le fichier depose et cree la course de reference.
+///
+/// Une erreur revient sur la page avec son message : c'est un formulaire de
+/// navigateur, pas un appel d'API.
+async fn race_import_submit(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    multipart: Multipart,
+) -> AppResult<Response> {
+    let imported = async {
+        let (filename, bytes) = crate::race_import::collect_race_file(multipart).await?;
+        crate::race_import::import_uploaded_race(&state, &user.id, &filename, &bytes).await
+    }
+    .await;
+    match imported {
+        Ok(race) => {
+            tracing::info!(user = %user.email, race = %race.id, "course importee depuis le navigateur");
+            Ok(Redirect::to(&format!("/courses/{}?ok=course_importee", race.id)).into_response())
+        }
+        Err(error) => Ok(race_import_response(
+            &user,
+            Some(&error.to_string()),
+            error.status(),
+        )),
+    }
+}
+
+/// Trace GPX conservee d'une course importee.
+async fn race_track_gpx(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let Some((gpx, _points)) = crate::db::get_race_track(&state.pool, &user.id, &id).await? else {
+        return Err(AppError::NotFound);
+    };
+    Response::builder()
+        .header(header::CONTENT_TYPE, "application/gpx+xml; charset=utf-8")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{id}.gpx\""),
+        )
+        .body(Body::from(gpx))
+        .map_err(|error| AppError::internal(error.to_string()))
+}
+
+/// Parametres de la fiche d'une course.
+#[derive(Debug, Deserialize)]
+struct RaceQuery {
+    /// Code de succes renvoye par un import.
+    #[serde(default)]
+    ok: Option<String>,
+}
+
 async fn race_page(
     State(state): State<AppState>,
     OptionalUser(user): OptionalUser,
     Path(id): Path<String>,
+    Query(query): Query<RaceQuery>,
 ) -> AppResult<Response> {
     let Some(user) = user else {
         return Ok(Redirect::to("/login").into_response());
@@ -2407,10 +3150,39 @@ async fn race_page(
     let check_out_line = race.hotel_check_out_ms.map(format_datetime_short);
     let map = map_url(&race);
 
+    // Course de reference : origine et mesures viennent de l'export importe.
+    let source = race
+        .source
+        .as_deref()
+        .and_then(mpacer_core::race_import::ImportSource::from_code);
+    let track = if source.is_some() {
+        crate::db::get_race_track(&state.pool, &user.id, &race.id).await?
+    } else {
+        None
+    };
+    let track_line = track.as_ref().map(|(_, points)| format!("{points} points"));
+    let moving_line = race.moving_time_s.map(mpacer_core::units::format_duration);
+    let elapsed_line = race.elapsed_time_s.map(mpacer_core::units::format_duration);
+    let pace_line = match (race.moving_time_s, race.distance_m) {
+        (Some(moving_s), Some(distance_m)) if moving_s > 0.0 && distance_m > 0.0 => Some(format!(
+            "{} /km",
+            format_pace(Some(moving_s / (distance_m / 1000.0)))
+        )),
+        _ => None,
+    };
+    let gain_line = race
+        .elevation_gain_m
+        .filter(|gain| *gain > 0.5)
+        .map(|gain| format!("{gain:.0} m"));
+    let imported_ok = query.ok.as_deref() == Some("course_importee");
+
     let content = html! {
         section class="hero" {
             div class="race-title" {
                 h1 { (race.name) }
+                @if race.is_reference {
+                    span class="pill brand" { "Course de reference" }
+                }
                 span class="countdown" data-at=(race.start_at_ms.unwrap_or(0)) {
                     span class="dot" {}
                     (countdown_label(race.start_at_ms, now))
@@ -2425,6 +3197,34 @@ async fn race_page(
                 form method="post" action={ "/courses/" (race.id) "/supprimer" }
                      data-confirm="Supprimer definitivement cette course et son suivi ?" {
                     button class="ghost danger" type="submit" { "Supprimer" }
+                }
+            }
+        }
+        @if imported_ok {
+            p class="alert ok" {
+                "Course importee : elle est enregistree avec vos courses deja courues, "
+                "comme course de reference."
+            }
+        }
+        @if let Some(source) = source {
+            section class="panel" {
+                div class="section-head" {
+                    h2 { "Course de reference" }
+                    span class="pill brand" { (source.label()) }
+                }
+                (info_row("Origine du fichier", Some(source.label())))
+                (info_row("Temps en mouvement", moving_line.as_deref()))
+                (info_row("Temps ecoule", elapsed_line.as_deref()))
+                (info_row("Allure moyenne", pace_line.as_deref()))
+                (info_row("Denivele positif", gain_line.as_deref()))
+                (info_row("Trace conservee", track_line.as_deref()))
+                @if track.is_some() {
+                    div class="actions" {
+                        a class="button ghost" href={ "/courses/" (race.id) "/trace.gpx" } {
+                            span class="icon icon-export" {}
+                            "Telecharger le GPX"
+                        }
+                    }
                 }
             }
         }
@@ -2609,15 +3409,15 @@ async fn race_task_delete(
 
 // ------------------------------------------------------------------ musique
 //
-// La page /music reprend les quatre blocs de docs/07 section 7.1 :
-//   1. source de musique (Spotify et fichiers personnels) ;
-//   2. playlists preparees (source, titres, taille, BPM cible) ;
+// La page /music reprend les quatre blocs de docs/07 section 6.1 :
+//   1. source Spotify (facultatif) : connexion, recherche, import ;
+//   2. playlists preparees (source, titres, duree, BPM cible, manifeste) ;
 //   3. titres de la playlist selectionnee (tap-tempo ou saisie manuelle) ;
-//   4. preparation de la prochaine course (« Envoyer sur la montre »).
+//   4. transfert vers la montre par USB.
 //
-// « Envoyer sur la montre » ne pousse aucun octet depuis le navigateur : cela
-// cree un plan de telechargement que la montre recupere au prochain reveil,
-// exactement comme la montre est la source de verite pour les seances.
+// Le serveur ne stocke aucun audio : il publie les fiches et le manifeste de
+// transfert, que l'outil local `mpacer-music` consomme pour copier les fichiers
+// du disque de l'utilisateur sur la montre (adb push).
 
 /// Parametres de la page musique.
 #[derive(Debug, Deserialize)]
@@ -2637,14 +3437,12 @@ struct MusicQuery {
 /// Traduit un code d'erreur de la page musique en message lisible.
 fn music_error_message(code: &str) -> String {
     match code {
-        "spotify_non_configure" => "Spotify n'est pas configure sur ce service : renseignez MPACER_SPOTIFY_CLIENT_ID et MPACER_SPOTIFY_CLIENT_SECRET. Les fichiers personnels restent utilisables.".to_string(),
+        "spotify_non_configure" => "Spotify n'est pas configure sur ce service : renseignez MPACER_SPOTIFY_CLIENT_ID et MPACER_SPOTIFY_CLIENT_SECRET.".to_string(),
         "spotify_refuse" => "Spotify a refuse la demande (identifiants invalides, redirection non autorisee ou endpoint restreint).".to_string(),
         "spotify_ref_invalide" => "La reference de playlist Spotify est illisible : collez un lien open.spotify.com ou un identifiant.".to_string(),
         "spotify_non_connecte" => "Connectez votre compte Spotify avant d'importer une playlist.".to_string(),
         "playlist_inconnue" => "Cette playlist n'existe plus.".to_string(),
-        "upload_refuse" => "Le televersement a ete refuse : aucun fichier, format non reconnu ou ecriture impossible.".to_string(),
         "bpm_invalide" => "Le BPM doit etre un nombre entre 30 et 300.".to_string(),
-        "course_inconnue" => "La course choisie n'existe pas.".to_string(),
         other => format!("Operation impossible ({other})."),
     }
 }
@@ -2655,27 +3453,18 @@ fn music_ok_message(code: &str) -> String {
         "spotify_connecte" => "Compte Spotify connecte.".to_string(),
         "spotify_deconnecte" => "Compte Spotify deconnecte.".to_string(),
         "playlist_importee" => "Playlist Spotify importee.".to_string(),
-        "fichiers_importes" => "Fichiers ajoutes a la playlist.".to_string(),
         "bpm_enregistre" => "BPM enregistre.".to_string(),
-        "plan_envoye" => "Plan envoye : la montre le recuperera au prochain reveil.".to_string(),
-        "plan_annule" => "Plan de telechargement annule.".to_string(),
-        "playlist_supprimee" => "Playlist et fichiers supprimes.".to_string(),
+        "playlist_supprimee" => "Playlist supprimee.".to_string(),
         other => format!("Operation effectuee ({other})."),
     }
 }
 
-/// Taille lisible ("86 Mo", "1.2 Go").
-fn format_bytes(bytes: i64) -> String {
-    const MO: f64 = 1024.0 * 1024.0;
-    let mo = bytes.max(0) as f64 / MO;
-    if mo >= 1024.0 {
-        let go = mo / 1024.0;
-        format!("{go:.1} Go")
-    } else if mo >= 10.0 || bytes <= 0 {
-        format!("{mo:.0} Mo")
-    } else {
-        format!("{mo:.1} Mo")
-    }
+/// Commande de transfert montree dans le bloc 4 (exemple de dossier).
+///
+/// Seul le nom du manifeste compte : l'utilisateur remplace le dossier par le
+/// sien, celui ou sont ranges ses fichiers audio.
+fn transfer_command(manifest_name: &str) -> String {
+    format!("mpacer-music transfer --manifest {manifest_name} --folder \"D:\\Musique\\Course\"")
 }
 
 /// Jeton d'acces Spotify valide, rafraichi si necessaire.
@@ -2727,7 +3516,6 @@ async fn music_page(
     let Some(user) = user else {
         return Ok(Redirect::to("/login").into_response());
     };
-    let now = state.now_ms();
     let spotify_ready = state.config.spotify_configured();
     let account = crate::db::get_spotify_account(&state.pool, &user.id).await?;
     let playlists = crate::db::list_music_playlist_summaries(&state.pool, &user.id).await?;
@@ -2749,21 +3537,6 @@ async fn music_page(
     let selected_summary = selected_id
         .as_ref()
         .and_then(|id| playlists.iter().find(|playlist| &playlist.id == id));
-
-    let races = crate::db::list_upcoming_races(&state.pool, &user.id, now).await?;
-    let plan = crate::db::pending_music_plan(&state.pool, &user.id).await?;
-    let plan_playlist_name = plan.as_ref().and_then(|plan| {
-        playlists
-            .iter()
-            .find(|playlist| playlist.id == plan.playlist_id)
-            .map(|playlist| playlist.name.clone())
-    });
-    let plan_race_name = match plan.as_ref().and_then(|plan| plan.race_id.as_deref()) {
-        Some(race_id) => crate::db::get_race(&state.pool, &user.id, race_id)
-            .await?
-            .map(|race| race.name),
-        None => None,
-    };
 
     // Recherche Spotify : aucun appel reseau quand le service n'est pas configure.
     let mut search_results: Vec<crate::spotify::PlaylistRef> = Vec::new();
@@ -2801,17 +3574,20 @@ async fn music_page(
         .and_then(|playlist| playlist.target_bpm)
         .map(|bpm| format!("{bpm:.0}"))
         .unwrap_or_else(|| "auto".to_string());
-    let size_label = format_bytes(selected_summary.map_or(0, |playlist| playlist.total_bytes));
-    let state_label = if plan.is_some() {
-        "en attente de la montre"
-    } else {
-        "aucun plan en attente"
-    };
+    // Nom du manifeste et commande a recopier : c'est ce que l'utilisateur lance
+    // sur son ordinateur pour copier l'audio par USB.
+    let manifest_name = selected_playlist
+        .as_ref()
+        .map(|playlist| crate::models::manifest_file_name(&playlist.name));
+    let manifest_command = manifest_name.as_deref().map(transfer_command);
 
     let content = html! {
         section class="hero" {
             h1 { "Musique" }
-            p class="muted" { "Playlists de course, tempo (BPM) et preparation hors ligne sur la montre." }
+            p class="muted" {
+                "Playlists de course et tempo (BPM) : le serveur publie les fiches et le "
+                "manifeste de transfert, l'audio est copie sur la montre par USB."
+            }
         }
         @if let Some(erreur) = query.erreur.as_deref() {
             p class="alert" {
@@ -2826,8 +3602,8 @@ async fn music_page(
             }
         }
 
-        // ------------------------------------------------ 1. source de musique
-        div class="section-head" { h2 { "1. Source de musique" } }
+        // ------------------------------------------------ 1. source Spotify
+        div class="section-head" { h2 { "1. Source Spotify (facultatif)" } }
         div class="music-grid" {
             div class="panel" {
                 h3 { "Spotify" }
@@ -2841,7 +3617,7 @@ async fn music_page(
                     p class="muted" {
                         "Spotify n'est pas configure sur ce service : renseignez "
                         "MPACER_SPOTIFY_CLIENT_ID et MPACER_SPOTIFY_CLIENT_SECRET pour "
-                        "importer des playlists. Les fichiers personnels restent utilisables."
+                        "importer des playlists."
                     }
                 } @else if let Some(account) = &account {
                     p class="split" {
@@ -2852,7 +3628,7 @@ async fn music_page(
                     }
                     form method="get" action="/music/search" class="music-search" {
                         input type="text" name="q" value=(query.q.clone().unwrap_or_default()) placeholder="running";
-                        button type="submit" { "Rechercher" }
+                        button type="submit" { "Chercher" }
                     }
                     @if !search_results.is_empty() {
                         ul class="music-results" {
@@ -2876,24 +3652,13 @@ async fn music_page(
                     }
                 } @else {
                     p class="muted" {
-                        "Importez une playlist Spotify : seules les fiches (titres, durees, BPM) "
-                        "sont stockees ici, la musique reste dans l'application Spotify de la montre."
+                        "Importez une playlist Spotify : seules les metadonnees (titres, durees, "
+                        "BPM) sont stockees ici. L'audio est copie sur la montre par USB, depuis "
+                        "le dossier de votre ordinateur."
                     }
                     div class="actions" {
                         a class="button" href="/auth/spotify" { "Connecter Spotify" }
                     }
-                }
-            }
-            div class="panel" {
-                h3 { "Fichiers personnels" }
-                p class="muted" { "MP3, OGG, M4A : televerses sur le serveur puis telecharges par la montre." }
-                form method="post" action="/music/upload" enctype="multipart/form-data" {
-                    label for="playlist_name" { "Nom de playlist" }
-                    input type="text" id="playlist_name" name="playlist_name" placeholder="Ma course 10 km" required maxlength="200";
-                    label for="music_files" { "Choisir des fichiers MP3/OGG/M4A" }
-                    input type="file" id="music_files" name="files" multiple required
-                          accept=".mp3,.ogg,.oga,.opus,.m4a,.mp4,.flac,.wav,audio/*";
-                    button type="submit" { "Importer sur le serveur" }
                 }
             }
         }
@@ -2904,7 +3669,7 @@ async fn music_page(
             div class="empty" {
                 span class="icon icon-music" {}
                 p { "Aucune playlist pour l'instant." }
-                p class="tiny" { "Importez une playlist Spotify ou televersez vos fichiers." }
+                p class="tiny" { "Importez une playlist Spotify pour commencer." }
             }
         } @else {
             div class="table-wrap" {
@@ -2914,7 +3679,7 @@ async fn music_page(
                             th { "Playlist" }
                             th { "Source" }
                             th { "Titres" }
-                            th { "Taille" }
+                            th { "Duree" }
                             th { "BPM cible" }
                             th {}
                         }
@@ -2925,7 +3690,7 @@ async fn music_page(
                                 td { a href={ "/music?playlist=" (playlist.id) } { (playlist.name) } }
                                 td { span class="pill" { (playlist.source) } }
                                 td { (playlist.track_count) }
-                                td { (format_bytes(playlist.total_bytes)) }
+                                td { (format_duration(playlist.duration_s)) }
                                 td {
                                     form class="inline-form" method="post"
                                          action={ "/music/playlists/" (playlist.id) "/target" } {
@@ -2936,10 +3701,10 @@ async fn music_page(
                                 }
                                 td {
                                     div class="actions" {
-                                        a class="button small" href={ "/music?playlist=" (playlist.id) } { "Preparer" }
+                                        a class="button small ghost" href={ "/music/playlists/" (playlist.id) "/manifest" } { "Manifeste" }
                                         form method="post" action={ "/music/playlists/" (playlist.id) "/delete" }
-                                             data-confirm="Supprimer cette playlist et ses fichiers ?" {
-                                            button class="ghost danger small" type="submit" { "Supprimer" }
+                                             data-confirm="Supprimer cette playlist et ses metadonnees ?" {
+                                            button class="ghost danger small" type="submit" { "x" }
                                         }
                                     }
                                 }
@@ -3009,55 +3774,38 @@ async fn music_page(
             p class="muted" { "Selectionnez une playlist dans le bloc 2 pour saisir les BPM." }
         }
 
-        // ------------------------------------------------ 4. preparation de la course
-        div class="section-head" { h2 { "4. Preparation de la prochaine course" } }
-        div class="panel" {
-            form method="post" action="/music/prepare" class="music-plan" {
-                div class="grid-2" {
-                    div class="field" {
-                        label for="race_id" { "Course :" }
-                        select id="race_id" name="race_id" {
-                            option value="" { "Aucune course" }
-                            @for race in &races {
-                                option value=(race.id)
-                                    selected[plan.as_ref().and_then(|plan| plan.race_id.as_deref()) == Some(race.id.as_str())] {
-                                    (race.name)
-                                }
-                            }
+        // ------------------------------------------------ 4. transfert USB
+        div class="section-head" { h2 { "4. Transfert vers la montre (USB)" } }
+        @if let (Some(playlist), Some(name), Some(command)) =
+            (&selected_playlist, &manifest_name, &manifest_command)
+        {
+            div class="panel" {
+                ol class="usb-steps" {
+                    li {
+                        a class="button" href={ "/music/playlists/" (playlist.id) "/manifest" } {
+                            "Telecharger le manifeste"
                         }
+                        span class="muted" { " " (name) }
                     }
-                    div class="field" {
-                        label for="plan_playlist" { "Playlist :" }
-                        select id="plan_playlist" name="playlist_id" {
-                            @for playlist in &playlists {
-                                option value=(playlist.id) selected[Some(&playlist.id) == selected_id.as_ref()] {
-                                    (playlist.name)
-                                }
-                            }
-                        }
+                    li {
+                        "Sur l'ordinateur : "
+                        code { (command) }
                     }
+                    li { "Brancher la montre en USB, puis lancer la commande." }
+                    li { "Sur la montre : Musique > [ Importer (USB) ]." }
                 }
                 div class="mini-cards" {
                     (mini_card("BPM cible", &target_label))
-                    (mini_card("Taille", &size_label))
-                    (mini_card("Etat", state_label))
+                    (mini_card("Titres", &tracks.len().to_string()))
+                    (mini_card("Playlist", &playlist.name))
                 }
-                @if let Some(plan) = &plan {
-                    p class="muted" {
-                        "Plan demande le " (format_date(plan.requested_at_ms))
-                        @if let Some(name) = &plan_playlist_name { " pour " (name) }
-                        @if let Some(name) = &plan_race_name { " - course " (name) }
-                    }
-                }
-                div class="actions" {
-                    button type="submit" { "Envoyer sur la montre" }
+                p class="muted" {
+                    "Le serveur ne stocke aucun fichier audio : les morceaux restent sur votre "
+                    "disque et sont copies par l'outil local mpacer-music."
                 }
             }
-            @if plan.is_some() {
-                form method="post" action="/music/prepare/cancel" {
-                    button class="ghost danger" type="submit" { "Annuler le plan" }
-                }
-            }
+        } @else {
+            p class="muted" { "Selectionnez une playlist dans le bloc 2 pour preparer son transfert." }
         }
     };
 
@@ -3244,11 +3992,7 @@ async fn music_import(
     if let Some(existing) =
         crate::db::find_music_playlist_by_spotify(&state.pool, &user.id, &spotify_id).await?
     {
-        if let Some(paths) =
-            crate::db::delete_music_playlist(&state.pool, &user.id, &existing.id).await?
-        {
-            crate::media::remove_files(&state, &paths).await;
-        }
+        crate::db::delete_music_playlist(&state.pool, &user.id, &existing.id).await?;
     }
 
     let target_bpm = match parse_number(&form.target_bpm, "le BPM cible") {
@@ -3284,9 +4028,6 @@ async fn music_import(
                 bpm,
                 bpm_source: bpm.map(|_| "spotify".to_string()),
                 spotify_uri: track.spotify_uri.clone(),
-                mime: None,
-                size_bytes: None,
-                storage_path: None,
             },
             state.now_ms(),
         )
@@ -3304,38 +4045,6 @@ async fn music_import(
         playlist.id
     ))
     .into_response())
-}
-
-/// Televersement de fichiers audio depuis le navigateur (multipart/form-data).
-///
-/// Aucun octet n'est conserve en base : seuls le chemin, le type MIME et la
-/// taille le sont, le fichier restant sous `MPACER_MEDIA_DIR`.
-async fn music_upload(
-    State(state): State<AppState>,
-    AuthUser(user): AuthUser,
-    multipart: Multipart,
-) -> AppResult<Response> {
-    let form = crate::media::collect_upload(multipart, "playlist_name").await?;
-    match crate::media::import_uploaded_files(&state, &user.id, &form.name, &form.files).await {
-        Ok((playlist_id, track_count, _total_bytes)) => {
-            tracing::info!(
-                user = %user.email,
-                playlist = %playlist_id,
-                titres = track_count,
-                "fichiers audio televerses"
-            );
-            Ok(Redirect::to(&format!(
-                "/music?playlist={playlist_id}&ok=fichiers_importes"
-            ))
-            .into_response())
-        }
-        Err(error) => {
-            // Le detail est journalise ; la page affiche un message court et
-            // l'utilisateur peut reessayer avec d'autres fichiers.
-            tracing::warn!(error = %error, "televersement refuse");
-            Ok(Redirect::to("/music?erreur=upload_refuse").into_response())
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -3431,82 +4140,26 @@ async fn music_track_bpm(
     Ok(Redirect::to(&format!("/music?playlist={id}&ok=bpm_enregistre")).into_response())
 }
 
-/// Supprime une playlist et les fichiers audio qu'elle possedait.
+/// Supprime une playlist (ses metadonnees ; aucun audio n'est stocke ici).
 async fn music_delete(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let Some(paths) = crate::db::delete_music_playlist(&state.pool, &user.id, &id).await? else {
+    if !crate::db::delete_music_playlist(&state.pool, &user.id, &id).await? {
         return Err(AppError::NotFound);
-    };
-    crate::media::remove_files(&state, &paths).await;
+    }
     tracing::info!(user = %user.email, playlist = %id, "playlist musique supprimee");
     Ok(Redirect::to("/music?ok=playlist_supprimee").into_response())
 }
 
-#[derive(Debug, Deserialize)]
-struct MusicPlanForm {
-    #[serde(default)]
-    playlist_id: String,
-    #[serde(default)]
-    race_id: String,
-    #[serde(default)]
-    target_bpm: String,
-}
-
-/// Cree le plan de telechargement que la montre recuperera au prochain reveil.
-async fn music_prepare_create(
+/// Telecharge le manifeste de transfert (session navigateur, piece jointe).
+async fn music_manifest(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
-    Form(form): Form<MusicPlanForm>,
+    Path(id): Path<String>,
 ) -> AppResult<Response> {
-    let Some(playlist) =
-        crate::db::get_music_playlist(&state.pool, &user.id, &form.playlist_id).await?
-    else {
-        return Ok(Redirect::to("/music?erreur=playlist_inconnue").into_response());
-    };
-    let race_id = some(&form.race_id);
-    if let Some(race_id) = race_id.as_deref() {
-        if !crate::db::race_belongs_to(&state.pool, &user.id, race_id).await? {
-            return Ok(Redirect::to("/music?erreur=course_inconnue").into_response());
-        }
-    }
-    let requested = match parse_number(&form.target_bpm, "le BPM cible") {
-        Ok(value) => value,
-        Err(_) => return Ok(Redirect::to("/music?erreur=bpm_invalide").into_response()),
-    };
-    let target_bpm = crate::models::clean_bpm(requested).or(playlist.target_bpm);
-
-    // Un nouveau plan remplace le precedent : la montre ne doit pas preparer
-    // deux playlists a la fois.
-    crate::db::cancel_pending_music_plans(&state.pool, &user.id).await?;
-    let plan = crate::db::insert_music_plan(
-        &state.pool,
-        &user.id,
-        &playlist.id,
-        race_id.as_deref(),
-        target_bpm,
-        state.now_ms(),
-    )
-    .await?;
-    tracing::info!(
-        user = %user.email,
-        plan = %plan.id,
-        playlist = %playlist.id,
-        "plan de telechargement musique cree"
-    );
-    Ok(Redirect::to(&format!("/music?playlist={}&ok=plan_envoye", playlist.id)).into_response())
-}
-
-/// Annule le plan en attente.
-async fn music_prepare_cancel(
-    State(state): State<AppState>,
-    AuthUser(user): AuthUser,
-) -> AppResult<Response> {
-    let cancelled = crate::db::cancel_pending_music_plans(&state.pool, &user.id).await?;
-    tracing::info!(user = %user.email, plans = cancelled, "plans musique annules");
-    Ok(Redirect::to("/music?ok=plan_annule").into_response())
+    super::manifest_response(&state, &user.id, &id).await
 }
 
 #[cfg(test)]
@@ -3514,20 +4167,48 @@ mod music_web_tests {
     use super::*;
 
     #[test]
-    fn byte_sizes_are_readable() {
-        assert_eq!(format_bytes(0), "0 Mo");
-        assert_eq!(format_bytes(86 * 1024 * 1024), "86 Mo");
-        assert_eq!(format_bytes(3 * 1024 * 1024), "3.0 Mo");
-        assert_eq!(format_bytes(2 * 1024 * 1024 * 1024), "2.0 Go");
+    fn the_transfer_command_shows_the_manifest_and_the_folder() {
+        let command = transfer_command("run-170.json");
+        assert!(command.starts_with("mpacer-music transfer"), "{command}");
+        assert!(command.contains("--manifest run-170.json"), "{command}");
+        assert!(command.contains("--folder"), "{command}");
     }
 
     #[test]
     fn music_messages_are_explicit() {
         assert!(music_error_message("spotify_non_configure").contains("MPACER_SPOTIFY_CLIENT_ID"));
-        assert!(music_error_message("upload_refuse").contains("refuse"));
-        assert!(music_ok_message("plan_envoye").contains("montre"));
+        assert!(music_error_message("bpm_invalide").contains("30"));
+        assert!(music_ok_message("playlist_supprimee").contains("supprimee"));
         // Un code inconnu reste lisible plutot que vide.
         assert!(music_error_message("inconnu").contains("inconnu"));
         assert!(music_ok_message("inconnu").contains("inconnu"));
+    }
+}
+
+#[cfg(test)]
+mod navigation_web_tests {
+    use super::*;
+
+    #[test]
+    fn the_header_keeps_six_tabs_and_gathers_settings_in_a_menu() {
+        // Les ecrans de consultation restent des onglets ; l'appairage, les
+        // jetons et la deconnexion vivent dans le menu des reglages.
+        assert_eq!(NAV.len(), 6);
+        // Les tableaux de bord se consultent : ils ont leur onglet.
+        assert!(NAV.iter().any(|(cle, ..)| *cle == "dashboards"));
+        assert!(!NAV
+            .iter()
+            .any(|(cle, ..)| *cle == "link" || *cle == "settings"));
+
+        let menu = settings_menu("settings").into_string();
+        assert!(menu.contains("class=\"menu\""), "{menu}");
+        assert!(menu.contains("Appairer"), "{menu}");
+        assert!(menu.contains("Jetons"), "{menu}");
+        assert!(menu.contains("Deconnexion"), "{menu}");
+        assert!(menu.contains("action=\"/logout\""), "{menu}");
+        // La page courante est signalee dans le menu, pas ailleurs.
+        assert!(menu.contains("actuel"), "{menu}");
+        assert!(!settings_menu("seances").into_string().contains("actuel"));
+        assert!(!settings_menu("courses").into_string().contains("actuel"));
     }
 }

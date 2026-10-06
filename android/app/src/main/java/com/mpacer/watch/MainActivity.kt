@@ -34,6 +34,8 @@ class MainActivity : ComponentActivity() {
             arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.POST_NOTIFICATIONS,
+                // Refus possible : la seance reste complete, sans cardio.
+                Manifest.permission.BODY_SENSORS,
             )
         )
 

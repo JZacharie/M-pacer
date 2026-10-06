@@ -31,23 +31,26 @@ pub mod history;
 pub mod lap;
 pub mod music;
 pub mod pace;
+pub mod race_import;
 pub mod race_plan;
 pub mod remote_race;
 pub mod units;
 pub mod voice;
 pub mod workout;
 
-pub use analysis::{AccelerationAnalysis, AccelerationPhase, Pause, Split};
+pub use analysis::{AccelerationAnalysis, AccelerationPhase, GradeAdjusted, Pause, Split};
 pub use assistant::{Assistant, AssistantMode, AssistantPanel};
 pub use cardio::{HeartRateSample, HeartRateSummary, HeartRateZones, ZoneMethod};
 pub use engine::{EngineConfig, EngineOutput, PacerEngine};
 pub use gps::{GpsMonitor, GpsSample, GpsStatus, StatusLight};
 pub use music::{
-    bpm_from_tags, cadence_from_speed, tap_tempo, target_bpm_for_pace, target_cadence_spm,
-    BpmSource, DirectiveReason, MusicConfig, MusicDirective, MusicDirector, MusicInput, MusicState,
-    NowPlaying, Playlist, Track,
+    bpm_from_tags, cadence_from_speed, match_tracks, normalize_label, parse_manifest,
+    suggested_file_name, tap_tempo, target_bpm_for_pace, target_cadence_spm, BpmSource,
+    DirectiveReason, FileMatch, LocalFile, MusicConfig, MusicDirective, MusicDirector, MusicInput,
+    MusicState, NowPlaying, Playlist, Track, TransferManifest, WantedTrack,
 };
 pub use pace::PaceEngine;
+pub use race_import::{import_race, ImportError, ImportSource, ImportedRace};
 pub use race_plan::{NegativeSplit, RacePlan, ShadowRunnerComparison};
 pub use units::UnitSystem;
 pub use workout::{Workout, WorkoutEvent, WorkoutState};

@@ -30,6 +30,91 @@ pub fn total_pause_s(pauses: &[Pause]) -> f64 {
     pauses.iter().map(|pause| pause.duration_s).sum()
 }
 
+/// Cout energetique de la course a une pente donnee (J/kg/m).
+///
+/// Modele de Minetti et al. (2002), celui qu'utilisent Runalyze et la plupart des
+/// calculateurs d'allure ajustee : la depense par metre augmente fortement en
+/// montee, diminue en descente jusqu'a environ -20 %, puis remonte (freinage).
+pub fn energy_cost(grade: f64) -> f64 {
+    let i = grade.clamp(-0.30, 0.30);
+    155.4 * i.powi(5) - 30.4 * i.powi(4) - 43.3 * i.powi(3) + 46.3 * i * i + 19.5 * i + 3.6
+}
+
+/// Cout energetique sur le plat, reference du calcul.
+const FLAT_ENERGY_COST: f64 = 3.6;
+
+/// Bilan de terrain d'une plage de distance.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct Terrain {
+    gain_m: f64,
+    loss_m: f64,
+    /// Distance equivalente sur le plat, a effort egal.
+    equivalent_distance_m: f64,
+    /// Vrai si au moins une altitude a ete lue : sinon le GAP n'a aucun sens.
+    has_elevation: bool,
+}
+
+/// Allure ajustee a la pente (GAP) sur l'ensemble d'une seance.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct GradeAdjusted {
+    /// Allure equivalente sur terrain plat (s/km).
+    pub pace_s_per_km: f64,
+    /// Distance equivalente sur le plat parcourue pour le meme effort (m).
+    pub equivalent_distance_m: f64,
+    pub elevation_gain_m: f64,
+    pub elevation_loss_m: f64,
+}
+
+/// Calcule l'allure ajustee a la pente de la seance.
+///
+/// Renvoie `None` sans altitude : mieux vaut ne rien afficher que d'inventer un
+/// terrain plat.
+pub fn grade_adjusted(summary: &WorkoutSummary) -> Option<GradeAdjusted> {
+    let terrain = terrain_in_range(&summary.track, f64::NEG_INFINITY, f64::INFINITY);
+    if !terrain.has_elevation || terrain.equivalent_distance_m <= 0.0 || summary.duration_s <= 0.0 {
+        return None;
+    }
+    Some(GradeAdjusted {
+        pace_s_per_km: summary.duration_s / (terrain.equivalent_distance_m / 1000.0),
+        equivalent_distance_m: terrain.equivalent_distance_m,
+        elevation_gain_m: terrain.gain_m,
+        elevation_loss_m: terrain.loss_m,
+    })
+}
+
+/// Bilan d'une plage de distance : denivele et distance equivalente sur le plat.
+fn terrain_in_range(track: &[TrackPoint], start_m: f64, end_m: f64) -> Terrain {
+    let mut terrain = Terrain::default();
+    let mut previous: Option<(f64, f64)> = None;
+    for point in track {
+        if point.dist_m < start_m || point.dist_m >= end_m {
+            previous = None;
+            continue;
+        }
+        let Some(elevation) = point.elevation_m else {
+            // Une altitude manquante interrompt la chaine : aucun denivele invente.
+            previous = None;
+            continue;
+        };
+        if let Some((previous_dist, previous_elevation)) = previous {
+            let dd = point.dist_m - previous_dist;
+            if dd > 0.0 {
+                let de = elevation - previous_elevation;
+                terrain.has_elevation = true;
+                if de > 0.0 {
+                    terrain.gain_m += de;
+                } else {
+                    terrain.loss_m -= de;
+                }
+                let grade = (de / dd).clamp(-0.30, 0.30);
+                terrain.equivalent_distance_m += dd * energy_cost(grade) / FLAT_ENERGY_COST;
+            }
+        }
+        previous = Some((point.dist_m, elevation));
+    }
+    terrain
+}
+
 /// Un temps de passage (tour complet, ou dernier tronçon partiel).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Split {
@@ -46,6 +131,10 @@ pub struct Split {
     pub heart_rate_max: Option<u16>,
     pub elevation_gain_m: f64,
     pub elevation_loss_m: f64,
+    /// Pente moyenne du tronçon (0.03 = 3 %), si l'altitude est connue.
+    pub grade_percent: Option<f64>,
+    /// Allure ajustee a la pente du tronçon (s/km), si l'altitude est connue.
+    pub gap_pace_s_per_km: Option<f64>,
     /// Ecart d'allure avec le tronçon precedent (s/km) : positif = plus lent.
     pub pace_delta_s: Option<f64>,
     /// Allure prevue par le plan sur ce tronçon (s/km).
@@ -182,7 +271,19 @@ pub fn splits(summary: &WorkoutSummary) -> Vec<Split> {
             0.0
         };
         let (heart_rate_avg, heart_rate_max) = heart_rate_in_range(summary, *start, *end);
-        let (gain, loss) = elevation_in_range(&summary.track, *start, *end);
+        let terrain = terrain_in_range(&summary.track, *start, *end);
+        // L'allure ajustee n'a de sens qu'avec de l'altitude : sur un profil
+        // inconnu, elle serait identique a l'allure reelle et n'apprendrait rien.
+        let gap_pace_s_per_km = if terrain.has_elevation && terrain.equivalent_distance_m > 0.0 {
+            Some(duration_s / (terrain.equivalent_distance_m / 1000.0))
+        } else {
+            None
+        };
+        let grade_percent = if terrain.has_elevation && distance > 0.0 {
+            Some((terrain.gain_m - terrain.loss_m) / distance)
+        } else {
+            None
+        };
         let planned_pace_s_per_km =
             plan.map(|plan| plan.pace_at_distance_s_per_km((start + end) / 2.0));
         let planned_cumulative_s = plan.map(|plan| plan.time_at_distance_s(*end));
@@ -195,8 +296,10 @@ pub fn splits(summary: &WorkoutSummary) -> Vec<Split> {
             cumulative_distance_m: *end,
             heart_rate_avg,
             heart_rate_max,
-            elevation_gain_m: gain,
-            elevation_loss_m: loss,
+            elevation_gain_m: terrain.gain_m,
+            elevation_loss_m: terrain.loss_m,
+            grade_percent,
+            gap_pace_s_per_km,
             pace_delta_s: previous_pace.map(|previous| pace_s_per_km - previous),
             planned_pace_s_per_km,
             planned_cumulative_s,
@@ -232,29 +335,6 @@ fn heart_rate_in_range(
     } else {
         (Some(sum / count as f64), Some(max))
     }
-}
-
-/// Denivele positif et negatif d'une plage de distance.
-fn elevation_in_range(track: &[TrackPoint], start_m: f64, end_m: f64) -> (f64, f64) {
-    let mut gain = 0.0;
-    let mut loss = 0.0;
-    let mut previous: Option<f64> = None;
-    for point in track {
-        if point.dist_m < start_m || point.dist_m >= end_m {
-            previous = None;
-            continue;
-        }
-        if let (Some(before), Some(now)) = (previous, point.elevation_m) {
-            let delta = now - before;
-            if delta > 0.0 {
-                gain += delta;
-            } else {
-                loss -= delta;
-            }
-        }
-        previous = point.elevation_m;
-    }
-    (gain, loss)
 }
 
 /// Une phase d'acceleration : le depart, ou une reprise apres une pause.
@@ -527,6 +607,72 @@ mod tests {
             "at_s = {}",
             analysis.phases[1].at_s
         );
+    }
+
+    /// Meme seance, avec une pente constante (0.05 = 5 %).
+    fn with_grade(grade: f64) -> WorkoutSummary {
+        let mut summary = steady_summary();
+        for point in &mut summary.track {
+            point.elevation_m = Some(300.0 + point.dist_m * grade);
+        }
+        summary
+    }
+
+    #[test]
+    fn energy_cost_is_minimal_on_the_flat() {
+        // Le modele de Minetti passe par un minimum en descente (vers -20 %),
+        // mais des -5 % il est deja plus econome qu'a plat, et couteux en montee.
+        assert!((energy_cost(0.0) - 3.6).abs() < 1e-9);
+        assert!(energy_cost(0.05) > energy_cost(0.0));
+        assert!(energy_cost(-0.05) < energy_cost(0.0));
+    }
+
+    #[test]
+    fn gap_equals_pace_on_the_flat() {
+        let summary = with_grade(0.0);
+        let gap = grade_adjusted(&summary).unwrap();
+        assert!((gap.pace_s_per_km - 333.33).abs() < 0.5, "{gap:?}");
+        assert!((gap.equivalent_distance_m - 3000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn gap_is_faster_uphill_and_slower_downhill() {
+        let actual = 333.33;
+        let uphill = grade_adjusted(&with_grade(0.05)).unwrap();
+        assert!(uphill.pace_s_per_km < actual - 40.0, "montee : {uphill:?}");
+        assert!(uphill.equivalent_distance_m > 3000.0);
+
+        let downhill = grade_adjusted(&with_grade(-0.05)).unwrap();
+        assert!(
+            downhill.pace_s_per_km > actual + 40.0,
+            "descente : {downhill:?}"
+        );
+        assert!(downhill.equivalent_distance_m < 3000.0);
+    }
+
+    #[test]
+    fn gap_needs_elevation() {
+        let mut summary = steady_summary();
+        for point in &mut summary.track {
+            point.elevation_m = None;
+        }
+        assert!(grade_adjusted(&summary).is_none());
+        // Et sans altitude, les tronçons n'annoncent pas de GAP.
+        assert!(splits(&summary)
+            .iter()
+            .all(|split| split.gap_pace_s_per_km.is_none()));
+    }
+
+    #[test]
+    fn splits_report_grade_and_gap() {
+        let summary = with_grade(0.02);
+        let splits = splits(&summary);
+        let first = &splits[0];
+        assert!(
+            (first.grade_percent.unwrap() - 0.02).abs() < 1e-3,
+            "{first:?}"
+        );
+        assert!(first.gap_pace_s_per_km.unwrap() < first.pace_s_per_km);
     }
 
     #[test]

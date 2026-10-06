@@ -49,7 +49,6 @@ config:
   # Vault (voir deploy/GITOPS-ET-SECRETS.md section 2) et declare l'URI de
   # redirection https://mpacer.p.zacharie.org/auth/spotify/callback
   # dans la console Spotify for Developers.
-  mediaDir: /data/media
   spotifyRedirectUri: ""
 
 # PostgreSQL gere par l'operateur CloudNativePG (present sur jo3 : cnpg-system)
@@ -73,14 +72,10 @@ postgresql:
   nodeSelector:
     kubernetes.io/arch: amd64
 
-# Volume applicatif : il porte les fichiers audio televerses (/data/media).
-# Le PVC doit rester monte, sinon les fichiers seraient perdus a chaque
-# remplacement de pod (emptyDir).
+# Aucun fichier audio n'est stocke cote serveur (transfert USB depuis le PC) :
+# plus de volume applicatif necessaire.
 persistence:
-  enabled: true
-  storageClass: local-path-retain
-  size: 5Gi
-  mountPath: /data
+  enabled: false
 
 # Avec PostgreSQL, l'application est sans etat : mise a jour sans coupure
 strategy:

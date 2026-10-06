@@ -21,6 +21,7 @@ retrouver vite, le jour J, tout ce qui a ete prepare des semaines a l'avance.
 | Informations importantes pour la course | fiche |
 | Autres informations (transport, accompagnants...) | fiche |
 | Elements a preparer, a cocher | carte (progression), fiche, planning |
+| Ancienne course de reference (import Strava/Garmin) | liste des courses deja courues, fiche |
 
 ## 2. Les trois ecrans
 
@@ -29,7 +30,12 @@ retrouver vite, le jour J, tout ce qui a ete prepare des semaines a l'avance.
 Une carte par course a venir, avec ce qu'on veut savoir sans rien ouvrir :
 compte a rebours en jours, date et lieu, pastilles (dossard, distance, discipline,
 hotel reserve ou a confirmer, live disponible), et une barre de progression du suivi
-avec le prochain element a faire. En dessous, la liste des courses deja courues.
+avec le prochain element a faire. En dessous, la liste des courses deja courues ;
+celles qui viennent d'un export Strava ou Garmin y portent la pastille
+« Reference ».
+
+Un bouton « Importer une course » ouvre le formulaire d'import (section 7) : c'est
+la seule facon de remplir une course passee sans la saisir a la main.
 
 ### 2.2 Le planning (`/courses/planning`)
 
@@ -81,6 +87,11 @@ L'API JSON expose les memes donnees, pour la montre ou un futur client mobile :
 | GET | `/api/v1/races/{id}` | fiche complete et son suivi |
 | PUT | `/api/v1/races/{id}` | mise a jour de la fiche |
 | DELETE | `/api/v1/races/{id}` | suppression (le suivi suit par cascade) |
+| POST | `/api/v1/races/import` | import d'une ancienne course (corps `multipart/form-data`, fichier GPX ou TCX) |
+
+L'interface web expose le meme import en session navigateur
+(`POST /courses/importer`, page `/courses/importer`) et la trace conservee se
+telecharge par `GET /courses/{id}/trace.gpx`.
 
 Authentification identique au reste de l'API (`Authorization: Bearer <jeton>`) ou
 session du navigateur. Les erreurs gardent le format
@@ -96,16 +107,51 @@ races(id, user_id, name, start_at_ms, distance_m, discipline, location, start_lo
       bib_number, bib_pickup_at_ms, bib_pickup_location, live_url, registration_url,
       website_url, latitude, longitude, hotel_name, hotel_address, hotel_phone,
       hotel_url, hotel_booked, hotel_check_in_ms, hotel_check_out_ms, lodging_notes,
-      nutrition_notes, important_info, notes, goal_time_s, created_at_ms, updated_at_ms)
+      nutrition_notes, important_info, notes, goal_time_s, source, is_reference,
+      moving_time_s, elapsed_time_s, elevation_gain_m, created_at_ms, updated_at_ms)
 
 race_tasks(id, race_id, user_id, label, due_at_ms, done, done_at_ms, position, created_at_ms)
+
+race_tracks(race_id, user_id, gpx, points, created_at_ms)
 ```
 
-Migration : `crates/mpacer-api/migrations/0002_races.sql`, idempotente et rejouee au
-demarrage comme la premiere. `ON DELETE CASCADE` garantit qu'aucun element de suivi
+`source` (`strava`, `garmin`, `gpx`, `tcx`) et `is_reference` ne sont remplis que
+par l'import ; une modification ulterieure de la fiche ne les touche pas.
+`race_tracks` est la seule trace conservee : elle suit sa course par cascade.
+
+Migrations : `crates/mpacer-api/migrations/0002_races.sql` puis
+`0004-references-et-commentaires.sql`, idempotentes et rejouees au demarrage comme
+la premiere. `ON DELETE CASCADE` garantit qu'aucun element de suivi ni aucune trace
 ne survit a sa course, ni a la suppression du compte.
 
-## 7. Decisions
+## 7. Importer une ancienne course (export Strava ou Garmin)
+
+Le passe se remplit aussi depuis l'exterieur : la page `/courses/importer` accepte
+un export **GPX** ou **TCX** de Strava ou Garmin Connect. Le fichier est relu par le
+coeur Rust (`mpacer_core::race_import`), jamais conserve tel quel : seule la trace
+normalisee reste en base, dans `race_tracks`.
+
+| Ce qui est repris | Source dans le fichier |
+|---|---|
+| Nom | nom de la trace, sinon nom du fichier |
+| Date et heure de depart | premier horodatage |
+| Distance | distance declaree (TCX), sinon cumul des points (Haversine) |
+| Temps en mouvement | portions courues (au moins 1,8 km/h, coupure GPS de plus de 2 min exclue) |
+| Temps ecoule | dernier horodatage moins le premier |
+| Denivele positif | cumul des montees de la trace |
+| Trace | points echantillonnes (2 000 au plus), reexportables en GPX |
+
+La course creee est une **course de reference** : elle rejoint la liste « deja
+courues », sa fiche affiche l'origine, les mesures et un bouton de telechargement du
+GPX, et elle n'a **aucun element de suivi** — il n'y a plus rien a preparer. Rien
+d'autre n'est invente : dossard, notes et objectif restent vides et se completent a
+la main, comme pour toute course.
+
+Le FIT binaire n'est pas lu : Strava et Garmin Connect proposent tous deux l'export
+GPX ou TCX, qui porte les memes informations. Un fichier illisible revient sur la
+page d'import avec un message explicite, et rien n'est enregistre.
+
+## 8. Decisions
 
 - **Un seul formulaire, une seule validation.** Le formulaire web et l'API
   construisent la meme structure `RaceInput`, normalisee puis validee une seule fois :

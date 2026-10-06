@@ -2,7 +2,6 @@ package com.mpacer.companion
 
 import android.app.Application
 import android.net.Uri
-import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -291,7 +290,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     // ---------------------------------------------------------------- musique
 
-    /** Playlists du serveur (GET /api/v1/music/playlists). */
+    /**
+     * Playlists du backend (metadonnees seules). L'onglet Musique est informatif :
+     * le transfert des fichiers audio se fait par USB avec `mpacer-music`.
+     */
     fun refreshMusic() {
         val token = store.token ?: return
         viewModelScope.launch {
@@ -309,89 +311,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-
-    /**
-     * Envoie un plan de preparation a la montre par le Data Layer (docs/07 section 7.3).
-     * La montre telecharge ensuite en Wi-Fi, au prochain reveil.
-     */
-    fun sendMusicPlan(row: MusicPlaylistRow) {
-        viewModelScope.launch {
-            _state.update { it.copy(busy = true, message = null) }
-            val message = MusicPlanMessage(
-                playlistId = row.id,
-                name = row.name,
-                targetBpm = row.targetBpm,
-                requestedAtMs = System.currentTimeMillis(),
-            )
-            val payload = codec
-                .encodeToString(MusicPlanMessage.serializer(), message)
-                .toByteArray(Charsets.UTF_8)
-            val outcome = withContext(Dispatchers.IO) {
-                WearSync.sendMusicPlan(getApplication(), payload)
-            }
-            val texte = when (outcome) {
-                is WearSync.Outcome.Sent -> "Plan envoye a la montre (" + outcome.nodes + " appareil(s))"
-                WearSync.Outcome.NoDevice -> "Aucune montre connectee"
-                is WearSync.Outcome.Failed -> "Envoi impossible : " + outcome.reason
-            }
-            _state.update { it.copy(busy = false, message = texte) }
-            countWatchNodes()
-        }
-    }
-
-    /**
-     * Televerse des fichiers audio vers le serveur.
-     *
-     * Le compagnon utilise l'endpoint appareil `POST /api/v1/music/playlists`
-     * (jeton Bearer, champ `name` + un champ `files` par fichier) : il n'a pas de
-     * cookie de session, contrairement au navigateur.
-     */
-    fun uploadMusic(playlistName: String, uris: List<Uri>) {
-        val token = store.token ?: return
-        if (uris.isEmpty()) {
-            _state.update { it.copy(message = "Aucun fichier selectionne") }
-            return
-        }
-        viewModelScope.launch {
-            _state.update { it.copy(busy = true, message = null, syncLog = emptyList()) }
-            try {
-                val nom = playlistName.trim().ifBlank { "Ma course" }
-                val files = withContext(Dispatchers.IO) { uris.mapNotNull(::readUpload) }
-                if (files.isEmpty()) throw IllegalStateException("fichiers illisibles")
-                val playlist = withContext(Dispatchers.IO) { api().uploadMusic(token, nom, files) }
-                _state.update {
-                    it.copy(
-                        busy = false,
-                        message = playlist.trackCount.toString() + " titre(s) importe(s) : " +
-                            playlist.name.ifBlank { nom },
-                    )
-                }
-                refreshMusic()
-            } catch (error: Exception) {
-                _state.update {
-                    it.copy(
-                        busy = false,
-                        message = "Televersement impossible : " + (error.message ?: error.javaClass.simpleName),
-                    )
-                }
-            }
-        }
-    }
-
-    private fun readUpload(uri: Uri): UploadFile? = runCatching {
-        val resolver = getApplication<Application>().contentResolver
-        val name = queryDisplayName(uri) ?: ("audio-" + System.currentTimeMillis())
-        val mime = resolver.getType(uri)
-        val bytes = resolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
-        UploadFile(name, mime, bytes)
-    }.getOrNull()
-
-    private fun queryDisplayName(uri: Uri): String? = runCatching {
-        getApplication<Application>().contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
-        }
-    }.getOrNull()
 
     private fun log(entry: String) {
         _state.update { it.copy(syncLog = it.syncLog + entry) }

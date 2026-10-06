@@ -1,502 +1,364 @@
-# 07 - Musique, BPM et playlists de course
+# 07 - Musique, BPM et transfert USB
 
-> **Statut** : contrat d'interface **gele** (v1), **implemente** (6 octobre 2026).
-> Les trois chantiers (coeur Rust, backend, montre/compagnon) ont ete developpes
-> contre ce document. Toute modification d'interface doit etre reportee ici
-> **avant** le code.
+> **Statut** : contrat d'interface **gele v2** (6 octobre 2026).
+> La v1 (pilotage de l'application Spotify et telechargement depuis le backend)
+> est **abandonnee** : M-pacer ne pilote plus Spotify, et l'audio est **copie sur
+> la montre par USB**, depuis un dossier choisi sur l'ordinateur.
+> Toute modification d'interface doit etre reportee ici **avant** le code.
 
 ---
 
-## 1. Objectif
+## 1. Principe retenu
 
-Ajouter a la montre la **lecture de musique** et faire du **tempo (BPM)** un
-outil de pacing :
+1. **Spotify est une source de metadonnees**, pas un lecteur : on y recupere des
+   playlists de course (titres, artistes, durees, BPM quand l'API le permet) ;
+2. **les fichiers audio restent sur le disque de l'utilisateur** : l'application
+   locale `mpacer-music` demande *ou* sont les MP3, apparie les fichiers aux pistes
+   de la playlist, puis les **copie sur la montre par USB** (`adb push`) ;
+3. **la montre joue en local**, hors ligne, sans telephone ni serveur, et le
+   **BPM** sert de consigne de rythme pendant la course ;
+4. le backend ne stocke **aucun** fichier audio : il publie les fiches de playlist
+   et le **manifeste de transfert**.
 
-1. recuperer des **playlists de course** (Spotify, ou fichiers personnels) ;
-2. les **preparer sur la montre avant une course** (telechargement hors ligne) ;
-3. pendant la course, **utiliser le BPM** comme consigne de rythme : le moteur
-   choisit le morceau dont le tempo colle a l'allure cible, accelere la musique
-   quand le coureur est en retard sur son plan, la calme quand il est en avance
-   ou que le cardio s'emballe.
+### Ce qui est abandonne par rapport a la v1
 
-## 2. Ce qui est possible, ce qui ne l'est pas (contrainte Spotify)
-
-Le projet est auto-heberge et sans DRM contourne. Il faut donc etre precis :
-
-| Source | Lecture par M-pacer | Ce que fait M-pacer |
+| Point | v1 (abandonnee) | v2 (retenue) |
 |---|---|---|
-| **Fichiers personnels** (MP3/OGG/M4A possedes par le coureur) | **Oui**, hors ligne, via Media3/ExoPlayer | telechargement sur la montre avant la course |
-| **Playlist Spotify** | **Non** (audio chiffre Widevine, reserve a l'app Spotify) | M-pacer **telecommande l'application Spotify installee sur la montre** (MediaSession/MediaController) et decide **quel** morceau jouer et **quand** passer au suivant |
-| **Metadonnees Spotify** (titres, durees, BPM) | Oui, via l'API Web Spotify | import de playlist, calcul du tempo cible |
+| Lecture Spotify | `SpotifyRemote.kt` pilotait l'app Spotify par `MediaController` | **supprime** (avec `MediaSessionAccessService.kt` et l'acces aux notifications) |
+| Origine des fichiers | telecharges depuis le backend en Wi-Fi | **dossier local du PC**, choisi par l'utilisateur |
+| Transport | HTTP (`/api/v1/music/tracks/{id}/file`) | **USB / adb push** par `mpacer-music` |
+| Stockage serveur | `media.rs`, upload multipart, `MPACER_MEDIA_DIR` | **supprimes** |
+| Plan de telechargement | `GET/POST /api/v1/music/prepare` | **supprime** ; le manifeste est exporte et consomme par l'outil local |
+| Role de Spotify | source **et** lecteur | source de **metadonnees** uniquement |
 
-Consequence assumee pour l'utilisateur : pour une playlist Spotify, la montre
-n'a besoin de telecharger **que la fiche** (titres + BPM, quelques Ko), la
-musique restant geree hors ligne par l'app Spotify (fonction « Telecharger » de
-l'app, abonnement Premium requis). Pour la musique personnelle, M-pacer
-telecharge les **fichiers audio** sur la montre.
+Rappel utile : l'API Web Spotify ne fournit plus `tempo` (`/v1/audio-features`)
+aux nouvelles applications depuis le 27/11/2024. Le BPM vient donc, dans l'ordre :
+`spotify` (si le compte y a encore acces) puis **balises du fichier** (lues par
+l'outil local), puis **tap-tempo** ou **saisie manuelle** dans la page `/music`.
 
-**Limite de l'API Spotify** : le 27 novembre 2024 Spotify a restreint son API
-Web ; l'endpoint `GET /v1/audio-features` (qui fournissait `tempo`, donc le BPM)
-n'est **plus disponible pour les nouvelles applications**. Le BPM suit donc une
-cascade de sources, dans cet ordre :
-
-1. `spotify` : `audio-features` si le compte Spotify du serveur y a encore acces ;
-2. `tag` : balise du fichier (`TBPM` ID3v2, `BPM` Vorbis/FLAC, `tmpo` MP4) ;
-3. `tap` : tap-tempo depuis l'interface (l'utilisateur tape en rythme) ;
-4. `manual` : saisie directe du BPM.
-
-Sources : [Spotify, changements d'API Web (27/11/2024)](https://developer.spotify.com/blog/2024-11-27-changes-to-the-web-api),
-[TechCrunch, 27/11/2024](https://techcrunch.com/2024/11/27/spotify-cuts-developer-access-to-several-of-its-recommendation-features/).
-
-## 3. Architecture
+## 2. Architecture
 
 ```text
-                 +------------------- navigateur -------------------+
-                 |  Page /music : playlists, import Spotify, upload |
-                 |  fichiers, BPM par titre, tap-tempo,             |
-                 |  « Envoyer sur la montre »                       |
-                 +------------------+-------------------------------+
-                                    | cookie de session
-+-- Spotify Web API --+   +---------v----------------------------------------+
-| /v1/me/playlists    |<--| mpacer-api  /music  + /api/v1/music/*            |
-| /v1/search          |   |  spotify.rs . bpm.rs (balises) . music_download  |
-| /v1/audio-features  |   |  fichiers audio sur disque (MPACER_MEDIA_DIR)    |
-+---------------------+   +---------+------------------+-------------------+
-                                    | jeton appareil   | jeton appareil
-                                    | (manifeste)      | (fichiers + Range)
-                          +---------v------------------v-------------------+
-                          |  Montre Wear OS                              |
-                          |  MusicLibrary (stockage local)               |
-                          |  MusicPlayer (Media3/ExoPlayer)              |
-                          |  SpotifyRemote (MediaController)             |
-                          |  MusicScreen (ecran rond)                    |
-                          +---------+------------------------------------+
-                                    | mpacer-core (FFI JSON)
-                          +---------v------------------------------------+
-                          | music.rs : tempo cible, directeur            |
-                          | d'orchestre (Keep/Boost/Relax/...),          |
-                          | tap-tempo, lecture des balises               |
-                          +----------------------------------------------+
+  Navigateur                  PC de l'utilisateur                      Montre Wear OS
+  +-----------+    +--------------------------------------+    +----------------------+
+  | /music    |    |  mpacer-music (application locale)   |    |  MusicLibrary.kt     |
+  | Spotify   |    |   - page locale 127.0.0.1:8077       |    |   scan du dossier    |
+  | playlists |    |   - choix du dossier des MP3         |    |   Music/ (USB)       |
+  | BPM, tap  |    |   - appariement fichiers <-> pistes  |    |  MusicPlayer.kt      |
+  | manifeste |--->|   - lecture des balises (BPM)        |    |   Media3 ExoPlayer   |
+  +-----+-----+    |   - adb push + manifest.json         |    |   hors ligne         |
+        |          +------------------+-------------------+    +----------+-----------+
+        | cookie                      | adb push (USB)                    |
+  +-----v------------------+            +-----------------------------------+
+  | mpacer-api             |                mpacer-core (FFI JSON)
+  |  playlists, BPM,       |                music.rs : tempo cible,
+  |  manifeste de transfert|                directeur d'orchestre,
+  |  Spotify OAuth         |                appariement, balises BPM
+  +------------------------+
 ```
 
-## 4. Coeur Rust - `mpacer-core::music`
+## 3. Coeur Rust - `mpacer-core::music`
 
-Nouveau module `crates/mpacer-core/src/music.rs` (pur, sans E/S), re-exporte
-par `lib.rs`.
+Les sections 4.1 a 4.3 de la v1 sont **inchangees** : types `Track`, `Playlist`,
+`MusicConfig`, `NowPlaying`, `MusicState`, `MusicDirective`, `DirectiveReason`,
+`MusicInput`, `MusicDirector` ; loi de calibration
+`target = clamp(reference_bpm * (reference_pace / pace)^elasticity, min, max)`
+(defauts 170 BPM a 5:00/km, elasticite 0.35, bornes 100..200) ; cadence cible
+bornee 140..=210 ; tap-tempo et lecture des balises
+(`bpm_from_tags`: ID3v2 `TBPM`, Vorbis `BPM=`, MP4 `tmpo`).
 
-### 4.1 Modele
+### 3.1 Appariement fichiers <-> pistes (NOUVEAU, v2)
 
 ```rust
-/// Piste d'une playlist, telle que le backend la publie.
-pub struct Track {
+/// Fichier audio trouve sur le disque de l'utilisateur.
+pub struct LocalFile {
+    pub path: String,            // chemin complet
+    pub file_name: String,
+    pub size_bytes: u64,
+    pub duration_s: Option<f64>,
+    pub bpm: Option<f64>,        // lu dans les balises, sinon None
+}
+
+/// Piste attendue par un manifeste de transfert.
+pub struct WantedTrack {
     pub id: String,
-    pub title: String,
-    pub artist: Option<String>,
-    pub duration_s: f64,
-    pub bpm: Option<f64>,          // None = tempo inconnu : piste « neutre »
     pub position: u32,
-}
-
-pub struct Playlist {
-    pub id: String,
-    pub name: String,
-    pub target_bpm: Option<f64>,   // consigne fixe decidee dans l'interface
-    pub tracks: Vec<Track>,
-}
-
-/// Origine d'une valeur de BPM (affichage et confiance).
-pub enum BpmSource { Spotify, Tag, Tap, Manual, Estimated }
-
-/// Reglages musique du moteur (miroir de l'ecran Reglages de la montre).
-pub struct MusicConfig {
-    pub enabled: bool,                  // defaut true (opt-out depuis Reglages)
-    /// Reference de calibration : « BPM de reference a l'allure de reference ».
-    pub reference_bpm: f64,             // defaut 170.0
-    pub reference_pace_s_per_km: f64,   // defaut 300.0 (5:00/km)
-    /// Elasticite du tempo par rapport a l'allure (0 = tempo fixe).
-    pub pace_elasticity: f64,           // defaut 0.35
-    pub min_bpm: f64,                   // defaut 100.0
-    pub max_bpm: f64,                   // defaut 200.0
-    /// Ecart de BPM qui declenche un changement de morceau.
-    pub switch_threshold_bpm: f64,      // defaut 8.0
-    /// Gain applique quand le coureur est en retard sur le plan.
-    pub boost_bpm: f64,                 // defaut 6.0
-    /// Perte appliquee quand il est en avance (ou cardio trop haut).
-    pub relax_bpm: f64,                 // defaut 6.0
-    /// Annoncer les changements de consigne a la voix.
-    pub announce: bool,                 // defaut true
-    /// Ne pas rejouer une des N dernieres pistes lors d'une selection.
-    pub avoid_last: usize,              // defaut 3
-}
-
-/// Instantane de la piste en cours, pousse par la montre.
-pub struct NowPlaying {
-    pub track_id: String,
     pub title: String,
     pub artist: Option<String>,
+    pub album: Option<String>,
+    pub duration_s: Option<f64>,
     pub bpm: Option<f64>,
-    pub position_s: f64,
+    pub file: Option<String>,      // rempli a l'ecriture sur la montre
+    pub size_bytes: Option<u64>,   // idem
 }
 
-pub enum MusicDirective { None, Play, Keep, Boost, Relax, SkipTo, Pause, Resume }
-pub enum DirectiveReason {
-    Disabled, NoPlaylist, Steady, OnPlan, BehindPlan, AheadOfPlan,
-    PaceSlow, PaceFast, HeartRateHigh, Paused, Resumed, TrackBpmMismatch,
-}
-
-/// Resultat publie dans EngineOutput.
-pub struct MusicState {
-    pub enabled: bool,
-    pub playlist_id: Option<String>,
-    pub playlist_name: Option<String>,
+/// Manifeste de transfert (produit par le backend, ecrit sur la montre).
+pub struct TransferManifest {
+    pub version: u32,             // 1
+    pub playlist_id: String,
+    pub name: String,
+    pub source: String,           // "spotify" | "manual"
     pub target_bpm: Option<f64>,
-    pub target_cadence_spm: Option<f64>,
-    pub cadence_spm: Option<f64>,
-    pub current: Option<NowPlaying>,
-    pub next_track_id: Option<String>,
-    pub directive: MusicDirective,
-    pub reason: DirectiveReason,
-}
-```
-
-### 4.2 Loi tempo / allure (calibration)
-
-Fonctions pures, testees :
-
-```rust
-/// BPM cible pour une allure cible (s/km).
-/// target = clamp(reference_bpm * (reference_pace / pace)^elasticite, min, max)
-pub fn target_bpm_for_pace(pace_s_per_km: f64, cfg: &MusicConfig) -> f64;
-
-/// Cadence de pas visee. La musique doit « tenir » les appuis :
-/// cadence = 60 * vitesse / foulee, avec une foulee de reference de 1.15 m
-/// qui s'allonge legerement avec la vitesse :
-/// foulee = 1.15 * (v / v_ref)^0.4   (v_ref = 1000 / reference_pace_s_per_km)
-pub fn target_cadence_spm(pace_s_per_km: f64, cfg: &MusicConfig) -> f64;
-
-/// Cadence estimee a partir de la vitesse (repli si aucun capteur de pas).
-pub fn cadence_from_speed(speed_mps: f64) -> f64; // clamp 140..210
-```
-
-Exemples (defauts) : 5:00/km -> 170 BPM ; 4:00/km -> ~183.8 BPM ;
-6:00/km -> ~159.5 BPM. Ces valeurs sont couvertes par des tests.
-
-### 4.3 Directeur d'orchestre
-
-```rust
-pub struct MusicDirector { /* config, playlist, historique, etat */ }
-
-impl MusicDirector {
-    pub fn new(config: MusicConfig) -> Self;
-    pub fn config(&self) -> MusicConfig;
-    pub fn set_config(&mut self, config: MusicConfig);
-    pub fn set_playlist(&mut self, playlist: Option<Playlist>);
-    pub fn playlist(&self) -> Option<&Playlist>;
-    pub fn on_now_playing(&mut self, now: Option<NowPlaying>);
-    pub fn on_cadence(&mut self, spm: f64);
-    pub fn reset(&mut self);
-
-    /// Consigne du tick courant.
-    pub fn evaluate(&mut self, input: MusicInput) -> MusicState;
+    pub tracks: Vec<WantedTrack>,
 }
 
-pub struct MusicInput {
-    pub t_ms: i64,
-    pub state: WorkoutState,             // Idle/Armed/Running/Paused/AutoPaused/Finished
-    pub target_pace_s_per_km: Option<f64>,
-    pub current_pace_s_per_km: Option<f64>,
-    pub shadow_delta_m: Option<f64>,     // + en avance, - en retard
-    pub shadow_on_plan: bool,
-    pub heart_rate_zone: Option<u8>,
-    pub speed_mps: Option<f64>,
+pub struct FileMatch {
+    pub track_id: String,
+    pub file: Option<LocalFile>,
+    pub score: f64,               // 0.0 ..= 1.0
 }
+
+/// Normalise un libelle : minuscules, sans accents, ponctuation reduite a des
+/// espaces, suffixes (feat. ..., remaster, official video, lyrics) retires,
+/// numero de piste en tete retire.
+pub fn normalize_label(text: &str) -> String;
+
+/// Apparie des pistes a des fichiers. Deterministe : les couples
+/// (piste, fichier) sont tries par score decroissant puis par position de piste ;
+/// un fichier ne sert qu'a une piste ; seuil de validation 0.6.
+pub fn match_tracks(wanted: &[WantedTrack], files: &[LocalFile]) -> Vec<FileMatch>;
+
+/// Lit un manifeste JSON (format ci-dessus). None si illisible.
+pub fn parse_manifest(json: &str) -> Option<TransferManifest>;
+
+/// Nom de fichier propose pour la montre : "01 - Artiste - Titre.mp3"
+/// (extension conservee a l'ecriture reelle).
+pub fn suggested_file_name(track: &WantedTrack, extension: &str) -> String;
 ```
 
-Regles de decision (ordre de priorite) :
+Regles d'appariement (testables, aucune E/S) :
 
-1. `enabled == false` ou aucune playlist -> `MusicDirective::None`, raison
-   `Disabled` / `NoPlaylist`.
-2. seance `Paused`/`AutoPaused` -> `Pause` (raison `Paused`) ; retour en
-   `Running` apres une pause -> `Resume` (raison `Resumed`).
-3. **Boost** : en retard sur le plan de plus de **20 m**, ou allure courante
-   plus lente que l'allure cible de plus de **5 s/km** ->
-   `desired_bpm = cible + boost_bpm`, raison `BehindPlan` / `PaceSlow`.
-4. **Relax** : en avance de plus de **20 m**, ou cardio en zone 5, ou allure
-   plus rapide que la cible de plus de **5 s/km** ->
-   `desired_bpm = cible - relax_bpm`, raison `AheadOfPlan` / `HeartRateHigh`
-   / `PaceFast`.
-5. sinon `desired_bpm = cible`, raison `OnPlan` (ou `Steady` sans plan).
-6. Comparaison a la piste en cours :
-   * aucune piste -> `Play` + `next_track_id` = meilleure piste ;
-   * `|bpm_piste - desired_bpm| <= switch_threshold_bpm` -> `Keep` ;
-   * sinon `SkipTo` + `next_track_id` (raison `TrackBpmMismatch`).
-   * Le choix evite les `avoid_last` dernieres pistes ; une piste de BPM
-     inconnu est neutre et n'est jamais choisie pour un changement de tempo.
+* score de base **0.60** si le nom de fichier normalise contient le titre normalise ;
+* **+0.25** si le nom contient aussi l'artiste normalise ;
+* **+0.15** si la duree du fichier est connue et a moins de 3 s de celle de la piste ;
+* un nom sans titre mais avec artiste et **duree a moins de 2 s** -> 0.55 (sous le seuil :
+  on demande a l'utilisateur de renommer plutot que de copier le mauvais morceau) ;
+* toute piste sous 0.60 reste **non appariee** (`file: None`) et est signalee ;
+* l'extension reconnue est celle des fichiers audio du dossier (`.mp3`, `.m4a`,
+  `.ogg`, `.opus`, `.flac`, `.wav`) ; un dossier vide ou un manifeste vide ne
+  panique jamais.
 
-L'etat est **stable** : deux evaluations consecutives avec les memes entrees
-donnent le meme resultat (pas de tir aleatoire, pas d'horloge interne cachee).
-Les directives `Pause`/`Resume` ne sont emises qu'**une fois** par transition.
+## 4. Contrat FFI (inchange)
 
-### 4.4 Tap-tempo et balises BPM
+Les commandes de la v1 restent valables et sont **le seul** contrat entre la
+montre et le coeur : `set_music`, `set_music_playlist`, `music_now_playing`,
+`on_cadence`, plus le bloc `music` de `EngineOutput` (directive `Play`/`Keep`/
+`Boost`/`Relax`/`SkipTo`/`Pause`/`Resume`, `target_bpm`, `target_cadence_spm`,
+`cadence_spm`). La montre ne fait plus aucun appel reseau pour la musique.
 
-```rust
-/// BPM estime a partir d'instants de tap (ms). Median des intervalles,
-/// au moins 4 taps, sinon None. Intervalles aberrants ignores.
-pub fn tap_tempo(taps_ms: &[i64]) -> Option<f64>;
+## 5. Backend `mpacer-api` : metadonnees seulement
 
-/// Extrait un BPM d'une balise binaire de fichier audio, sans dependance :
-/// ID3v2 (TBPM), commentaire Vorbis/FLAC (BPM=), atome MP4 (tmpo).
-pub fn bpm_from_tags(bytes: &[u8], filename: &str) -> Option<f64>;
-```
+### 5.1 Base de donnees
 
-### 4.5 Integration au moteur
+La migration `0003_music.sql` est conservee telle quelle (idempotente, deja
+appliquee). Les colonnes `storage_path`, `size_bytes` et `mime` de
+`music_tracks` deviennent **inutilisees** (aucun audio stocke) : elles restent en
+place pour ne pas casser un schema deja deploye. `music_download_plans` n'est
+**plus lue ni ecrite** (conservee en base, sans code).
 
-* `EngineConfig` gagne `pub music: MusicConfig` (`Default` fourni, donc les
-  litteraux existants avec `..Default::default()` continuent de compiler).
-* `EngineOutput` gagne `pub music: MusicState` (toujours present, jamais
-  `null`) et serialise en `"music"`.
-* Nouvelles methodes : `set_music_config`, `set_music_playlist`,
-  `on_now_playing`, `on_cadence` (le tick calcule la cadence estimee si aucun
-  capteur n'en fournit).
-* `voice.rs` : nouvelles annonces, uniquement si `MusicConfig::announce` et sur
-  **transition** de directive :
-  * `VoiceCue::MusicBoost` -> FR « Musique : on accelere. », EN « Music: pick it up. »
-  * `VoiceCue::MusicRelax` -> FR « Musique : on ralentit. », EN « Music: ease off. »
-  * `VoiceCue::MusicTempo` -> FR « Rythme {bpm}. », EN « Tempo {bpm}. »
-    (une seule fois au demarrage de la seance si la musique est active).
-  * `VoiceSnapshot` gagne un champ **additif** `music_bpm: Option<f64>` : le
-    contrat ne porte pas de charge utile dans `VoiceCue::MusicTempo`, le BPM
-    voyage donc dans l'instantane.
+### 5.2 Configuration
 
-## 5. Contrat FFI (JNI JSON)
+| Variable | Role |
+|---|---|
+| `MPACER_SPOTIFY_CLIENT_ID` / `_SECRET` | OAuth Spotify (facultatif) |
+| `MPACER_SPOTIFY_REDIRECT_URI` | defaut `{public_url}/auth/spotify/callback` |
 
-Commandes ajoutees a `mpacer-ffi::Command` (toutes renvoient un `EngineOutput`) :
+`MPACER_MEDIA_DIR` disparait (plus de stockage audio).
 
-```json
-{"cmd":"set_music","config":{ /* MusicConfig, champs snake_case */ }}
-{"cmd":"set_music_playlist","playlist":null}
-{"cmd":"set_music_playlist","playlist":{"id":"...","name":"Run 170","target_bpm":170.0,
-  "tracks":[{"id":"t1","title":"...","artist":"...","duration_s":215.0,"bpm":172.0,"position":0}]}}
-{"cmd":"music_now_playing","now":null}
-{"cmd":"music_now_playing","now":{"track_id":"t1","title":"...","artist":"...","bpm":172.0,"position_s":42.5}}
-{"cmd":"on_cadence","t_ms":1700000000000,"spm":174.0}
-```
-
-`EngineOutput.music` (extrait) :
-
-```json
-"music": {
-  "enabled": true,
-  "playlist_id": "8f...", "playlist_name": "Run 170",
-  "target_bpm": 176.0, "target_cadence_spm": 176.0, "cadence_spm": 174.0,
-  "current": {"track_id":"t1","title":"...","artist":"...","bpm":172.0,"position_s":42.5},
-  "next_track_id": null,
-  "directive": "Keep",
-  "reason": "OnPlan"
-}
-```
-
-Les variantes d'enumeration sont serialisees en `PascalCase` (comme
-`AssistantMode`/`WorkoutState`) : `Keep`, `Boost`, `Relax`, `SkipTo`, `Pause`,
-`Resume`, `Play`, `None` ; raisons `OnPlan`, `BehindPlan`, `AheadOfPlan`, etc.
-
-## 6. Backend `mpacer-api`
-
-### 6.1 Migration `migrations/0003_music.sql` (idempotente)
-
-```sql
-music_playlists(id PK, user_id FK users, name, source, spotify_id NULL,
-                cover_url NULL, target_bpm NULL, created_at_ms, updated_at_ms)
-music_tracks(id PK, playlist_id FK music_playlists ON DELETE CASCADE, user_id,
-             position INT, title, artist NULL, album NULL, duration_s NULL,
-             bpm NULL, bpm_source NULL, spotify_uri NULL, mime NULL,
-             size_bytes NULL, storage_path NULL, created_at_ms)
-music_download_plans(id PK, user_id FK users, playlist_id FK music_playlists,
-                     race_id NULL FK races ON DELETE SET NULL, target_bpm NULL,
-                     requested_at_ms, acked_at_ms NULL)
-spotify_accounts(user_id PK FK users, spotify_user_id NULL, display_name NULL,
-                 access_token, refresh_token NULL, expires_at_ms, scope NULL,
-                 connected_at_ms)
-```
-
-Index : `music_tracks(playlist_id, position)`,
-`music_playlists(user_id, updated_at_ms DESC)`,
-`music_download_plans(user_id, acked_at_ms)`.
-`source` dans `spotify|upload|manual` ; `bpm_source` dans `spotify|tag|tap|manual`.
-
-### 6.2 Configuration (env)
-
-| Variable | Defaut | Role |
-|---|---|---|
-| `MPACER_MEDIA_DIR` | `./media` | racine des fichiers audio televerses |
-| `MPACER_SPOTIFY_CLIENT_ID` | - | OAuth Spotify (absent = fonctionnalite desactivee, page explicite) |
-| `MPACER_SPOTIFY_CLIENT_SECRET` | - | idem |
-| `MPACER_SPOTIFY_REDIRECT_URI` | `{public_url}/auth/spotify/callback` | a declarer dans la console Spotify |
-
-### 6.3 API appareil (jeton `Bearer`, memes gardes que `/api/v1/workouts`)
+### 5.3 API appareil (jeton `Bearer`)
 
 | Methode | Chemin | Reponse |
 |---|---|---|
-| GET | `/api/v1/music/playlists` | `{"playlists":[{"id","name","source","target_bpm","track_count","total_bytes","ready_track_count","updated_at_ms"}]}` |
-| GET | `/api/v1/music/playlists/{id}` | `{"id","name","source","target_bpm","tracks":[{"id","position","title","artist","album","duration_s","bpm","bpm_source","size_bytes","mime","spotify_uri","download_url"}]}` - `download_url` vaut `null` si la piste n'a pas de fichier |
-| GET | `/api/v1/music/tracks/{id}/file` | octets audio, `Content-Type`, `Accept-Ranges: bytes`, `206` si `Range` |
-| POST | `/api/v1/music/playlists/{id}/ack` | corps `{"track_ids":["..."]}` -> `{"playlist_id","downloaded"}` |
-| POST | `/api/v1/music/playlists` | téléversement **depuis l'application compagnon** : `multipart/form-data` avec `name` + `files` répétés -> `{"playlist_id","name","track_count","total_bytes","ready_track_count"}` ; mêmes erreurs que `/music/upload` (`400`, `413`, `415`) |
-| GET | `/api/v1/music/prepare` | `{"plan": null}` ou `{"plan":{"id","playlist_id","name","target_bpm","race_id","race_name","requested_at_ms","tracks":[...]}}` (dernier plan non acquitte) |
-| POST | `/api/v1/music/prepare/ack` | corps `{"plan_id":"..."}` -> `{"ok":true}` |
+| GET | `/api/v1/music/playlists` | `{"playlists":[{"id","name","source","target_bpm","track_count","duration_s","updated_at_ms"}]}` |
+| GET | `/api/v1/music/playlists/{id}` | `{"id","name","source","target_bpm","manifest_url","tracks":[{"id","position","title","artist","album","duration_s","bpm","bpm_source"}]}` |
+| GET | `/api/v1/music/playlists/{id}/manifest` | **manifeste de transfert** (JSON, schema de la section 3.1), en piece jointe `Content-Disposition: attachment` ; c'est ce fichier que `mpacer-music` consomme |
 
-### 6.4 Interface web (cookie de session)
+Les routes `tracks/{id}/file`, `playlists/{id}/ack`, `music/prepare`,
+`music/prepare/ack` et `POST /api/v1/music/playlists` (multipart) sont
+**supprimees**, ainsi que `src/media.rs`.
+
+### 5.4 Interface web
 
 | Methode | Chemin | Role |
 |---|---|---|
-| GET | `/music` | page complete (voir section 7) |
-| GET | `/auth/spotify` | demarre OAuth 2.0 + PKCE Spotify |
-| GET | `/auth/spotify/callback` | echange le code, enregistre `spotify_accounts` |
-| POST | `/music/spotify/disconnect` | supprime le compte lie |
-| GET | `/music/search?q=running` | recherche de playlists Spotify (resultats dans la page) |
-| POST | `/music/import` | `spotify_ref` (URL ou id) + `target_bpm` optionnel -> playlist `source=spotify` |
-| POST | `/music/upload` | `multipart/form-data` : `playlist_name`, `files[]` -> playlist `source=upload`, BPM par balise |
-| POST | `/music/playlists/{id}/track-bpm` | `track_id`, `bpm` (saisie manuelle ou tap-tempo) |
-| POST | `/music/playlists/{id}/target` | `target_bpm` (vide = automatique) |
-| POST | `/music/playlists/{id}/delete` | supprime la playlist et ses fichiers |
-| POST | `/music/prepare` | `playlist_id`, `race_id` optionnel -> cree le plan de telechargement |
-| POST | `/music/prepare/cancel` | annule le plan en attente |
+| GET | `/music` | page complete (section 6.1) |
+| GET | `/auth/spotify` + `/auth/spotify/callback` | OAuth 2.0 + PKCE |
+| POST | `/music/spotify/disconnect` | deconnecte le compte |
+| GET | `/music/search?q=running` | recherche de playlists Spotify |
+| POST | `/music/import` | importe une playlist (`spotify_ref`, `target_bpm` optionnel) |
+| POST | `/music/playlists/{id}/track-bpm` | BPM d'un titre (`bpm`, `source` = manual\|tap, `taps` optionnel) |
+| POST | `/music/playlists/{id}/target` | BPM cible (vide = automatique) |
+| POST | `/music/playlists/{id}/delete` | supprime la playlist (metadonnees) |
+| GET | `/music/playlists/{id}/manifest` | **telecharge le manifeste** (session navigateur) |
 
-Erreurs : memes codes que l'existant (`AppError`), message FR affiche dans la page.
+Les routes `POST /music/upload`, `POST /music/prepare` et
+`POST /music/prepare/cancel` sont **supprimees**.
 
-### 6.5 Spotify (`src/spotify.rs`)
+### 5.5 Spotify (inchange)
 
-* `authorize_url(state, code_challenge)`, `exchange_code`, `refresh_token` ;
-* `list_user_playlists`, `get_playlist(id)`, `search_playlists(q)` ;
-* `audio_features(ids)` -> `Ok(None)` si l'API repond 403/404 (endpoint
-  restreint) : **jamais d'echec bloquant**, le BPM reste `None` ;
-* scopes : `playlist-read-private playlist-read-collaborative` ;
-* les jetons sont stockes dans `spotify_accounts` (la base est la frontiere de
-  confiance, au meme titre que les sessions) - a documenter dans le deploiement.
+`src/spotify.rs` : OAuth 2.0 + PKCE, `list_user_playlists`, `get_playlist`,
+`search_playlists`, `audio_features` en *best effort* (`Ok(None)` sur 403/404, le
+BPM reste alors a completer par les balises, le tap ou la saisie). Aucun appel
+reseau dans les tests.
 
-### 6.6 BPM (`src/bpm.rs`)
+## 6. Interface
 
-* `bpm_from_tags(bytes, filename)` : delegue a `mpacer_core::music` ;
-* aucune analyse audio lourde n'est faite cote serveur (documente comme suite
-  possible) : balises, tap-tempo et saisie manuelle couvrent le besoin.
-
-## 7. Interface proposee
-
-### 7.1 Page web `/music` (nouvelle entree de navigation « Musique »)
+### 6.1 Page web `/music`
 
 ```text
 +------------------------------------------------------------------------------+
-| M-pacer   Tableau de bord  Seances  Courses  Planning  [ Musique ]  Reglages |
+| M-pacer   Seances  Courses  Planning  Statistiques  [ Musique ]  Appairer    |
 +------------------------------------------------------------------------------+
-| 1. Source de musique                                                         |
-| +------------------------------+  +-----------------------------------------+ |
-| | Spotify : Connecte (Zach)    |  | Fichiers personnels                     | |
-| | [Deconnecter]                |  | [ Choisir des fichiers MP3/OGG/M4A ]    | |
-| | Rechercher : [ running    ]  |  | Nom de playlist : [ Ma course 10 km   ] | |
-| |  - Running 170 BPM (18 titres)| | [ Importer sur le serveur ]            | |
-| |  - Motivation 5 km (12)      |  +-----------------------------------------+ |
-| +------------------------------+                                              |
-|                                                                              |
+| 1. Source Spotify (facultatif)                                               |
+|  [ Connecter Spotify ]   recherche : [ running            ]  [ Chercher ]    |
+|   - Running 170 BPM (18 titres)              [ Importer ]                    |
 | 2. Playlists preparees                                                       |
-| +--------------------------------------------------------------------------+ |
-| | Run 170      spotify  18 titres   0 Mo  BPM cible [170]  [Preparer >]     | |
-| | Ma course 10km  upload  12 titres  86 Mo  BPM cible [auto] [Preparer >]   | |
-| +--------------------------------------------------------------------------+ |
-|                                                                              |
+|  Run 170   spotify  18 titres  1:02:14  BPM cible [170]   [Manifeste] [x]    |
 | 3. Titres (playlist selectionnee)                                            |
-| +----+-----------------------+----------+------+-------+-----------------+   |
-| | #  | Titre                 | Artiste  | Duree| BPM   |                 |   |
-| | 1  | Wake me up            | Avicii   | 4:09 | 124   | [tapper][saisir]|   |
-| +----+-----------------------+----------+------+-------+-----------------+   |
-|                                                                              |
-| 4. Preparation de la prochaine course                                        |
-| +--------------------------------------------------------------------------+ |
-| | Course : [ 10 km de Bordeaux v ]   Playlist : [ Run 170 v ]               | |
-| | BPM cible [auto]   Taille 86 Mo   Etat : en attente de la montre          | |
-| | [ Envoyer sur la montre ]                                                 | |
-| +--------------------------------------------------------------------------+ |
+|  1  Wake me up   Avicii   4:09   124 bpm (balise)   [tapper][saisir]         |
+| 4. Transfert vers la montre (USB)                                            |
+|  1. [ Telecharger le manifeste ]  run-170.json                               |
+|  2. Sur l'ordinateur :  mpacer-music transfer --manifest run-170.json \      |
+|        --folder "D:\Musique\Course"                                          |
+|  3. Brancher la montre en USB, puis lancer la commande.                      |
+|  4. Sur la montre : Musique > [ Importer (USB) ].                            |
 +------------------------------------------------------------------------------+
 ```
 
-« Envoyer sur la montre » **ne pousse pas** les octets depuis le navigateur :
-cela cree un *plan de telechargement* que la montre (ou l'application
-compagnon) recupere au prochain reveil, puis telecharge en Wi-Fi. C'est le
-principe « la montre est la source de verite » deja applique aux seances.
+La page **ne televerse aucun fichier audio** et ne propose plus « Envoyer sur la
+montre » : elle produit un manifeste JSON que l'outil local consomme.
 
-### 7.2 Montre - ecran Musique
+### 6.2 Application locale `mpacer-music` (nouveau crate, interface web locale)
+
+```text
++--- http://127.0.0.1:8077 ----------------------------------------------------+
+| 1. Playlist      [ Choisir le manifeste... ] run-170.json                    |
+|                  Run 170 - 18 titres - BPM cible 170                         |
+| 2. Dossier des MP3   D:\Musique\Course            [ Parcourir ] [Analyser]   |
+| 3. Montre         (o) Pixel Watch (adb)   libre 5,1 Go / 7,6 Go              |
+| 4. Appariement    14/18 titres trouves   4 manquants   3 fichiers ignores    |
+|    | # | Titre            | Fichier                       | BPM | Duree |      |
+|    | 1 | Wake me up       | 01 - Avicii - Wake me up.mp3  | 124 | 4:09  |      |
+|    | 5 | Levels           | -- manquant --                |     |       |      |
+| 5. [ Transferer sur la montre ]   [ Simulation ]   [ Copier le rapport ]      |
++------------------------------------------------------------------------------+
+```
+
+CLI equivalente (meme code, meme resultat) :
+
+```bash
+mpacer-music                                  # interface locale, ouvre le navigateur
+mpacer-music --port 9000 --no-browser
+mpacer-music devices                          # montre(s) detectee(s) par adb
+mpacer-music inspect  --manifest run-170.json --folder "D:\Musique\Course"
+mpacer-music transfer --manifest run-170.json --folder "D:\Musique\Course" \
+                      [--serial XXX] [--dry-run] [--prune] [--strict]
+```
+
+Codes de sortie : `0` succes ; `2` usage ; `3` adb introuvable ; `4` aucune
+montre ; `5` espace insuffisant sur la montre ; `6` titres manquants avec
+`--strict`.
+
+Endpoints de l'interface locale :
+
+| Methode | Chemin | Role |
+|---|---|---|
+| GET | `/` | page (section ci-dessus) |
+| GET | `/api/browse?path=C:\...` | `{"path","parent","dirs":[{"name","path"}],"audio_count"}` (sans `path`, part des dossiers personnels) |
+| GET | `/api/devices` | `{"adb":"chemin"\|"absent","devices":[{"serial","model","state","free_bytes","total_bytes"}]}` |
+| POST | `/api/inspect` | corps `{"manifest_path"\|"manifest_json","folder"}` -> `{"playlist":{...},"matches":[{"track_id","position","title","artist","file","score","bpm","size_bytes","duration_s"}],"missing":[...],"unused_files":[...],"total_bytes":N}` |
+| POST | `/api/transfer` | corps `{"manifest_path"\|"manifest_json","folder","serial","prune","dry_run"}` -> `{"job_id":"..."}` |
+| GET | `/api/transfer/{job_id}` | `{"state":"running"\|"done"\|"failed"\|"cancelled","step","current","total","bytes_sent","error","logs":[...]}` |
+| POST | `/api/transfer/{job_id}/cancel` | annule le transfert en cours |
+
+L'interface et la CLI **appellent le meme planificateur** : l'appariement, le tri
+par taille, le controle d'espace et la copie n'existent qu'une fois.
+
+### 6.3 Ce que l'outil ecrit sur la montre
+
+Cible adb : `context.getExternalFilesDir("Music")`, soit
+`/sdcard/Android/data/com.mpacer.watch/files/Music/` (aucune permission
+speciale, accessible par adb sur Android 11+).
+
+```text
+/sdcard/Android/data/com.mpacer.watch/files/Music/
+  run-170/                       <- un dossier par playlist (id du manifeste)
+    01 - Avicii - Wake me up.mp3
+    ...
+    manifest.json                <- manifeste + fichiers reellement copies
+```
+
+`manifest.json` = manifeste de la section 3.1, chaque piste portant en plus
+`"file": "01 - Avicii - Wake me up.mp3"` et `"size_bytes": 4523112` (absents si
+le titre n'a pas ete trouve). L'outil ecrit d'abord dans un dossier temporaire
+puis pousse ; `--prune` supprime les fichiers du dossier montre qui ne sont plus
+dans le manifeste.
+
+### 6.4 Ecran Musique de la montre
 
 ```text
    +---------------------------+        +---------------------------+
-   | 1. Bibliotheque           |        | 2. Lecture                |
-   |  Run 170      [>] 18 p.   |  --->  |      Wake me up           |
-   |  Ma course 10km  [v] 12 p.|        |      Avicii  172 BPM      |
-   |  (v = telechargee)        |        |  cible 176 BPM   cadence  |
-   |  [Telecharger]  [Reglages]|        |  [<<]  [ Pause ]  [>>]    |
+   | 1. Bibliotheque (USB)     |        | 2. Lecture                |
+   |  Run 170     18 p. 86 Mo  |  --->  |      Wake me up           |
+   |  Ma course 10km 12 p.     |        |      Avicii  172 BPM      |
+   |  [ Importer (USB) ]       |        |  cible 176 BPM   cadence  |
+   |  libre 5,1 Go             |        |  [<<]  [ Pause ]  [>>]    |
    +---------------------------+        +---------------------------+
 ```
 
-* l'ecran principal affiche une **pastille musique** (BPM cible + fleche
-  Boost/Relax) sous le panneau d'assistant ;
-* l'acces Musique est un bouton de l'ecran principal a l'arret, et une entree
-  « Musique » des reglages ;
-* avant la course : « Preparer » liste les playlists du backend, telecharge la
-  fiche (Spotify) et les fichiers (upload), affiche la progression et l'espace
-  utilise ;
-* source **spotify** : M-pacer ne telecharge aucun octet audio ; il pilote la
-  session de l'application Spotify par `android.media.session.MediaController`
-  (Media3 1.5.x n'accepte pas le jeton d'une session tierce). L'acces aux
-  notifications est donc necessaire, et une session tierce n'expose que
-  lecture/pause/suivant/precedent : M-pacer ne peut pas choisir un morceau
-  arbitraire dans l'application Spotify, il enchaine les pistes.
+* plus aucune reference a Spotify sur la montre (pas de session tierce, pas
+  d'acces aux notifications) ;
+* « Importer (USB) » relit `getExternalFilesDir("Music")` : chaque sous-dossier
+  contenant un `manifest.json` devient une playlist locale ; l'index est stocke
+  dans `filesDir/music-index.json` ;
+* la montre affiche le nombre de titres et l'espace utilise, et permet de
+  supprimer une playlist importee ;
+* l'ecran principal conserve la pastille BPM cible / Boost / Relax.
 
-### 7.3 Application compagnon
+### 6.5 Application compagnon
 
-Onglet « Musique » : liste des playlists preparees cote serveur, bouton
-**« Envoyer sur la montre »** (met le plan en file via Data Layer et reveille la
-montre), bouton « Televerser des fichiers » (memes endpoints web que le
-navigateur, avec le jeton de session du telephone).
+L'onglet Musique devient **informatif** : liste des playlists du backend et
+rappel que le transfert se fait par USB depuis l'ordinateur (`mpacer-music`).
+Aucun televersement, aucun envoi de fichiers par le telephone.
 
-## 8. Plan de verification
+## 7. Plan de verification
 
 | Chantier | Preuve attendue |
 |---|---|
-| Coeur | `cargo test -p mpacer-core` (nouveaux tests `music::*`), `cargo clippy --workspace --all-targets -- -D warnings` |
-| FFI | `cargo test -p mpacer-ffi` (aller-retour des nouvelles commandes) |
-| Backend | `cargo test -p mpacer-api` + `MPACER_TEST_DATABASE_URL=... cargo test -p mpacer-api --test api` (18 tests existants + nouveaux) |
-| Montre / compagnon | `android/gradlew.bat :app:assembleDebug :companion:assembleDebug` |
-| Bout en bout | `cargo test --workspace` et relecture du diff complet par le Lead |
+| Coeur | `cargo test -p mpacer-core` : tests d'appariement (titre+artiste, duree, seuil 0.6, fichier unique, determinisme, accents/majuscules, `feat.`) |
+| Outil | `cargo test -p mpacer-music` + `mpacer-music inspect` sur un dossier de test ; interface locale interrogee (browse/inspect) sans adb |
+| Backend | `cargo test -p mpacer-api --test api` avec PostgreSQL : fiches, BPM, manifeste exporte, Spotify facultatif |
+| Montre | `gradlew :app:assembleDebug :companion:assembleDebug` |
+| Bout en bout | `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, relecture du diff par le Lead |
 
-## 9. Hors perimetre (v1)
+## 8. Hors perimetre
 
-* decodage/analyse audio serveur pour estimer le BPM d'un MP3 (balises, tap et
-  saisie manuelle suffisent ; suite possible : analyse par autocorrelation) ;
-* lecture de l'audio Spotify par M-pacer (impossible sans contourner le DRM) ;
-* synchronisation du BPM avec la cadence mesuree par la montre (v2 : boucle
-  fermee capteur de pas -> consigne de tempo).
-## 10. Etat d'implementation (6 octobre 2026)
+* lecture de l'audio Spotify par M-pacer (DRM) : **hors sujet en v2**, la montre
+  ne joue que des fichiers presents sur son disque ;
+* analyse audio pour deviner le BPM d'un MP3 sans balise (tap-tempo et saisie
+  manuelle suffisent) ;
+* synchronisation automatique a la connexion USB (l'utilisateur lance le
+  transfert ; une surveillance `adb` continue est une suite possible) ;
+* capteur de pas -> consigne de tempo (v2 du coeur).
+## 9. Etat d'implementation (6 octobre 2026, v2)
 
 | Chantier | Livre | Preuve |
 |---|---|---|
-| Coeur | `crates/mpacer-core/src/music.rs`, integration `engine.rs`/`voice.rs`, 4 commandes FFI | `cargo test --workspace` : core 136 tests, ffi 8 tests ; `cargo clippy --workspace --all-targets -- -D warnings` propre |
-| Backend | migration `0003_music.sql`, `spotify.rs`, `bpm.rs`, `media.rs`, 7 routes API appareil, page `/music` et 12 routes web | `cargo test -p mpacer-api --test api` : **23 tests verts** contre un PostgreSQL reel ; page `/music` verifiee en service |
-| Montre | package `com.mpacer.watch.music`, ecran `MusicScreen`, pastille BPM, directives appliquees par `TrackingService` | `gradlew :app:assembleDebug :companion:assembleDebug` : BUILD SUCCESSFUL ; les trois `libmpacer_ffi.so` regeneres contiennent `set_music_playlist` et `on_cadence` |
-| Compagnon | onglet Musique, envoi du plan par Data Layer, televersement par l'endpoint appareil | idem (APK telephone produit) |
-| Simulateur | option `--music` : consigne de tempo et lecteur factice | `cargo run -p mpacer-sim -- --music` |
-| Deploiement | volume `/data/media` (PVC jo3 ou `emptyDir`), variables Spotify | `helm lint` + `helm template` (valeurs par defaut et jo3) |
+| Coeur | appariement `LocalFile`/`WantedTrack`/`match_tracks`/`parse_manifest`/`normalize_label` dans `crates/mpacer-core/src/music.rs` | `cargo test --workspace` : coeur 164 tests ; clippy propre |
+| Outil | nouveau crate `crates/mpacer-music` (CLI + interface locale 127.0.0.1:8077, planificateur unique, adb push, `--dry-run`, `--target-dir`) | `inspect` sur une fixture (3/4 appariees, scores 0.85, BPM lu dans les balises), `transfer --target-dir` verifie par le Lead : arborescence + `manifest.json` avec `file`/`size_bytes` |
+| Backend | audio supprime (upload, stockage, service de fichiers, plans) ; `GET .../playlists/{id}/manifest` + `manifest_url` ; page `/music` en 4 blocs USB | `cargo test -p mpacer-api --test api` : **27 verts, 1 ignore, 0 echec** contre PostgreSQL ; page verifiee en service (`4. Transfert vers la montre (USB)`, plus aucun formulaire de televersement) |
+| Montre | `SpotifyRemote.kt` et `MediaSessionAccessService.kt` supprimes ; `MusicLibrary` = scanner de `getExternalFilesDir("Music")` ; « Importer (USB) » ; lecture locale seule | `gradlew :app:assembleDebug :companion:assembleDebug` : BUILD SUCCESSFUL, trois `libmpacer_ffi.so` regeneres |
+| Deploiement | plus de volume applicatif ni de `MPACER_MEDIA_DIR` ; cles Spotify conservees | `helm lint` + `helm template` (valeurs par defaut et jo3) |
 
-Ecarts au contrat, tous documentes et valides :
+Ecarts au contrat, tous documentes :
 
-* `download_url` est **relatif** (la montre joint le backend par une autre URL
-  que `public_url`) ;
-* `music_tracks.downloaded_at_ms` ajoutee pour que l'accuse de telechargement
-  de la montre ait un effet reel ;
-* `POST /api/v1/music/playlists` ajoute pour le compagnon, qui ne possede qu'un
-  jeton d'appareil (jamais de cookie de session) ;
-* `VoiceSnapshot.music_bpm` ajoute (champ additif) faute de charge utile dans
-  `VoiceCue::MusicTempo` ;
-* `MusicConfig::enabled` vaut **true** par defaut (opt-out depuis les Reglages
-  de la montre) et `target_cadence_spm` est bornee a 140..=210 : au-dela de
-  ~3:30/km la cadence sature, la vitesse vient de la foulee ;
-* Spotify : `audio-features` reste *best effort* (endpoint restreint depuis le
-  27/11/2024) ; le BPM vient sinon des balises du fichier, du tap-tempo ou de la
-  saisie manuelle.
+* `POST /api/v1/transfer` (interface locale) accepte un champ optionnel `target_dir`
+  et la commande `serve` accepte `--target-dir` / `--adb` / `--port` / `--no-browser` :
+  ajouts additifs, utilises par les tests et le mode simulation sans montre ;
+* `GET /api/inspect` renvoie une entree par piste dans `matches` (`file: null` si non
+  appariee) et la liste `missing` a part, pour suivre la maquette 6.2 ;
+* la lecture des balises BPM par l'outil se limite aux 256 premiers Ko de chaque
+  fichier (suffisant pour un tag ID3v2/Vorbis en tete) ;
+* le transfert USB reel n'a pas pu etre exerce dans cette session (aucune montre
+  branchee) : `adb push`, `df` et `--prune` sont couverts par les primitives, les
+  tests et le mode `--target-dir`, pas par un branchement physique.

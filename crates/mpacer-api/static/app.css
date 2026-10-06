@@ -214,6 +214,86 @@ header.site nav a.active { color: var(--text); background: var(--surface-2); bor
   .who { display: none; }
 }
 
+/* Menu des reglages : appairage, jetons et deconnexion derriere une entree. */
+
+header.site .menu { position: relative; flex: none; }
+
+header.site .menu > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 13px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 14.5px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  transition: color .18s var(--ease), background .18s var(--ease), border-color .18s var(--ease);
+}
+
+header.site .menu > summary::-webkit-details-marker { display: none; }
+header.site .menu > summary::marker { content: ""; }
+header.site .menu > summary:hover { color: var(--text); background: var(--surface-3); }
+header.site .menu > summary.active { color: var(--text); border-color: var(--orange-line); }
+
+/* Sur telephone, l'icone suffit : la barre d'onglets occupe deja le bas. */
+@media (max-width: 859px) {
+  header.site .menu > summary span:not(.icon) { display: none; }
+  header.site .menu > summary { padding: 8px 11px; }
+}
+
+.menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 60;
+  min-width: 210px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-2);
+  animation: rise .16s var(--ease) both;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 12px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 14.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.menu-item:hover { background: var(--surface-2); filter: none; }
+.menu-item:active { transform: none; }
+.menu-item .icon { color: var(--muted); }
+.menu-item.danger, .menu-item.danger .icon { color: var(--danger); }
+.menu-item .menu-current {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+
 /* Fiche de compte (reglages) : la photo telle qu'elle est utilisee partout. */
 .card.profile {
   display: flex;
@@ -393,6 +473,14 @@ footer {
 .row .row-main { flex: 1; min-width: 0; }
 .row .row-title { font-weight: 650; font-size: 15.5px; }
 .row .row-sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+/* Commentaire de seance dans l'historique : une ligne, tronquee si trop long. */
+.row-comment {
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .row .row-value {
   font-weight: 700;
@@ -645,6 +733,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 22px 0; }
 .icon-logout { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 4h3.5A1.5 1.5 0 0 1 20 5.5v13A1.5 1.5 0 0 1 18.5 20H15M11 8l-4 4 4 4M7 12h9'/%3E%3C/svg%3E"); }
 .icon-google { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M12 11v2.6h6.2c-.27 1.6-1.9 4.7-6.2 4.7A6.3 6.3 0 0 1 12 5.7c1.8 0 3 .76 3.7 1.4l2.5-2.4C16.6 3.2 14.5 2.3 12 2.3a9.7 9.7 0 1 0 0 19.4c5.6 0 9.3-3.9 9.3-9.4 0-.63-.07-1.1-.16-1.6H12z'/%3E%3C/svg%3E"); }
 .icon-clock { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7.5V12l3 2'/%3E%3C/svg%3E"); }
+.icon-settings { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='3.4'/%3E%3Cpath d='M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1'/%3E%3C/svg%3E"); }
 
 /* --------------------------------------------------------------- animations */
 
@@ -778,17 +867,211 @@ hr { border: none; border-top: 1px solid var(--border); margin: 22px 0; }
 .mini-card .card-label { margin-bottom: 4px; }
 .mini-card strong { font-size: 19px; font-weight: 700; }
 
-input[type="file"] {
-  width: 100%;
-  padding: 11px 12px;
-  border-radius: var(--radius-sm);
-  border: 1px dashed var(--border-strong);
-  background: var(--surface-2);
-  color: var(--muted);
-  font: inherit;
-  font-size: 14px;
-  margin-bottom: 14px;
+/* Transfert USB : etapes numerotees du bloc 4. */
+.usb-steps {
+  margin: 0 0 14px;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.usb-steps li { color: var(--muted); }
+.usb-steps li code {
+  display: inline-block;
+  margin-top: 4px;
+  color: var(--text);
+  word-break: break-all;
 }
 
 .icon-music { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='6.5' cy='18' r='2.6'/%3E%3Ccircle cx='16.5' cy='16' r='2.6'/%3E%3Cpath d='M9.1 18V5.6l10-2V16'/%3E%3C/svg%3E"); }
+
+/* --------------------------------------------------------- tableaux de bord */
+/* Un tableau de bord est une grille de widgets (docs/08). Chaque widget garde
+   la mise en page des ecrans de seance : cartes de chiffres, graphiques SVG,
+   tableaux. */
+
+.dash-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--gap);
+  margin-top: 18px;
+}
+
+@media (min-width: 900px) {
+  .dash-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.widget {
+  min-width: 0;
+  padding: 14px 16px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-1);
+}
+
+.widget-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--muted);
+}
+.widget-head .icon { color: var(--orange); }
+.widget-head h2 {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.widget h3 {
+  margin: 16px 0 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.widget .mini-cards { margin: 0 0 12px; }
+.widget .table-wrap { margin: 0; }
+.widget .chart { margin: 0 0 12px; }
+
+.pace-hero {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.pace-hero .pace-value {
+  font-size: 40px;
+  font-weight: 750;
+  line-height: 1.05;
+  letter-spacing: -.02em;
+}
+.pace-hero .pace-unit { color: var(--muted); }
+
+.chart.map { border-radius: var(--radius-sm); overflow: hidden; }
+.chart.map .band { fill: var(--surface-2); }
+.chart .bar-pace { fill: var(--orange); opacity: .85; }
+.chart .bar-pace:hover { opacity: 1; }
+
+.zone-bars { display: grid; gap: 6px; }
+.zone-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) 46px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.zone-name {
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.zone-track {
+  height: 8px;
+  border-radius: 99px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.zone-fill { height: 100%; background: linear-gradient(90deg, var(--orange-deep), var(--orange)); }
+.zone-value { text-align: right; color: var(--muted); }
+
+/* -------------------------------------------------- constructeur de tableaux */
+
+.template-picker { display: grid; gap: 8px; margin-bottom: 16px; }
+.template-notes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.widget-picker {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.widget-picker legend { padding: 0 6px; color: var(--muted); font-size: 13px; }
+
+.check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 10px;
+  cursor: pointer;
+}
+.check input {
+  grid-row: span 2;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--orange);
+}
+.check .check-label { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.check small { grid-column: 2; color: var(--muted); font-size: 12.5px; }
+
+.widget-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.widget-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+}
+.widget-name {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.widget-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.widget-actions form { margin: 0; }
+
+.widget-add { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-top: 14px; }
+.widget-add label { flex-basis: 100%; }
+.widget-add select { flex: 1; min-width: 200px; }
+
+.icon-grid { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linejoin='round'%3E%3Crect x='3.5' y='3.5' width='7' height='7' rx='2'/%3E%3Crect x='13.5' y='3.5' width='7' height='7' rx='2'/%3E%3Crect x='3.5' y='13.5' width='7' height='7' rx='2'/%3E%3Crect x='13.5' y='13.5' width='7' height='7' rx='2'/%3E%3C/svg%3E"); }
+.icon-plus { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.3' stroke-linecap='round'%3E%3Cpath d='M12 5v14M5 12h14'/%3E%3C/svg%3E"); }
+.icon-heart { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linejoin='round'%3E%3Cpath d='M12 20s-7-4.4-7-9.3A4.2 4.2 0 0 1 12 7.4a4.2 4.2 0 0 1 7 3.3C19 15.6 12 20 12 20z'/%3E%3C/svg%3E"); }
+.icon-list { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linecap='round'%3E%3Cpath d='M8 6h12M8 12h12M8 18h12M4.2 6h.01M4.2 12h.01M4.2 18h.01'/%3E%3C/svg%3E"); }
+.icon-flag { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 21V4M5 5h13l-2 4 2 4H5'/%3E%3C/svg%3E"); }
+
+/* Courbes SVG : sans ces regles, une polyligne se remplit en noir (defaut SVG).
+   Le trace GPS et les courbes de seance redeviennent donc lisibles. */
+.chart polyline {
+  fill: none;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.chart .trace.pace { stroke: var(--orange); }
+.chart .trace.cardio { stroke: var(--info); }
+.chart .trace.elevation { stroke: var(--muted); }
+
+/* Les bandes de fond des graphiques multi-courbes restent des fonds : elles ne
+   prennent ni la couleur des barres ni l'animation de croissance. */
+.chart rect.band {
+  fill: var(--surface-2);
+  opacity: 1;
+  animation: none;
+}
+.chart.map rect.band { fill: var(--surface-2); }
+
+
 

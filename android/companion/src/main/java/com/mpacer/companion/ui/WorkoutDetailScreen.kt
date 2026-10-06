@@ -59,6 +59,28 @@ fun WorkoutDetailScreen(
                     Text("Allure moyenne : " + Format.pace(detail.workout.averagePaceSPerKm) + " /km")
                     detail.summary?.let { summary ->
                         Text("Tours : " + summary.laps.size + "   Points GPS : " + summary.track.size)
+                        // Temps ecoule : affiche seulement s'il differe du temps de course.
+                        if (summary.elapsedS > summary.durationS + 0.5) {
+                            Text("Temps ecoule : " + Format.duration(summary.elapsedS))
+                        }
+                        if (summary.heartRate.isNotEmpty()) {
+                            val moyenne = summary.heartRate.map { it.bpm }.average().toInt()
+                            val maximum = summary.heartRate.maxOf { it.bpm }
+                            Text("FC : " + moyenne + " moy / " + maximum + " max")
+                        }
+                        if (summary.pauses.isNotEmpty()) {
+                            val total = summary.pauses.sumOf { it.durationS }
+                            Text(
+                                "Pauses : " + summary.pauses.size + " (" +
+                                    Format.duration(total) + ")"
+                            )
+                        }
+                        summary.plan?.let { plan ->
+                            Text(
+                                "Plan : " + Format.duration(plan.targetTimeS) + " sur " +
+                                    Format.distance(plan.distanceM)
+                            )
+                        }
                     }
                 }
             }

@@ -18,7 +18,7 @@ RUN apt-get update \
 COPY --from=builder /src/target/release/mpacer-api /usr/local/bin/mpacer-api
 
 # Toutes les donnees vivent sous /data (volume persistant) ; le reste est en lecture seule.
-RUN mkdir -p /data/media && chown -R 10001:10001 /data
+RUN mkdir -p /data && chown -R 10001:10001 /data
 VOLUME ["/data"]
 
 USER 10001:10001

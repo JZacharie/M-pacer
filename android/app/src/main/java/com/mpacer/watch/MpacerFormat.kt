@@ -30,12 +30,21 @@ object MpacerFormat {
             String.format(Locale.ROOT, "%.2f km", meters / 1000.0)
         }
 
-    /** Ligne unique pour la notification systeme. */
+    /**
+     * Ligne unique pour la notification systeme.
+     *
+     * La frequence cardiaque n'est ajoutee que si la montre en fournit une : sans
+     * capteur, la ligne reste exactement celle d'avant.
+     */
     fun summaryLine(output: EngineOutput): String = buildString {
         append(pace(output.currentPace))
         append("  ")
         append(distance(output.distanceM))
         append("  ")
         append(duration(output.elapsedS))
+        output.heartRateBpm?.let {
+            append("  ")
+            append(it)
+        }
     }
 }

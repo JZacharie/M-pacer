@@ -70,6 +70,7 @@ fun MainScreen(
                 Text(MpacerFormat.distance(output?.distanceM ?: 0.0), color = Palette.muted)
                 Text(MpacerFormat.duration(output?.elapsedS ?: 0.0), color = Palette.muted)
             }
+            HeartRateLine(output)
             AssistantPanel(output)
             MusicPill(output?.music)
             Controls(output, onStart, onPause, onResume, onStop, onSettings, onSync, onMusic)
@@ -107,6 +108,26 @@ private fun AssistantPanel(output: EngineOutput?) {
             Text("finish ${MpacerFormat.duration(it)}", color = Palette.muted)
         }
     }
+}
+
+/**
+ * Frequence cardiaque et zone, quand la montre en fournit une.
+ *
+ * La couleur suit la zone (bleu en endurance, rouge au seuil) : c'est la
+ * convention des montres, et celle de la page d'analyse du backend. Rien n'est
+ * affiche si la montre n'a pas de capteur, ou si l'utilisateur a refuse la
+ * permission : la seance reste complete.
+ */
+@Composable
+private fun HeartRateLine(output: EngineOutput?) {
+    val current = output ?: return
+    val bpm = current.heartRateBpm ?: return
+    val zone = current.heartRateZone
+    Text(
+        text = if (zone == null) bpm.toString() + " bpm" else bpm.toString() + " bpm  Z" + zone,
+        color = Palette.zoneColor(zone),
+        fontSize = 13.sp,
+    )
 }
 
 /**

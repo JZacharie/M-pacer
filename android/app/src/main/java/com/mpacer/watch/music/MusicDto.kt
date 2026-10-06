@@ -4,34 +4,21 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * Modeles JSON echanges avec le backend (docs/07 sections 6.3 et 7.2) et index
- * local de la bibliotheque de la montre.
+ * Modeles locaux de la musique de la montre (docs/07 v2, section 6.3).
  *
- * Les noms de champs sont ceux de serde (snake_case) : aucune conversion n'est
- * faite cote serveur.
+ * La montre ne fait plus aucun appel reseau pour la musique : les fichiers et le
+ * manifeste sont copies par USB par l'outil PC `mpacer-music`, puis relus dans
+ * context.getExternalFilesDir("Music").
  */
 
-// ------------------------------------------------------------- API appareil
+// ---------------------------------------------------------- manifeste USB
 
-/** Ligne de GET /api/v1/music/playlists. */
+/**
+ * Piste d'un manifeste de transfert (schema docs/07 section 3.1), enrichie par
+ * l'outil PC avec `file` et `size_bytes` quand le fichier a ete apparie.
+ */
 @Serializable
-data class ServerPlaylistRow(
-    val id: String,
-    val name: String,
-    val source: String = "upload",
-    @SerialName("target_bpm") val targetBpm: Double? = null,
-    @SerialName("track_count") val trackCount: Int = 0,
-    @SerialName("total_bytes") val totalBytes: Long = 0,
-    @SerialName("ready_track_count") val readyTrackCount: Int = 0,
-    @SerialName("updated_at_ms") val updatedAtMs: Long = 0,
-)
-
-@Serializable
-data class ServerPlaylistList(val playlists: List<ServerPlaylistRow> = emptyList())
-
-/** Piste de GET /api/v1/music/playlists/{id}. */
-@Serializable
-data class ServerTrackRow(
+data class ManifestTrack(
     val id: String,
     val position: Int = 0,
     val title: String = "",
@@ -39,125 +26,82 @@ data class ServerTrackRow(
     val album: String? = null,
     @SerialName("duration_s") val durationS: Double? = null,
     val bpm: Double? = null,
-    @SerialName("bpm_source") val bpmSource: String? = null,
+    /** Nom du fichier dans le dossier de la playlist, absent si non apparie. */
+    val file: String? = null,
     @SerialName("size_bytes") val sizeBytes: Long? = null,
-    val mime: String? = null,
-    @SerialName("spotify_uri") val spotifyUri: String? = null,
-    /** null quand la piste n'a pas de fichier (playlist Spotify : fiche seule). */
-    @SerialName("download_url") val downloadUrl: String? = null,
 )
 
+/** Manifeste ecrit par mpacer-music dans <Music>/<playlist_id>/manifest.json. */
 @Serializable
-data class ServerPlaylistDetail(
-    val id: String,
-    val name: String,
-    val source: String = "upload",
-    @SerialName("target_bpm") val targetBpm: Double? = null,
-    val tracks: List<ServerTrackRow> = emptyList(),
-)
-
-/** Plan de telechargement en attente (GET /api/v1/music/prepare). */
-@Serializable
-data class PreparePlan(
-    val id: String,
-    @SerialName("playlist_id") val playlistId: String,
+data class TransferManifest(
+    val version: Int = 1,
+    @SerialName("playlist_id") val playlistId: String = "",
     val name: String = "",
+    /** "spotify" ou "manual" : origine des metadonnees, pas un mode de lecture. */
+    val source: String = "manual",
     @SerialName("target_bpm") val targetBpm: Double? = null,
-    @SerialName("race_id") val raceId: String? = null,
-    @SerialName("race_name") val raceName: String? = null,
-    @SerialName("requested_at_ms") val requestedAtMs: Long = 0,
-    val tracks: List<PrepareTrack> = emptyList(),
-)
-
-@Serializable
-data class PrepareTrack(
-    val id: String,
-    val position: Int = 0,
-    val title: String = "",
-    val artist: String? = null,
-    @SerialName("duration_s") val durationS: Double? = null,
-    val bpm: Double? = null,
-    @SerialName("size_bytes") val sizeBytes: Long? = null,
-    @SerialName("download_url") val downloadUrl: String? = null,
-)
-
-@Serializable
-data class PrepareResponse(val plan: PreparePlan? = null)
-
-@Serializable
-data class PrepareAck(@SerialName("plan_id") val planId: String)
-
-@Serializable
-data class PlaylistAckRequest(
-    @SerialName("track_ids") val trackIds: List<String> = emptyList(),
+    val tracks: List<ManifestTrack> = emptyList(),
 )
 
 // ------------------------------------------------------------- index local
 
-/** Piste effectivement presente sur la montre (fichier audio telecharge). */
+/** Piste presente sur la montre (fichier audio copie par USB). */
 @Serializable
 data class LocalTrack(
     val id: String,
     val title: String,
     val artist: String? = null,
+    val album: String? = null,
     @SerialName("duration_s") val durationS: Double = 0.0,
     val bpm: Double? = null,
     val position: Int = 0,
-    /** Chemin absolu du fichier audio, ou null pour une fiche Spotify. */
+    /** Chemin absolu du fichier audio, ou null si la piste n'a pas ete appariee. */
     val file: String? = null,
     @SerialName("size_bytes") val sizeBytes: Long = 0,
-    @SerialName("spotify_uri") val spotifyUri: String? = null,
 )
 
-/** Playlist locale : fiche + fichiers audios deja telecharges. */
+/** Playlist importee : manifeste + fichiers reellement presents sur la montre. */
 @Serializable
 data class LocalPlaylist(
     val id: String,
     val name: String,
-    val source: String = "upload",
+    val source: String = "manual",
     @SerialName("target_bpm") val targetBpm: Double? = null,
     val tracks: List<LocalTrack> = emptyList(),
-    @SerialName("downloaded_at_ms") val downloadedAtMs: Long = 0,
+    /** Nom du sous-dossier de <Music> qui porte le manifeste. */
+    val folder: String? = null,
+    @SerialName("imported_at_ms") val importedAtMs: Long = 0,
 ) {
+    /** Pistes reellement jouables (fichier present sur la montre). */
     val playable: List<LocalTrack> get() = tracks.filter { it.file != null }
+
     val trackCount: Int get() = tracks.size
 
-    /** Vue envoyee au coeur Rust : le moteur ne connait que titres et BPM. */
+    val sizeBytes: Long get() = playable.sumOf { it.sizeBytes }
+
+    /**
+     * Vue envoyee au coeur Rust. Seules les pistes jouables y figurent : le moteur
+     * ne doit jamais choisir un morceau absent du disque.
+     */
     fun toCore(): MusicPlaylist = MusicPlaylist(
         id = id,
         name = name,
         targetBpm = targetBpm,
-        tracks = tracks.map {
+        tracks = playable.map { track ->
             MusicTrack(
-                id = it.id,
-                title = it.title,
-                artist = it.artist,
-                durationS = it.durationS,
-                bpm = it.bpm,
-                position = it.position,
+                id = track.id,
+                title = track.title,
+                artist = track.artist,
+                durationS = track.durationS,
+                bpm = track.bpm,
+                position = track.position,
             )
         },
     )
 }
 
-/** Contenu de filesDir/music/index.json. */
+/** Contenu de filesDir/music-index.json. */
 @Serializable
 data class LocalIndex(
     val playlists: List<LocalPlaylist> = emptyList(),
-)
-
-/** Contenu de filesDir/music/plans.json : plans recus par le Data Layer. */
-@Serializable
-data class PendingPlans(
-    val plans: List<PreparePlan> = emptyList(),
-)
-
-/** Message envoye par le compagnon sur le chemin Data Layer /mpacer/music. */
-@Serializable
-data class MusicPlanMessage(
-    val kind: String = "music_plan",
-    @SerialName("playlist_id") val playlistId: String,
-    val name: String = "",
-    @SerialName("target_bpm") val targetBpm: Double? = null,
-    @SerialName("requested_at_ms") val requestedAtMs: Long = 0,
 )

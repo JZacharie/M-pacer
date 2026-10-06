@@ -35,12 +35,4 @@ object Format {
 
     fun date(epochMs: Long): String =
         SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.FRANCE).format(Date(epochMs))
-
-    /** Taille de fichiers, en unites lisibles (les fichiers audio se comptent en Mo). */
-    fun bytes(value: Long): String = when {
-        value >= 1024L * 1024L * 1024L -> String.format(Locale.ROOT, "%.1f Go", value / (1024.0 * 1024.0 * 1024.0))
-        value >= 1024L * 1024L -> String.format(Locale.ROOT, "%.0f Mo", value / (1024.0 * 1024.0))
-        value >= 1024L -> String.format(Locale.ROOT, "%.0f Ko", value / 1024.0)
-        else -> value.toString() + " o"
-    }
 }

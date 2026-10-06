@@ -23,7 +23,6 @@ import com.mpacer.watch.music.MusicPlayer
 import com.mpacer.watch.music.MusicSession
 import com.mpacer.watch.music.MusicState
 import com.mpacer.watch.music.NowPlaying
-import com.mpacer.watch.music.SpotifyRemote
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,6 +38,7 @@ class TrackingService : Service() {
 
     private lateinit var core: MpacerCore
     private lateinit var locations: FusedLocationProviderClient
+    private lateinit var heart: HeartRateSensor
     private var startedAtMs: Long = 0L
 
     private val locationCallback = object : LocationCallback() {
@@ -56,6 +56,9 @@ class TrackingService : Service() {
         // Prepare le MediaController de la montre (lecture des fichiers locaux).
         MusicPlayer.ensure(this)
         locations = LocationServices.getFusedLocationProviderClient(this)
+        // Le capteur cardiaque est branche des la creation ; il n'ecoute vraiment
+        // qu'entre le depart et l'arret de la seance.
+        heart = HeartRateSensor(this, ::onHeartRate)
         createChannel()
     }
 
@@ -88,6 +91,7 @@ class TrackingService : Service() {
         startForeground(NOTIFICATION_ID, notification("Preparation GPS..."))
         publish(if (armed) core.arm(now()) else core.start(now()))
         requestLocations()
+        heart.start()
     }
 
     /**
@@ -127,35 +131,34 @@ class TrackingService : Service() {
         publish(output, location)
     }
 
+    /**
+     * Mesure cardiaque : elle part dans le moteur, qui la rattache a la seance.
+     * Aucun calcul cote montre, comme pour le GPS.
+     */
+    private fun onHeartRate(tMs: Long, bpm: Int) {
+        publish(core.heartRate(tMs, bpm))
+    }
+
     private fun publish(output: EngineOutput, location: Location? = null) {
         _state.value = WatchState(output, location?.accuracy?.toDouble())
         // Les annonces vocales sont deja redigees par le moteur : le service ne
         // fait que les transmettre.
         output.messages.forEach(VoiceCoach::speak)
-        // Le coeur decide (directive), la montre execute (lecteur ou Spotify).
+        // Le coeur decide (directive), la montre execute sur ses fichiers locaux.
         applyMusic(output.music)
         pushNowPlaying()
         updateNotification(output)
     }
 
     /**
-     * Applique la directive du directeur d'orchestre (docs/07 section 4.3).
-     * Une playlist Spotify n'est jamais telechargee : on telecommande l'app Spotify.
+     * Applique la directive du directeur d'orchestre (docs/07 section 4.3) sur la
+     * seule source possible en v2 : les fichiers importes par USB.
      */
     private fun applyMusic(music: MusicState?) {
         if (music == null) return
         val playlist = MusicSession.local
         if (!music.enabled || playlist == null) {
             MusicPlayer.pauseIfPlaying()
-            return
-        }
-        if (playlist.source == "spotify") {
-            when (music.directive) {
-                MusicDirective.PLAY, MusicDirective.RESUME -> SpotifyRemote.play(this)
-                MusicDirective.SKIP_TO -> SpotifyRemote.next(this)
-                MusicDirective.PAUSE -> SpotifyRemote.pause(this)
-                else -> Unit
-            }
             return
         }
         when (music.directive) {
@@ -206,6 +209,7 @@ class TrackingService : Service() {
         val summary = core.summary(startedAtMs)
         WorkoutArchive.save(this, summary)
         locations.removeLocationUpdates(locationCallback)
+        heart.stop()
         // Envoi immediat de la seance terminee (le scope appartient au processus :
         // il n'est pas annule par le stopSelf() ci-dessous).
         SyncClient.syncInBackground(this)
@@ -215,6 +219,7 @@ class TrackingService : Service() {
 
     override fun onDestroy() {
         locations.removeLocationUpdates(locationCallback)
+        heart.stop()
         MusicSession.detach(core)
         core.close()
         super.onDestroy()

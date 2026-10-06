@@ -35,7 +35,9 @@ ecoule, les **zones de frequence cardiaque**, et la **comparaison au plan**.
    moyenne, FC moyenne et maximale, denivele positif, temps de pause.
 2. **Graphique multi-courbes** - allure, frequence cardiaque et altitude sur un
    meme axe de distance, chacune dans sa bande et sur sa propre echelle. Un
-   repere vertical marque chaque kilometre.
+   repere vertical marque chaque kilometre. Le resume affiche aussi l'**allure
+   ajustee a la pente (GAP)**, et le tableau des temps de passage une colonne GAP
+   et une colonne pente (voir 3.7).
 3. **Plan de course** (si la seance a suivi un plan) - cible, realise, ecart au
    finish, allure cible et allure realisee, negative split, puis un graphe de
    l'**ecart cumule au plan** tronçon par tronçon (barres vers le haut : en
@@ -115,17 +117,60 @@ La vitesse est lissee sur 30 s (moyenne glissante centree), puis :
 Somme des variations positives (D+) et negatives (D-) de l'altitude, tronçon par
 tronçon. Aucun denivele n'est affiche si la montre n'a pas enregistre d'altitude.
 
+
+### 3.7 Allure ajustee a la pente (GAP)
+
+L'allure equivalente sur terrain plat, a effort egal. Le cout energetique de la
+course selon la pente suit le modele de **Minetti et al. (2002)**, celui
+qu'utilisent Runalyze et la plupart des calculateurs :
+
+```text
+Cr(i) = 155,4 i^5 - 30,4 i^4 - 43,3 i^3 + 46,3 i^2 + 19,5 i + 3,6   (J/kg/m)
+```
+
+avec `i` la pente (denivele / distance), bornee a +/-30 % pour resister au bruit
+GPS. Pour chaque tronçon elementaire, la distance equivalente sur le plat vaut
+`d x Cr(i) / Cr(0)` : l'allure ajustee est le temps total divise par cette
+distance equivalente.
+
+- En **montee**, `Cr(i) > Cr(0)` : la distance equivalente augmente, donc le GAP
+  est **plus rapide** que l'allure reelle ;
+- en **descente**, `Cr(i) < Cr(0)` : le GAP est **plus lent** (le modele passe par
+  un minimum vers -20 %, puis remonte a cause du freinage).
+
+Le GAP n'est affiche que si la montre a enregistre l'altitude : sur un profil
+inconnu, il serait identique a l'allure reelle et n'apprendrait rien. C'est la
+convention de [Strava](https://support.strava.com/en-us/articles/15402117-what-is-grade-adjusted-pace-gap-on-strava)
+et de [Runalyze](https://runalyze.com/glossary/grade-adjusted-pace?_locale=en).
+
 ## 4. Le plan de course
 
 Le plan est celui de l'assistant (`race_plan::RacePlan`) : distance, temps cible
 et negative split. Il est **archive avec la seance** : une seance courue avec un
 plan reste comparable des annees plus tard, meme si le plan a change depuis.
 
-## 5. Ce qui n'est pas repris
+## 5. Le commentaire de course
+
+Sous le resume de chaque seance, un champ libre permet d'ecrire ce qu'aucune courbe
+ne dit : sensations, meteo, parcours, chaussures, compagnie. Le texte est enregistre
+dans sa **propre colonne** (`workouts.comment`), pas dans le resume JSON envoye par
+la montre : une nouvelle synchronisation de la meme seance remplace le resume mais
+ne touche jamais au commentaire.
+
+| Ou | Quoi |
+|---|---|
+| Fiche de seance (`/workouts/{id}`) | champ de saisie pre-rempli et bouton « Enregistrer le commentaire » |
+| Historique (`/`) | le commentaire apparait en italique sous la seance |
+| API (`PUT /api/v1/workouts/{id}/comment`) | corps JSON `{"comment": "..."}`, texte vide pour effacer |
+
+Le commentaire est borne a 2 000 caracteres et nettoye a l'enregistrement (espaces
+superflus retires, texte vide converti en `NULL`) : l'affichage distingue toujours
+« pas de commentaire » de « commentaire vide ».
+
+## 6. Ce qui n'est pas repris
 
 | Ecran | Pourquoi |
 |---|---|
-| Allure ajustee a la pente (GAP) | demande un modele de cout energetique et un denivele fiable (barometre) ; le projet enregistre l'altitude GPS, insuffisante |
 | Training Effect / TRIMP | demande l'historique complet du coureur et un modele d'EPOC |
 | Cadence, puissance | non mesurees par la montre visee |
 | Carte interactive | la carte est un lien OpenStreetMap, sans script tiers |

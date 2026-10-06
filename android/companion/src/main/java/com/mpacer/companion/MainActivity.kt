@@ -83,8 +83,6 @@ fun MpacerApp(viewModel: AppViewModel) {
             Dest.Music -> MusicScreen(
                 state = state,
                 onRefresh = viewModel::refreshMusic,
-                onSendPlan = viewModel::sendMusicPlan,
-                onUpload = viewModel::uploadMusic,
                 onOpenPage = { WearSync.openUrl(context, state.baseUrl + "/music") },
                 onOpenWorkouts = { dest = Dest.List },
             )

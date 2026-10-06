@@ -133,8 +133,6 @@ async fn test_app_with(dev_auth: bool, spotify: bool) -> Option<(Router, AppStat
 
     let mut config = Config::for_tests("http://localhost:8080", &url);
     config.dev_auth = dev_auth;
-    // Les fichiers audio sont de vrais fichiers : chaque test a son dossier.
-    config.media_dir = media_test_dir(&schema);
     if spotify {
         config.spotify_client_id = Some("client-de-test".to_string());
         config.spotify_client_secret = Some("secret-de-test".to_string());
@@ -1468,6 +1466,8 @@ async fn workout_page_shows_plan_cardio_pauses_and_acceleration() {
     for expected in [
         "Temps en mouvement",
         "Temps ecoule",
+        "Allure ajustee (GAP)",
+        "Pente",
         "FC moyenne",
         "Graphique",
         "polyline class=\"trace pace\"",
@@ -1535,88 +1535,7 @@ async fn an_implausible_heart_rate_is_rejected() {
     assert!(body.contains("frequence cardiaque"), "{body}");
 }
 
-/// Dossier de medias isole par test (les fichiers audio sont reels sur disque).
-///
-/// Il vit sous le dossier `target` du depot, toujours inscriptible : le dossier
-/// temporaire du systeme peut manquer ou etre refuse selon l'environnement.
-fn media_test_dir(schema: &str) -> std::path::PathBuf {
-    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("target")
-        .join("test-media")
-        .join(schema);
-    let _ = std::fs::remove_dir_all(&directory);
-    directory
-}
-
 // ------------------------------------------------------------------ musique
-
-/// MP3 minimal portant une balise ID3v2.3 `TBPM` (172 BPM ici).
-///
-/// Le corps d'une trame texte ID3v2.3 commence par l'octet d'encodage
-/// (0x00 = ISO-8859-1) et se termine par un NUL.
-fn tagged_mp3(bpm: &str) -> Vec<u8> {
-    let mut frame = Vec::new();
-    frame.extend_from_slice(b"TBPM");
-    frame.extend_from_slice(&(bpm.len() as u32 + 2).to_be_bytes());
-    frame.extend_from_slice(&[0, 0]);
-    frame.push(0);
-    frame.extend_from_slice(bpm.as_bytes());
-    frame.push(0);
-
-    let mut tag = Vec::new();
-    tag.extend_from_slice(b"ID3");
-    tag.extend_from_slice(&[3, 0, 0]);
-    let size = frame.len() as u32;
-    tag.push(((size >> 21) & 0x7f) as u8);
-    tag.push(((size >> 14) & 0x7f) as u8);
-    tag.push(((size >> 7) & 0x7f) as u8);
-    tag.push((size & 0x7f) as u8);
-    tag.extend_from_slice(&frame);
-    // Quelques octets d'audio apres la balise, comme dans un vrai fichier.
-    tag.extend_from_slice(&[0xff, 0xfb, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00]);
-    tag
-}
-
-fn push_text(body: &mut Vec<u8>, text: &str) {
-    body.extend_from_slice(text.as_bytes());
-}
-
-/// Corps `multipart/form-data` minimal (aucune dependance de test supplementaire).
-fn multipart_body(boundary: &str, playlist_name: &str, files: &[(&str, Vec<u8>)]) -> Vec<u8> {
-    multipart_body_named(boundary, "playlist_name", playlist_name, files)
-}
-
-/// Meme corps, avec le nom du champ libre (le navigateur envoie
-/// `playlist_name`, l'API appareil `name`).
-fn multipart_body_named(
-    boundary: &str,
-    field: &str,
-    playlist_name: &str,
-    files: &[(&str, Vec<u8>)],
-) -> Vec<u8> {
-    let mut body = Vec::new();
-    push_text(&mut body, &format!("--{boundary}\r\n"));
-    push_text(
-        &mut body,
-        &format!("Content-Disposition: form-data; name=\"{field}\"\r\n\r\n"),
-    );
-    push_text(&mut body, playlist_name);
-    push_text(&mut body, "\r\n");
-    for (filename, bytes) in files {
-        push_text(&mut body, &format!("--{boundary}\r\n"));
-        push_text(
-            &mut body,
-            &format!("Content-Disposition: form-data; name=\"files\"; filename=\"{filename}\"\r\n"),
-        );
-        push_text(&mut body, "Content-Type: audio/mpeg\r\n\r\n");
-        body.extend_from_slice(bytes);
-        push_text(&mut body, "\r\n");
-    }
-    push_text(&mut body, &format!("--{boundary}--\r\n"));
-    body
-}
 
 /// Jeton d'appareil pour l'utilisateur donne.
 async fn device_token(state: &AppState, user_id: &str) -> String {
@@ -1642,19 +1561,19 @@ fn bearer(uri: &str, token: &str) -> Request<Body> {
 }
 
 #[tokio::test]
-async fn music_api_serves_playlists_tracks_files_and_plans() {
+async fn music_api_publishes_playlists_and_the_transfer_manifest() {
     let (app, state) = app_or_skip!(test_app(false).await);
     let (user, _session) = dev_user_session(&state).await;
     let token = device_token(&state, &user.id).await;
 
-    // Une playlist televersee : les octets sont sur le disque du serveur.
+    // Une playlist de metadonnees, comme apres un import Spotify.
     let playlist = mpacer_api::db::insert_music_playlist(
         &state.pool,
         &user.id,
         &mpacer_api::models::MusicPlaylistInput {
-            name: "Ma course 10 km".into(),
-            source: "upload".into(),
-            spotify_id: None,
+            name: "Run 170".into(),
+            source: "spotify".into(),
+            spotify_id: Some("8f-playlist".into()),
             cover_url: None,
             target_bpm: Some(170.0),
         },
@@ -1663,35 +1582,32 @@ async fn music_api_serves_playlists_tracks_files_and_plans() {
     .await
     .unwrap();
 
-    let bytes = tagged_mp3("172");
-    let relative = format!("{}/titre-test.mp3", user.id);
-    let path = state.config.media_dir.join(&relative);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, &bytes).unwrap();
+    for (position, (title, duration_s, bpm)) in
+        [("Wake me up", 249.0, 124.0), ("Levels", 200.0, 126.0)]
+            .iter()
+            .enumerate()
+    {
+        mpacer_api::db::insert_music_track(
+            &state.pool,
+            &user.id,
+            &playlist.id,
+            &mpacer_api::models::MusicTrackInput {
+                position: position as i32,
+                title: (*title).to_string(),
+                artist: Some("Avicii".into()),
+                album: Some("True".into()),
+                duration_s: Some(*duration_s),
+                bpm: Some(*bpm),
+                bpm_source: Some("spotify".into()),
+                spotify_uri: Some(format!("spotify:track:{position}")),
+            },
+            state.now_ms(),
+        )
+        .await
+        .unwrap();
+    }
 
-    let track_id = mpacer_api::db::insert_music_track(
-        &state.pool,
-        &user.id,
-        &playlist.id,
-        &mpacer_api::models::MusicTrackInput {
-            position: 0,
-            title: "Wake me up".into(),
-            artist: Some("Avicii".into()),
-            album: None,
-            duration_s: Some(249.0),
-            bpm: Some(172.0),
-            bpm_source: Some("tag".into()),
-            spotify_uri: None,
-            mime: Some("audio/mpeg".into()),
-            size_bytes: Some(bytes.len() as i64),
-            storage_path: Some(relative.clone()),
-        },
-        state.now_ms(),
-    )
-    .await
-    .unwrap();
-
-    // 1. La liste resume la playlist.
+    // 1. La liste resume les playlists : plus aucun compteur d'octets.
     let response = app
         .clone()
         .oneshot(bearer("/api/v1/music/playlists", &token))
@@ -1699,13 +1615,19 @@ async fn music_api_serves_playlists_tracks_files_and_plans() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let list: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
-    assert_eq!(list["playlists"][0]["name"], "Ma course 10 km");
-    assert_eq!(list["playlists"][0]["track_count"], 1);
-    assert_eq!(list["playlists"][0]["total_bytes"], bytes.len() as i64);
-    assert_eq!(list["playlists"][0]["ready_track_count"], 1);
-    assert_eq!(list["playlists"][0]["target_bpm"], 170.0);
+    let entry = &list["playlists"][0];
+    assert_eq!(entry["name"], "Run 170");
+    assert_eq!(entry["source"], "spotify");
+    assert_eq!(entry["target_bpm"], 170.0);
+    assert_eq!(entry["track_count"], 2);
+    assert_eq!(entry["duration_s"], 449.0);
+    assert!(entry["updated_at_ms"].is_i64(), "{entry}");
+    assert!(
+        entry.get("total_bytes").is_none() && entry.get("ready_track_count").is_none(),
+        "plus de compteur d'audio : {entry}"
+    );
 
-    // 2. La fiche publie le chemin relatif de telechargement.
+    // 2. La fiche publie les metadonnees et l'adresse du manifeste.
     let response = app
         .clone()
         .oneshot(bearer(
@@ -1714,146 +1636,117 @@ async fn music_api_serves_playlists_tracks_files_and_plans() {
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
     let detail: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
-    assert_eq!(detail["source"], "upload");
-    assert_eq!(detail["tracks"][0]["title"], "Wake me up");
-    assert_eq!(detail["tracks"][0]["bpm"], 172.0);
-    assert_eq!(detail["tracks"][0]["bpm_source"], "tag");
     assert_eq!(
-        detail["tracks"][0]["download_url"],
-        format!("/api/v1/music/tracks/{track_id}/file")
+        detail["manifest_url"],
+        format!("/api/v1/music/playlists/{}/manifest", playlist.id)
+    );
+    assert_eq!(detail["tracks"][0]["title"], "Wake me up");
+    assert_eq!(detail["tracks"][0]["duration_s"], 249.0);
+    assert_eq!(detail["tracks"][0]["bpm"], 124.0);
+    assert_eq!(detail["tracks"][0]["bpm_source"], "spotify");
+    assert!(
+        detail["tracks"][0].get("download_url").is_none()
+            && detail["tracks"][0].get("size_bytes").is_none()
+            && detail["tracks"][0].get("mime").is_none(),
+        "la fiche ne doit plus exposer d'audio : {detail}"
     );
 
-    // 3. Le fichier est servi entier, puis par tranches (reprise du telechargement).
+    // 3. Le manifeste de transfert suit le schema gele (section 3.1).
     let response = app
         .clone()
         .oneshot(bearer(
-            &format!("/api/v1/music/tracks/{track_id}/file"),
+            &format!("/api/v1/music/playlists/{}/manifest", playlist.id),
             &token,
         ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()[header::CONTENT_TYPE], "audio/mpeg");
-    assert_eq!(response.headers()[header::ACCEPT_RANGES], "bytes");
+    assert!(response.headers()[header::CONTENT_TYPE]
+        .to_str()
+        .unwrap()
+        .starts_with("application/json"));
+    let disposition = response.headers()[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(disposition.starts_with("attachment"), "{disposition}");
+    assert!(disposition.contains("run-170.json"), "{disposition}");
+
+    let manifest: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    // serde_json trie les cles d'un Value : on compare l'ensemble des champs
+    // (l'ordre du texte JSON est verifie par le test unitaire du modele).
+    let mut keys: Vec<&str> = manifest
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
     assert_eq!(
-        response.headers()[header::CONTENT_LENGTH],
-        bytes.len().to_string()
+        keys,
+        vec![
+            "name",
+            "playlist_id",
+            "source",
+            "target_bpm",
+            "tracks",
+            "version"
+        ]
     );
-    let downloaded = response.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(downloaded.as_ref(), bytes.as_slice());
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/api/v1/music/tracks/{track_id}/file"))
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .header(header::RANGE, "bytes=0-9")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(manifest["version"], 1);
+    assert_eq!(manifest["playlist_id"], playlist.id.as_str());
+    assert_eq!(manifest["name"], "Run 170");
+    assert_eq!(manifest["target_bpm"], 170.0);
+    let mut track_keys: Vec<&str> = manifest["tracks"][0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    track_keys.sort_unstable();
     assert_eq!(
-        response.headers()[header::CONTENT_RANGE],
-        format!("bytes 0-9/{}", bytes.len())
+        track_keys,
+        vec![
+            "album",
+            "artist",
+            "bpm",
+            "duration_s",
+            "id",
+            "position",
+            "title"
+        ],
+        "file et size_bytes ne sont ecrits que par mpacer-music"
     );
-    let partial = response.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(partial.as_ref(), &bytes[..10]);
+    assert_eq!(manifest["tracks"][1]["position"], 1);
 
-    // 4. Accuse de la montre.
+    // 4. Playlist inconnue et jeton obligatoire.
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/v1/music/playlists/{}/ack", playlist.id))
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(
-                    serde_json::json!({ "track_ids": [track_id] }).to_string(),
-                ))
-                .unwrap(),
-        )
+        .oneshot(bearer("/api/v1/music/playlists/inconnue/manifest", &token))
         .await
         .unwrap();
-    let ack: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
-    assert_eq!(ack["playlist_id"], playlist.id.as_str());
-    assert_eq!(ack["downloaded"], 1);
-
-    // 5. Plan de telechargement : absent, cree, acquitte.
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let response = app
         .clone()
-        .oneshot(bearer("/api/v1/music/prepare", &token))
+        .oneshot(get(&format!(
+            "/api/v1/music/playlists/{}/manifest",
+            playlist.id
+        )))
         .await
         .unwrap();
-    let prepared: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
-    assert!(prepared["plan"].is_null(), "{prepared}");
-
-    let plan = mpacer_api::db::insert_music_plan(
-        &state.pool,
-        &user.id,
-        &playlist.id,
-        None,
-        Some(176.0),
-        state.now_ms(),
-    )
-    .await
-    .unwrap();
-    let response = app
-        .clone()
-        .oneshot(bearer("/api/v1/music/prepare", &token))
-        .await
-        .unwrap();
-    let prepared: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
-    assert_eq!(prepared["plan"]["id"], plan.id.as_str());
-    assert_eq!(prepared["plan"]["name"], "Ma course 10 km");
-    assert_eq!(prepared["plan"]["target_bpm"], 176.0);
-    assert_eq!(prepared["plan"]["tracks"][0]["id"], track_id.as_str());
-
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/music/prepare/ack")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {token}"))
-                .body(Body::from(
-                    serde_json::json!({ "plan_id": plan.id }).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(body_text(response).await.contains("\"ok\":true"));
-
-    let response = app
-        .clone()
-        .oneshot(bearer("/api/v1/music/prepare", &token))
-        .await
-        .unwrap();
-    let prepared: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
-    assert!(
-        prepared["plan"].is_null(),
-        "le plan acquitte disparait : {prepared}"
-    );
-
-    // 6. Meme garde que /api/v1/workouts : sans jeton, rien n'est accessible.
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let response = app.oneshot(get("/api/v1/music/playlists")).await.unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
-async fn music_page_has_four_blocks_and_prepares_a_race() {
+async fn music_page_has_four_blocks_and_downloads_the_manifest() {
     let (app, state) = app_or_skip!(test_app(true).await);
     let (_user, session) = dev_user_session(&state).await;
 
-    // La page vide presente les quatre blocs de la maquette.
+    // La page vide presente les quatre blocs de la maquette 6.1 et ne propose
+    // plus aucun televersement.
     let body = body_text(
         app.clone()
             .oneshot(get_with_cookie("/music", &session))
@@ -1862,120 +1755,89 @@ async fn music_page_has_four_blocks_and_prepares_a_race() {
     )
     .await;
     for expected in [
-        "1. Source de musique",
+        "1. Source Spotify (facultatif)",
         "2. Playlists preparees",
         "3. Titres (playlist selectionnee)",
-        "4. Preparation de la prochaine course",
-        "Fichiers personnels",
-        "Choisir des fichiers MP3/OGG/M4A",
-        "Nom de playlist",
-        "Importer sur le serveur",
-        "BPM cible",
-        "Envoyer sur la montre",
-        "aucun plan en attente",
+        "4. Transfert vers la montre (USB)",
+        "Spotify n'est pas configure",
         "Aucune playlist pour l'instant",
+        "Selectionnez une playlist dans le bloc 2",
     ] {
         assert!(
             body.contains(expected),
             "« {expected} » absent de /music : {body}"
         );
     }
-    // Spotify reste explicitement optionnel.
-    assert!(body.contains("Spotify n'est pas configure"), "{body}");
+    assert!(!body.contains("multipart/form-data"), "{body}");
+    assert!(!body.contains("Envoyer sur la montre"), "{body}");
 
-    // Televersement multipart de deux fichiers, dont un porte un BPM en balise.
-    let boundary = "----mpacer-test-boundary";
-    let files = vec![
-        ("Wake_me-up.mp3", tagged_mp3("172")),
-        (
-            "Titre_sans_bpm.mp3",
-            vec![
-                0x49, 0x44, 0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02,
-            ],
-        ),
-    ];
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/music/upload")
-                .header(
-                    header::CONTENT_TYPE,
-                    format!("multipart/form-data; boundary={boundary}"),
-                )
-                .header(header::COOKIE, &session)
-                .body(Body::from(multipart_body(
-                    boundary,
-                    "Ma course 10 km",
-                    &files,
-                )))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let location = response.headers()[header::LOCATION]
-        .to_str()
-        .unwrap()
-        .to_string();
-    assert!(location.contains("ok=fichiers_importes"), "{location}");
-    let playlist_id = location
-        .split("playlist=")
-        .nth(1)
-        .unwrap()
-        .split('&')
-        .next()
-        .unwrap()
-        .to_string();
+    // Une playlist importee alimente les blocs 2 a 4.
+    let playlist = mpacer_api::db::insert_music_playlist(
+        &state.pool,
+        &_user.id,
+        &mpacer_api::models::MusicPlaylistInput {
+            name: "Run 170".into(),
+            source: "spotify".into(),
+            spotify_id: Some("8f-run-170".into()),
+            cover_url: None,
+            target_bpm: None,
+        },
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+    let track_id = mpacer_api::db::insert_music_track(
+        &state.pool,
+        &_user.id,
+        &playlist.id,
+        &mpacer_api::models::MusicTrackInput {
+            position: 0,
+            title: "Wake me up".into(),
+            artist: Some("Avicii".into()),
+            album: None,
+            duration_s: Some(249.0),
+            bpm: None,
+            bpm_source: None,
+            spotify_uri: Some("spotify:track:t1".into()),
+        },
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
 
-    // Les titres apparaissent avec leur BPM de balise.
+    let page_url = format!("/music?playlist={}", playlist.id);
     let body = body_text(
         app.clone()
-            .oneshot(get_with_cookie(
-                &format!("/music?playlist={playlist_id}"),
-                &session,
-            ))
+            .oneshot(get_with_cookie(&page_url, &session))
             .await
             .unwrap(),
     )
     .await;
     for expected in [
-        "Ma course 10 km",
+        "Run 170",
         "Wake me up",
-        "Titre sans bpm",
-        "172",
+        "4:09",
+        "inconnu",
         "tapper",
         "saisir",
-        "Preparer",
+        "Manifeste",
+        "Telecharger le manifeste",
+        "run-170.json",
+        "mpacer-music transfer",
+        "Brancher la montre en USB",
+        "Importer (USB)",
+        "BPM cible",
     ] {
         assert!(body.contains(expected), "« {expected} » absent : {body}");
     }
 
-    // Consigne de tempo de la playlist.
+    // BPM saisi a la main, puis tap-tempo (median des intervalles).
     let response = app
         .clone()
         .oneshot(form_request(
             "POST",
-            &format!("/music/playlists/{playlist_id}/target"),
-            "target_bpm=170",
-            &session,
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-
-    // BPM saisi a la main, puis tap-tempo.
-    let tracks = mpacer_api::db::list_music_tracks(&state.pool, &_user.id, &playlist_id)
-        .await
-        .unwrap();
-    assert_eq!(tracks.len(), 2);
-    let response = app
-        .clone()
-        .oneshot(form_request(
-            "POST",
-            &format!("/music/playlists/{playlist_id}/track-bpm"),
-            &format!("track_id={}&bpm=181&source=manual", tracks[1].id),
+            &format!("/music/playlists/{}/track-bpm", playlist.id),
+            &format!("track_id={track_id}&bpm=181&source=manual"),
             &session,
         ))
         .await
@@ -1985,18 +1847,16 @@ async fn music_page_has_four_blocks_and_prepares_a_race() {
         .clone()
         .oneshot(form_request(
             "POST",
-            &format!("/music/playlists/{playlist_id}/track-bpm"),
-            &format!("track_id={}&taps=0,500,1000,1500,2000", tracks[0].id),
+            &format!("/music/playlists/{}/track-bpm", playlist.id),
+            &format!("track_id={track_id}&taps=0,500,1000,1500,2000"),
             &session,
         ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let tracks = mpacer_api::db::list_music_tracks(&state.pool, &_user.id, &playlist_id)
+    let tracks = mpacer_api::db::list_music_tracks(&state.pool, &_user.id, &playlist.id)
         .await
         .unwrap();
-    assert_eq!(tracks[1].bpm, Some(181.0));
-    assert_eq!(tracks[1].bpm_source.as_deref(), Some("manual"));
     assert_eq!(tracks[0].bpm, Some(120.0));
     assert_eq!(tracks[0].bpm_source.as_deref(), Some("tap"));
 
@@ -2005,8 +1865,8 @@ async fn music_page_has_four_blocks_and_prepares_a_race() {
         .clone()
         .oneshot(form_request(
             "POST",
-            &format!("/music/playlists/{playlist_id}/track-bpm"),
-            &format!("track_id={}&bpm=1000", tracks[1].id),
+            &format!("/music/playlists/{}/track-bpm", playlist.id),
+            &format!("track_id={track_id}&bpm=1000"),
             &session,
         ))
         .await
@@ -2016,61 +1876,44 @@ async fn music_page_has_four_blocks_and_prepares_a_race() {
         .unwrap()
         .contains("erreur=bpm_invalide"));
 
-    // Preparation de la course : le plan attend la montre.
+    // Consigne de tempo de la playlist.
     let response = app
         .clone()
         .oneshot(form_request(
             "POST",
-            "/music/prepare",
-            &format!("playlist_id={playlist_id}&race_id="),
+            &format!("/music/playlists/{}/target", playlist.id),
+            "target_bpm=170",
             &session,
         ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let body = body_text(
-        app.clone()
-            .oneshot(get_with_cookie(
-                &format!("/music?playlist={playlist_id}"),
-                &session,
-            ))
-            .await
-            .unwrap(),
-    )
-    .await;
-    assert!(body.contains("en attente de la montre"), "{body}");
-    assert!(body.contains("Annuler le plan"), "{body}");
-    assert!(body.contains("value=\"170\""), "BPM cible affiche : {body}");
 
+    // Le manifeste se telecharge aussi depuis le navigateur (session).
     let response = app
         .clone()
-        .oneshot(get_with_cookie("/api/v1/music/prepare", &session))
+        .oneshot(get_with_cookie(
+            &format!("/music/playlists/{}/manifest", playlist.id),
+            &session,
+        ))
         .await
         .unwrap();
-    let prepared: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
-    assert_eq!(prepared["plan"]["playlist_id"], playlist_id.as_str());
-    assert_eq!(prepared["plan"]["target_bpm"], 170.0);
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers()[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .contains("run-170.json"));
+    let manifest: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert_eq!(manifest["name"], "Run 170");
+    assert_eq!(manifest["target_bpm"], 170.0);
+    assert_eq!(manifest["tracks"][0]["bpm"], 120.0);
 
-    let response = app
-        .clone()
-        .oneshot(form_request("POST", "/music/prepare/cancel", "", &session))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let response = app
-        .clone()
-        .oneshot(get_with_cookie("/api/v1/music/prepare", &session))
-        .await
-        .unwrap();
-    let prepared: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
-    assert!(prepared["plan"].is_null(), "{prepared}");
-
-    // Suppression : la playlist et ses fichiers disparaissent.
+    // Suppression : la playlist disparait.
     let response = app
         .clone()
         .oneshot(form_request(
             "POST",
-            &format!("/music/playlists/{playlist_id}/delete"),
+            &format!("/music/playlists/{}/delete", playlist.id),
             "",
             &session,
         ))
@@ -2084,38 +1927,11 @@ async fn music_page_has_four_blocks_and_prepares_a_race() {
             .unwrap(),
     )
     .await;
-    // Le libelle du formulaire contient aussi « Ma course 10 km » (placeholder) :
-    // on cherche donc le lien de la playlist, pas le simple texte.
-    assert!(!body.contains(">Ma course 10 km</a>"), "{body}");
+    assert!(!body.contains(">Run 170</a>"), "{body}");
     assert!(mpacer_api::db::list_music_playlists(&state.pool, &_user.id)
         .await
         .unwrap()
         .is_empty());
-    assert!(
-        mpacer_api::db::list_music_tracks(&state.pool, &_user.id, &playlist_id)
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    let stored: Vec<_> = walkdir(&state.config.media_dir);
-    assert!(stored.is_empty(), "fichiers restants : {stored:?}");
-}
-
-/// Tous les fichiers d'un dossier, recursivement (verification de nettoyage).
-fn walkdir(root: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let mut files = Vec::new();
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return files;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            files.extend(walkdir(&path));
-        } else {
-            files.push(path);
-        }
-    }
-    files
 }
 
 #[tokio::test]
@@ -2168,140 +1984,6 @@ async fn spotify_stays_optional_without_credentials() {
         .await
         .unwrap()
         .is_none());
-}
-
-/// Requete multipart portant (ou non) le jeton d'appareil.
-fn multipart_request(
-    uri: &str,
-    boundary: &str,
-    body: Vec<u8>,
-    token: Option<&str>,
-) -> Request<Body> {
-    let mut builder = Request::builder().method("POST").uri(uri).header(
-        header::CONTENT_TYPE,
-        format!("multipart/form-data; boundary={boundary}"),
-    );
-    if let Some(token) = token {
-        builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
-    }
-    builder.body(Body::from(body)).unwrap()
-}
-
-#[tokio::test]
-async fn music_upload_endpoint_accepts_a_device_token() {
-    let (app, state) = app_or_skip!(test_app(false).await);
-    let (user, _session) = dev_user_session(&state).await;
-    let token = device_token(&state, &user.id).await;
-
-    let boundary = "----mpacer-device-boundary";
-    let files = vec![
-        ("Wake_me-up.mp3", tagged_mp3("172")),
-        ("Titre_sans_bpm.ogg", b"OggS.....".to_vec()),
-    ];
-    let body = multipart_body_named(boundary, "name", "Run du soir", &files);
-
-    // Sans jeton d'appareil, l'endpoint est ferme (meme garde que /api/v1/workouts).
-    let response = app
-        .clone()
-        .oneshot(multipart_request(
-            "/api/v1/music/playlists",
-            boundary,
-            body.clone(),
-            None,
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-
-    // Avec le jeton : la playlist est creee et ses octets sont servables.
-    let response = app
-        .clone()
-        .oneshot(multipart_request(
-            "/api/v1/music/playlists",
-            boundary,
-            body,
-            Some(&token),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let created: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
-    assert_eq!(created["name"], "Run du soir");
-    assert_eq!(created["track_count"], 2);
-    assert_eq!(created["ready_track_count"], 2);
-    assert!(created["total_bytes"].as_i64().unwrap() > 0, "{created}");
-    let playlist_id = created["playlist_id"].as_str().unwrap().to_string();
-
-    let response = app
-        .clone()
-        .oneshot(bearer(
-            &format!("/api/v1/music/playlists/{playlist_id}"),
-            &token,
-        ))
-        .await
-        .unwrap();
-    let detail: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
-    let tracks = detail["tracks"].as_array().unwrap();
-    assert_eq!(tracks.len(), 2);
-    assert_eq!(tracks[0]["bpm"], 172.0);
-    assert_eq!(tracks[0]["bpm_source"], "tag");
-    let download = tracks[0]["download_url"]
-        .as_str()
-        .expect("chemin de telechargement")
-        .to_string();
-    let response = app
-        .clone()
-        .oneshot(bearer(&download, &token))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()[header::CONTENT_TYPE], "audio/mpeg");
-
-    // Format inconnu : 415 unsupported_media_type.
-    let body = multipart_body_named(
-        boundary,
-        "name",
-        "Notes",
-        &[("notes.txt", b"pas de l'audio".to_vec())],
-    );
-    let response = app
-        .clone()
-        .oneshot(multipart_request(
-            "/api/v1/music/playlists",
-            boundary,
-            body,
-            Some(&token),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    assert!(body_text(response).await.contains("unsupported_media_type"));
-
-    // Nom de playlist absent : 400 invalid_multipart.
-    let body = multipart_body_named(boundary, "name", "", &files);
-    let response = app
-        .clone()
-        .oneshot(multipart_request(
-            "/api/v1/music/playlists",
-            boundary,
-            body,
-            Some(&token),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert!(body_text(response).await.contains("invalid_multipart"));
-
-    // Aucun fichier orphelin : une seule playlist et deux fichiers.
-    assert_eq!(
-        mpacer_api::db::list_music_playlists(&state.pool, &user.id)
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
-    let stored = walkdir(&state.config.media_dir);
-    assert_eq!(stored.len(), 2, "fichiers restants : {stored:?}");
 }
 
 #[tokio::test]
@@ -2479,4 +2161,727 @@ async fn races_api_creates_reads_updates_and_deletes() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// ------------------------------------------- courses de reference et commentaires
+
+/// Corps multipart portant un seul fichier (champ file).
+///
+/// Le corps est construit sur place : ces tests ne dependent d'aucun helper
+/// partage avec les autres televersements.
+fn upload_file_body(boundary: &str, filename: &str, bytes: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n")
+            .as_bytes(),
+    );
+    body.extend_from_slice(b"Content-Type: application/gpx+xml\r\n\r\n");
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(b"\r\n");
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    body
+}
+
+/// Requete multipart d'import, avec ou sans jeton d'appareil.
+fn import_request(uri: &str, boundary: &str, body: Vec<u8>, token: Option<&str>) -> Request<Body> {
+    let mut builder = Request::builder().method("POST").uri(uri).header(
+        header::CONTENT_TYPE,
+        format!("multipart/form-data; boundary={boundary}"),
+    );
+    if let Some(token) = token {
+        builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
+    builder.body(Body::from(body)).unwrap()
+}
+
+/// Requete multipart portant la session du navigateur.
+fn upload_request(uri: &str, boundary: &str, body: Vec<u8>, session: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .header(header::COOKIE, session)
+        .body(Body::from(body))
+        .unwrap()
+}
+
+/// Export GPX minimal d'une sortie Strava : 30 s, environ 110 m.
+fn strava_gpx_export() -> Vec<u8> {
+    let gpx = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+        <gpx version=\"1.1\" creator=\"StravaGPX\" xmlns=\"http://www.topografix.com/GPX/1/1\">\
+        <metadata><name>10 km de nuit</name></metadata>\
+        <trk><name>10 km de nuit</name><trkseg>\
+        <trkpt lat=\"45.0\" lon=\"3.0\"><ele>300.0</ele><time>2026-05-01T19:00:00Z</time></trkpt>\
+        <trkpt lat=\"45.0009\" lon=\"3.0\"><ele>305.0</ele><time>2026-05-01T19:00:30Z</time></trkpt>\
+        </trkseg></trk></gpx>";
+    gpx.as_bytes().to_vec()
+}
+
+#[tokio::test]
+async fn a_strava_export_becomes_a_reference_race() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (user, session) = dev_user_session(&state).await;
+
+    // Depot du fichier depuis le navigateur.
+    let boundary = "----mpacer-import-web";
+    let body = upload_file_body(boundary, "10km-de-nuit.gpx", &strava_gpx_export());
+    let response = app
+        .clone()
+        .oneshot(upload_request(
+            "/courses/importer",
+            boundary,
+            body,
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(location.contains("ok=course_importee"), "{location}");
+    let race_id = location
+        .split('/')
+        .nth(2)
+        .and_then(|reste| reste.split('?').next())
+        .expect("identifiant de course")
+        .to_string();
+
+    // La fiche porte l'origine, les mesures et la trace du fichier.
+    let race = mpacer_api::db::get_race(&state.pool, &user.id, &race_id)
+        .await
+        .unwrap()
+        .expect("course importee");
+    assert!(race.is_reference);
+    assert_eq!(race.source.as_deref(), Some("strava"));
+    assert_eq!(race.name, "10 km de nuit");
+    assert!(race.start_at_ms.is_some());
+    let distance = race.distance_m.expect("distance");
+    assert!((90.0..130.0).contains(&distance), "distance = {distance}");
+    assert_eq!(race.moving_time_s, Some(30.0));
+    assert_eq!(race.elapsed_time_s, Some(30.0));
+    assert_eq!(race.elevation_gain_m, Some(5.0));
+
+    // Une course importee n'a pas d'elements de suivi : elle est deja courue.
+    assert!(
+        mpacer_api::db::list_race_tasks(&state.pool, &user.id, &race_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie(&format!("/courses/{race_id}"), &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("Course de reference"), "{body}");
+    assert!(body.contains("Strava"), "{body}");
+    assert!(body.contains("Telecharger le GPX"), "{body}");
+
+    // La trace conservee est reexportable.
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/courses/{race_id}/trace.gpx"),
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let trace = body_text(response).await;
+    assert!(trace.contains("<trkpt"), "{trace}");
+
+    // La course rejoint les courses deja courues, marquee comme reference.
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie("/courses", &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("10 km de nuit"), "{body}");
+    assert!(body.contains("Reference"), "{body}");
+
+    // Le meme import par l'API, avec le jeton d'appareil.
+    let token = device_token(&state, &user.id).await;
+    let boundary = "----mpacer-import-api";
+    let body = upload_file_body(boundary, "sortie.gpx", &strava_gpx_export());
+    let response = app
+        .clone()
+        .oneshot(import_request(
+            "/api/v1/races/import",
+            boundary,
+            body,
+            Some(&token),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let imported: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert_eq!(imported["is_reference"], serde_json::json!(true));
+    assert_eq!(imported["source"], serde_json::json!("strava"));
+    assert_eq!(imported["moving_time_s"], serde_json::json!(30.0));
+
+    // Sans jeton ni session, l'import est ferme.
+    let boundary = "----mpacer-import-anonyme";
+    let body = upload_file_body(boundary, "10km.gpx", &strava_gpx_export());
+    let response = app
+        .clone()
+        .oneshot(import_request("/api/v1/races/import", boundary, body, None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // Un fichier qui n'est pas une trace revient sur la page avec un message clair.
+    let boundary = "----mpacer-import-refus";
+    let body = upload_file_body(boundary, "connexion.html", b"<html>Connexion</html>");
+    let response = app
+        .clone()
+        .oneshot(upload_request(
+            "/courses/importer",
+            boundary,
+            body,
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    let body = body_text(response).await;
+    assert!(body.contains("GPX ou TCX"), "{body}");
+}
+
+#[tokio::test]
+async fn a_workout_comment_is_saved_and_shown() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (user, session) = dev_user_session(&state).await;
+    let token = device_token(&state, &user.id).await;
+    let workout_id = "1700000000000";
+
+    // Une seance arrive depuis la montre.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/workouts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(sample_workout().to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // La fiche propose le commentaire meme quand il n'y en a pas encore.
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie(
+                &format!("/workouts/{workout_id}"),
+                &session,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("Commentaire de course"), "{body}");
+
+    // Le coureur l'ecrit depuis le navigateur.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/workouts/{workout_id}/comment"),
+            &format!("comment={}", encode("Belle sortie, jambes legeres.")),
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let (row, _) = mpacer_api::db::get_workout(&state.pool, &user.id, workout_id)
+        .await
+        .unwrap()
+        .expect("seance");
+    assert_eq!(
+        row.comment.as_deref(),
+        Some("Belle sortie, jambes legeres.")
+    );
+
+    // Il s'affiche sur la fiche et dans l'historique.
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie(
+                &format!("/workouts/{workout_id}"),
+                &session,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("Belle sortie, jambes legeres."), "{body}");
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie("/", &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("row-comment"), "{body}");
+
+    // Une nouvelle synchronisation de la montre ne l'efface pas.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/workouts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(sample_workout().to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let (row, _) = mpacer_api::db::get_workout(&state.pool, &user.id, workout_id)
+        .await
+        .unwrap()
+        .expect("seance");
+    assert_eq!(
+        row.comment.as_deref(),
+        Some("Belle sortie, jambes legeres.")
+    );
+
+    // L'API appareil peut aussi l'ecrire, et un texte vide l'efface.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/v1/workouts/{workout_id}/comment"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(
+                    serde_json::json!({ "comment": "Revue par l'API" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let (row, _) = mpacer_api::db::get_workout(&state.pool, &user.id, workout_id)
+        .await
+        .unwrap()
+        .expect("seance");
+    assert_eq!(row.comment.as_deref(), Some("Revue par l'API"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/v1/workouts/{workout_id}/comment"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &session)
+                .body(Body::from(
+                    serde_json::json!({ "comment": "   " }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let (row, _) = mpacer_api::db::get_workout(&state.pool, &user.id, workout_id)
+        .await
+        .unwrap()
+        .expect("seance");
+    assert!(row.comment.is_none());
+
+    // Seance inconnue : 404, jamais un commentaire orphelin.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/workouts/inconnue/comment")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &session)
+                .body(Body::from(
+                    serde_json::json!({ "comment": "x" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// ------------------------------------------------------------ tableaux de bord
+
+/// Seance de reference des tableaux de bord : deux tours, un meilleur effort,
+/// du cardio et une trace GPS.
+fn dashboard_workout() -> serde_json::Value {
+    let mut workout = analysed_workout();
+    workout["laps"] = serde_json::json!([
+        { "index": 1, "distance_m": 1000.0, "duration_s": 320.0, "pace_s_per_km": 320.0 },
+        { "index": 2, "distance_m": 800.0, "duration_s": 280.0, "pace_s_per_km": 350.0 }
+    ]);
+    workout["best_efforts"] = serde_json::json!([
+        { "label": "1 km", "distance_m": 1000.0, "time_s": 320.0, "start_dist_m": 0.0 }
+    ]);
+    workout
+}
+
+/// Depose la seance de reference et renvoie son identifiant.
+async fn store_dashboard_workout(state: &AppState, user: &mpacer_api::models::User) -> String {
+    let value = dashboard_workout();
+    let upload: mpacer_api::models::WorkoutUpload =
+        serde_json::from_value(value.clone()).expect("seance des tableaux de bord");
+    let payload = serde_json::to_string(&value).expect("payload JSON");
+    mpacer_api::db::upsert_workout(&state.pool, &user.id, &upload, &payload, state.now_ms())
+        .await
+        .unwrap();
+    upload.id
+}
+
+fn widget_kinds(widgets: &[mpacer_api::models::DashboardWidget]) -> Vec<String> {
+    widgets.iter().map(|widget| widget.kind.clone()).collect()
+}
+
+#[tokio::test]
+async fn dashboard_builder_composes_reorders_and_deletes_widgets() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (user, session) = dev_user_session(&state).await;
+    let _workout_id = store_dashboard_workout(&state, &user).await;
+
+    // 1. Aucun tableau au depart : la page propose d'en creer un.
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/dashboards", &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_text(response).await;
+    assert!(body.contains("Aucun tableau de bord"), "{body}");
+
+    // 2. Le formulaire de creation liste les widgets du catalogue et les gabarits.
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/dashboards/nouveau", &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_text(response).await;
+    assert!(body.contains("Pace Control"), "{body}");
+    assert!(body.contains("Analyse de seance"), "{body}");
+    assert!(body.contains("value=\"meilleures-distances\""), "{body}");
+
+    // 3. Creation depuis le gabarit « Pace Control » : aucune case cochee, le
+    //    serveur applique le modele.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            "/dashboards/nouveau",
+            &format!("name={}&template=pace-control", encode("Pace Control")),
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(location.starts_with("/dashboards/"), "{location}");
+    let dashboard_id = location.rsplit('/').next().unwrap().to_string();
+
+    let widgets = mpacer_api::db::list_dashboard_widgets(&state.pool, &user.id, &dashboard_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        widget_kinds(&widgets),
+        vec!["allure", "tours", "meilleures-distances"]
+    );
+    assert_eq!(
+        widgets
+            .iter()
+            .map(|widget| widget.position)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+
+    // 4. Le tableau affiche est alimente par la derniere seance.
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie(&location, &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_text(response).await;
+    assert!(body.contains("Allure"), "{body}");
+    assert!(body.contains("Tours"), "{body}");
+    assert!(body.contains("Meilleures distances"), "{body}");
+    assert!(body.contains("1 km"), "{body}");
+    // L'allure du dernier tour (320 s/km) est affichee.
+    assert!(body.contains("5:20"), "{body}");
+
+    // 5. Monter le deuxieme widget : l'ordre change, les positions restent contigues.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!(
+                "/dashboards/{dashboard_id}/widgets/{}/monter",
+                widgets[1].id
+            ),
+            "",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let widgets = mpacer_api::db::list_dashboard_widgets(&state.pool, &user.id, &dashboard_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        widget_kinds(&widgets),
+        vec!["tours", "allure", "meilleures-distances"]
+    );
+    assert_eq!(
+        widgets
+            .iter()
+            .map(|widget| widget.position)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+
+    // 6. Monter le premier widget ne fait rien : la page reste utilisable.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!(
+                "/dashboards/{dashboard_id}/widgets/{}/monter",
+                widgets[0].id
+            ),
+            "",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let widgets = mpacer_api::db::list_dashboard_widgets(&state.pool, &user.id, &dashboard_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        widget_kinds(&widgets),
+        vec!["tours", "allure", "meilleures-distances"]
+    );
+
+    // 7. Ajouter un widget : il arrive en fin de tableau.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/dashboards/{dashboard_id}/widgets/ajouter"),
+            "kind=cardio",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let widgets = mpacer_api::db::list_dashboard_widgets(&state.pool, &user.id, &dashboard_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        widget_kinds(&widgets),
+        vec!["tours", "allure", "meilleures-distances", "cardio"]
+    );
+
+    // 8. Un widget inconnu est refuse.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/dashboards/{dashboard_id}/widgets/ajouter"),
+            "kind=telepathie",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // 9. Retirer le deuxieme widget : les suivants remontent.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!(
+                "/dashboards/{dashboard_id}/widgets/{}/retirer",
+                widgets[1].id
+            ),
+            "",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let widgets = mpacer_api::db::list_dashboard_widgets(&state.pool, &user.id, &dashboard_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        widget_kinds(&widgets),
+        vec!["tours", "meilleures-distances", "cardio"]
+    );
+    assert_eq!(
+        widgets
+            .iter()
+            .map(|widget| widget.position)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+
+    // 10. Renommer.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/dashboards/{dashboard_id}/modifier"),
+            &format!("name={}", encode("  Ma course   du dimanche ")),
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let dashboard = mpacer_api::db::get_dashboard(&state.pool, &user.id, &dashboard_id)
+        .await
+        .unwrap()
+        .expect("tableau toujours present");
+    assert_eq!(dashboard.name, "Ma course du dimanche");
+
+    // 11. Un nom vide est refuse.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/dashboards/{dashboard_id}/modifier"),
+            "name=+++",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // 12. Suppression : le tableau et ses widgets disparaissent.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/dashboards/{dashboard_id}/supprimer"),
+            "",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()[header::LOCATION], "/dashboards");
+    assert!(
+        mpacer_api::db::get_dashboard(&state.pool, &user.id, &dashboard_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        mpacer_api::db::list_dashboard_widgets(&state.pool, &user.id, &dashboard_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_dashboard_belongs_to_its_owner() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (user, session) = dev_user_session(&state).await;
+    store_dashboard_workout(&state, &user).await;
+
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            "/dashboards/nouveau",
+            &format!("name={}&widgets=allure&widgets=tours", encode("Prive")),
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let dashboard_id = location.rsplit('/').next().unwrap().to_string();
+
+    // Le proprietaire voit son tableau.
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie(&location, &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Un autre utilisateur ne le voit pas et ne peut pas le modifier.
+    let other = mpacer_api::db::upsert_user(
+        &state.pool,
+        None,
+        "autre@localhost",
+        None,
+        None,
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+    let other_session = format!(
+        "mpacer_session={}",
+        mpacer_api::auth::issue_session(&state.config, &other, state.now_ms()).unwrap()
+    );
+
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie(&location, &other_session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    for uri in [
+        format!("/dashboards/{dashboard_id}/modifier"),
+        format!("/dashboards/{dashboard_id}/widgets/ajouter"),
+        format!("/dashboards/{dashboard_id}/supprimer"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(form_request(
+                "POST",
+                &uri,
+                "name=vole&kind=allure",
+                &other_session,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
+
+    // Sans session, tout ramene a la connexion.
+    let response = app.clone().oneshot(get("/dashboards")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(response.headers()[header::LOCATION], "/login");
 }

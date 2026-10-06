@@ -1,0 +1,21 @@
+[package]
+name = "mpacer-music"
+description = "Copie locale des fichiers audio vers la montre M-pacer par USB (adb)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "mpacer-music"
+path = "src/main.rs"
+
+[dependencies]
+mpacer-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }

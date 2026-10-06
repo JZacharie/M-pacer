@@ -101,6 +101,41 @@ data class WorkoutSummary(
     @SerialName("best_efforts") val bestEfforts: List<BestEffort> = emptyList(),
     val track: List<TrackPoint> = emptyList(),
     @SerialName("unit_system") val unitSystem: String? = null,
+    /** Temps total ecoule, pauses comprises (s). Version 2 du format .pac. */
+    @SerialName("elapsed_s") val elapsedS: Double = 0.0,
+    val pauses: List<Pause> = emptyList(),
+    @SerialName("heart_rate") val heartRate: List<HeartRateSample> = emptyList(),
+    val plan: RacePlan? = null,
+)
+
+/** Mesure de frequence cardiaque (bpm) horodatee. */
+@Serializable
+data class HeartRateSample(
+    @SerialName("t_ms") val tMs: Long = 0,
+    val bpm: Int = 0,
+)
+
+/** Pause de la seance (manuelle ou automatique). */
+@Serializable
+data class Pause(
+    @SerialName("at_s") val atS: Double = 0.0,
+    @SerialName("at_distance_m") val atDistanceM: Double = 0.0,
+    @SerialName("duration_s") val durationS: Double = 0.0,
+    val automatic: Boolean = false,
+)
+
+/** Plan de course archive avec la seance (miroir de race_plan::RacePlan). */
+@Serializable
+data class RacePlan(
+    @SerialName("distance_m") val distanceM: Double = 0.0,
+    @SerialName("target_time_s") val targetTimeS: Double = 0.0,
+    @SerialName("negative_split") val negativeSplit: NegativeSplit = NegativeSplit(),
+)
+
+@Serializable
+data class NegativeSplit(
+    val enabled: Boolean = false,
+    val ratio: Double = 0.0,
 )
 
 /** Reponse de GET /api/v1/workouts/{id} : liste + resume complet. */
@@ -133,43 +168,22 @@ data class UploadResponse(val id: String = "", val replaced: Boolean = false)
 
 // ---------------------------------------------------------------- musique
 
-/** Ligne de GET /api/v1/music/playlists (docs/07 section 6.3). */
+/**
+ * Ligne de GET /api/v1/music/playlists (docs/07 v2, section 5.3) : metadonnees
+ * seulement, aucun fichier audio n'est stocke ni televerse.
+ */
 @Serializable
 data class MusicPlaylistRow(
     val id: String,
     val name: String,
-    val source: String = "upload",
+    val source: String = "manual",
     @SerialName("target_bpm") val targetBpm: Double? = null,
     @SerialName("track_count") val trackCount: Int = 0,
-    @SerialName("total_bytes") val totalBytes: Long = 0,
-    @SerialName("ready_track_count") val readyTrackCount: Int = 0,
+    @SerialName("duration_s") val durationS: Double? = null,
     @SerialName("updated_at_ms") val updatedAtMs: Long = 0,
 )
 
 @Serializable
 data class MusicPlaylistListResponse(
     val playlists: List<MusicPlaylistRow> = emptyList(),
-)
-
-/** Corps envoye a la montre sur le chemin Data Layer /mpacer/music (docs/07 section 7.3). */
-@Serializable
-data class MusicPlanMessage(
-    val kind: String = "music_plan",
-    @SerialName("playlist_id") val playlistId: String,
-    val name: String = "",
-    @SerialName("target_bpm") val targetBpm: Double? = null,
-    @SerialName("requested_at_ms") val requestedAtMs: Long = 0,
-)
-
-/** Fichier audio choisi sur le telephone, pret a etre televerse. */
-class UploadFile(val name: String, val mime: String?, val bytes: ByteArray)
-
-/** Reponse de POST /api/v1/music/playlists (televersement, jeton d'appareil). */
-@Serializable
-data class MusicUploadResponse(
-    @SerialName("playlist_id") val playlistId: String = "",
-    val name: String = "",
-    @SerialName("track_count") val trackCount: Int = 0,
-    @SerialName("total_bytes") val totalBytes: Long = 0,
-    @SerialName("ready_track_count") val readyTrackCount: Int = 0,
 )

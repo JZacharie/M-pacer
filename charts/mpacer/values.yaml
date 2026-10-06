@@ -54,10 +54,6 @@ config:
   # Vide => <publicUrl>/auth/google/callback. A renseigner si le client OAuth
   # utilise un autre chemin (le service sert alors le callback a ce chemin).
   googleRedirectUri: ""
-  # Racine des fichiers audio televerses (playlists personnelles). Doit pointer
-  # vers un volume inscriptible : le PVC (persistence.enabled) ou, a defaut, un
-  # emptyDir monte a cet emplacement par le Deployment.
-  mediaDir: /data/media
   # URI de redirection OAuth Spotify, declaree dans la console Spotify for
   # Developers. Vide => <publicUrl>/auth/spotify/callback
   spotifyRedirectUri: ""
@@ -143,15 +139,13 @@ externalSecrets:
   # namespace via ses propres ExternalSecrets. On ne les recree donc pas ici, pour
   # eviter un conflit de propriete sur un secret existant.
 
-# Volume des donnees applicatives : indispensable des que l'on televerse de la
-# musique (playlists personnelles), car la racine du conteneur est en lecture
-# seule. Avec persistence.enabled=false, un emptyDir est monte sur
-# config.mediaDir : les fichiers survivent au pod, pas a sa suppression.
+# Volume applicatif : M-pacer ne stocke aucun fichier audio (la musique est
+# copiee sur la montre par USB depuis le PC). Conserve pour un eventuel cache.
 persistence:
   enabled: false
   storageClass: local-path
   accessMode: ReadWriteOnce
-  size: 5Gi
+  size: 1Gi
   mountPath: /data
   annotations: {}
 

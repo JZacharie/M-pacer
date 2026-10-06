@@ -78,19 +78,14 @@ vault kv put apps/mpacer \
 > reste alors utilisable pour les fichiers personnels et affiche que Spotify
 > n'est pas configure.
 
-### 2.1.1 Musique televersee : volume obligatoire
+### 2.1.1 Musique : aucun stockage cote serveur
 
-Les playlists personnelles sont stockees sur disque (`MPACER_MEDIA_DIR`, defaut
-`/data/media`). La racine du conteneur etant en lecture seule
-(`securityContext.readOnlyRootFilesystem: true`), le Deployment monte :
-
-* le PVC du chart (`persistence.enabled=true`, taille a prevoir : compter
-  environ 1 Mo par minute d'audio en 128 kbit/s) ;
-* a defaut, un `emptyDir` sur `config.mediaDir` — les fichiers survivent a un
-  redemarrage du pod, pas a son remplacement.
-
-Sur jo3, `values-jo3.yaml` active la persistance (`local-path-retain`, 5Gi) :
-sans elle, il faudrait re-televerser la musique apres chaque deploiement.
+La musique n'est **pas** stockee par le service : les fichiers audio restent sur
+le disque de l'utilisateur et sont copies sur la montre par USB avec l'outil local
+`mpacer-music` (voir [docs/07](../docs/07-musique-bpm-et-playlists.md)). Le
+backend ne conserve que des **metadonnees** (playlists, titres, BPM, manifeste de
+transfert) : le volume applicatif du chart reste donc desactive sur jo3, et
+aucune variable `MPACER_MEDIA_DIR` n'est necessaire.
 
 Puis forcer la synchronisation et vérifier :
 

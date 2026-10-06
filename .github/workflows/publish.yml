@@ -10,6 +10,10 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Etiquette supplementaire a publier, sans prefixe v (ex. 0.2.0)"
+        required: false
 
 permissions:
   contents: read
@@ -42,6 +46,8 @@ jobs:
             # v0.2.0 -> 0.2.0 : c'est le tag que le chart utilise par defaut
             # (image.tag vide => appVersion du chart).
             type=semver,pattern={{version}}
+            # Relance manuelle : meme etiquette, pour un tag deja publie.
+            type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
 
       - name: Construction et publication
         uses: docker/build-push-action@v6

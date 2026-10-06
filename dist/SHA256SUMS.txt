@@ -1,0 +1,4 @@
+034f8241ac5a4115ab6d40f39fff726a01a7137fb362be141db4983353c57bcc  M-pacer-montre-0.2.0-release.apk
+e0cbd26b6418137a45dcf4b0b589367b75bcc10bd211778d010eb2cac3c0a5d5  M-pacer-telephone-0.2.0-release.apk
+5aee53148c7eb664c5e0a110a7789f809dfdb1976c3f0fafc077cd3a5930ce43  M-pacer-compagnon-0.2.0-release.apk
+9f6193e981d70132547bbb569909875453972344662a91bf229e691e727731bc  mpacer-outils-0.2.0-windows-x86_64.zip

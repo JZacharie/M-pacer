@@ -1159,8 +1159,17 @@ async fn settings_page(
             p class="muted" { "Votre compte, vos montres appairees et l'appairage d'un nouvel appareil." }
         }
 
+        // Menu unique des reglages : appairer et les jetons ne sont plus des
+        // onglets de la navigation, ils vivent ici.
+        nav class="settings-menu" aria-label="Sections des reglages" {
+            a href="#profil" { span class="icon icon-user" {} "Profil" }
+            a href="#appareils" { span class="icon icon-watch" {} "Appareils appaires" }
+            a href="#appairer" { span class="icon icon-key" {} "Appairer une montre" }
+            a href="#deconnexion" { span class="icon icon-logout" {} "Deconnexion" }
+        }
+
         // ------------------------------------------------ profil
-        div class="section-head" { h2 { "Profil" } }
+        div class="section-head" id="profil" { h2 { "Profil" } }
         section class="card profile" {
             img class="avatar avatar-large" src="/avatar" alt="" width="64" height="64" decoding="async";
             div class="profile-identite" {
@@ -1177,7 +1186,7 @@ async fn settings_page(
         }
 
         // ------------------------------------------------ appareils appaires
-        div class="section-head" {
+        div class="section-head" id="appareils" {
             h2 { "Appareils appaires" }
             span class="muted" { (active_tokens) " actif(s) sur " (tokens.len()) }
         }
@@ -1212,7 +1221,7 @@ async fn settings_page(
         }
 
         // ------------------------------------------------ appairer une montre
-        div class="section-head" { h2 { "Appairer une montre" } }
+        div class="section-head" id="appairer" { h2 { "Appairer une montre" } }
         section class="panel" {
             p class="muted" {
                 "Sur la montre, ouvrez M-pacer et lancez la synchronisation : un code du type "
@@ -1230,7 +1239,7 @@ async fn settings_page(
         }
 
         // ------------------------------------------------ deconnexion
-        div class="section-head" { h2 { "Deconnexion" } }
+        div class="section-head" id="deconnexion" { h2 { "Deconnexion" } }
         section class="panel" {
             p class="muted" {
                 "Fermer la session sur ce navigateur. Vos seances et vos playlists restent sur le serveur."
@@ -1693,6 +1702,9 @@ fn layout(title: &str, active: &str, user: Option<&User>, content: Markup) -> Ma
                 meta name="color-scheme" content="dark light";
                 meta name="theme-color" content="#0b0d10" media="(prefers-color-scheme: dark)";
                 meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)";
+                // mobile-web-app-capable remplace apple-mobile-web-app-capable
+                // (depreciee) ; on garde les deux pour couvrir iOS et Android.
+                meta name="mobile-web-app-capable" content="yes";
                 meta name="apple-mobile-web-app-capable" content="yes";
                 meta name="apple-mobile-web-app-title" content="M-pacer";
                 meta name="description" content="Suivi de course auto-heberge : seances, analyse, export GPX.";

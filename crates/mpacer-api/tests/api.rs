@@ -3107,6 +3107,19 @@ async fn settings_gathers_profile_devices_pairing_and_logout() {
     // Reglages est un onglet de la navigation, et le menu deroulant a disparu.
     assert!(body.contains("href=\"/settings\""), "{body}");
     assert!(!body.contains("menu-panel"), "{body}");
+    // Appairer et les jetons vivent dans le menu des reglages (ancres), et
+    // l'en-tete ne declare plus seulement la meta iOS depreciee.
+    for expected in [
+        "settings-menu",
+        "href=\"#appareils\"",
+        "href=\"#appairer\"",
+        "name=\"mobile-web-app-capable\"",
+    ] {
+        assert!(
+            body.contains(expected),
+            "« {expected} » absent de /settings : {body}"
+        );
+    }
 
     // La route /link reste servie, meme si elle quitte la navigation.
     let response = app

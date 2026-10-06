@@ -215,7 +215,6 @@ async fn workout_gpx(
     super::gpx_response(&state, &user.id, &id).await
 }
 
-
 // ------------------------------------------------------------------ courses
 
 /// Filtre de la liste des courses.

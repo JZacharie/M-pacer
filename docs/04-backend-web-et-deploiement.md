@@ -86,6 +86,11 @@ session d'au moins 32 caractères.
 | GET | `/api/v1/workouts/{id}` | Bearer | séance complète (avec la trace) |
 | DELETE | `/api/v1/workouts/{id}` | Bearer | suppression |
 | GET | `/api/v1/workouts/{id}/gpx` | Bearer | export GPX |
+| GET | `/api/v1/races?upcoming` | Bearer | courses à venir (`upcoming=true`) ou toutes |
+| POST | `/api/v1/races` | Bearer | crée une course (et son suivi par défaut) |
+| GET | `/api/v1/races/{id}` | Bearer | fiche de course complète et son suivi |
+| PUT | `/api/v1/races/{id}` | Bearer | met à jour la fiche de course |
+| DELETE | `/api/v1/races/{id}` | Bearer | supprime la course et son suivi |
 | GET | `/api/v1/stats?days=30` | Bearer | totaux sur une période |
 | GET | `/healthz` `/readyz` | — | sondes Kubernetes |
 
@@ -104,6 +109,10 @@ Rendue côté serveur en Rust (**maud**), sans chaîne JavaScript ni dépendance
 |---|---|
 | `/` | tableau de bord : totaux 30 jours, montres appairées, historique cliquable |
 | `/workouts/{id}` | détail : résumé, histogramme SVG des allures de tour, tours, meilleures distances, export GPX, suppression |
+| `/courses` | **cartes des courses** : compte à rebours, dossard, distance, hôtel, progression du suivi, courses déjà courues |
+| `/courses/planning` | **planning** : agenda des échéances à venir (départ, prise de dossard, hôtel, éléments de suivi datés) par mois |
+| `/courses/{id}` | **fiche de course** : dossard, horaires, lieux, live, hébergement, nutrition, informations importantes, suivi à cocher |
+| `/courses/nouvelle`, `/courses/{id}/modifier` | création et modification d'une fiche de course |
 | `/link` | saisie du code affiché par la montre |
 | `/settings` | jetons d'appareil : création, dernier envoi, révocation |
 | `/login` | bouton « Continuer avec Google » |
@@ -123,6 +132,14 @@ device_codes(device_code, user_code, user_id, label, created_at_ms, expires_at_m
 workouts(id, user_id, started_at_ms, duration_s, distance_m, average_pace_s_per_km,
          unit_system, payload, uploaded_at_ms)   PRIMARY KEY (user_id, id)
 oauth_states(state, pkce_verifier, redirect_to, created_at_ms, expires_at_ms)
+
+races(id, user_id, name, start_at_ms, distance_m, discipline, location, start_location,
+      bib_number, bib_pickup_at_ms, bib_pickup_location, live_url, registration_url,
+      website_url, latitude, longitude, hotel_name, hotel_address, hotel_phone,
+      hotel_url, hotel_booked, hotel_check_in_ms, hotel_check_out_ms, lodging_notes,
+      nutrition_notes, important_info, notes, goal_time_s, created_at_ms, updated_at_ms)
+
+race_tasks(id, race_id, user_id, label, due_at_ms, done, done_at_ms, position, created_at_ms)
 ```
 
 - Les horodatages sont des `BIGINT` (millisecondes UNIX) et les mesures des

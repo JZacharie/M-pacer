@@ -540,7 +540,7 @@ pub async fn insert_race(
     .await?;
 
     for label in crate::models::DEFAULT_RACE_TASKS {
-        insert_task_row(&mut *tx, user_id, &id, label, None, now_ms).await?;
+        insert_task_row(&mut tx, user_id, &id, label, None, now_ms).await?;
     }
     tx.commit().await?;
 
@@ -704,13 +704,12 @@ pub async fn delete_race_task(
     race_id: &str,
     task_id: &str,
 ) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
-        "DELETE FROM race_tasks WHERE id = $1 AND race_id = $2 AND user_id = $3",
-    )
-    .bind(task_id)
-    .bind(race_id)
-    .bind(user_id)
-    .execute(pool)
-    .await?;
+    let result =
+        sqlx::query("DELETE FROM race_tasks WHERE id = $1 AND race_id = $2 AND user_id = $3")
+            .bind(task_id)
+            .bind(race_id)
+            .bind(user_id)
+            .execute(pool)
+            .await?;
     Ok(result.rows_affected() > 0)
 }

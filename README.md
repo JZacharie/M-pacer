@@ -20,9 +20,19 @@ synchronisation de vos séances.
 |---|---|---|
 | **Montre Wear OS** | Enregistre la séance (GPS 1 Hz), calcule l'allure, guide le coureur (voix, shadow runner) | Squelette Kotlin, non compilé ici (pas de SDK Android) |
 | **Cœur Rust** | Tous les algorithmes : allure lissée, tours, assistant, voix, GPX, historique | **Fait, testé** (71 tests) |
-| **Backend Rust** | API de synchronisation, OAuth Google, interface web, PostgreSQL | **Fait, testé** (12 tests) |
+| **Backend Rust** | API de synchronisation, OAuth Google, interface web, PostgreSQL | **Fait, testé** (21 tests) |
+| **Courses à venir** | Fiches de course, planning des échéances, suivi des éléments à préparer | **Fait, testé** |
 | **PostgreSQL** | Stockage des séances, géré par CloudNativePG dans le cluster | **Déployé sur jo3** (PostgreSQL 18.6) |
 | **Chart Helm** | Déploiement complet (app + base + ingress + TLS) | **Validé** (`helm lint` + `--dry-run=server` sur jo3) |
+
+**Les courses à venir.** L'interface web ne sert pas qu'à relire le passé : elle
+gère aussi ce que vous préparez. Chaque course a sa **fiche** — numéro de dossard,
+horaire et lieu de départ, lien du live, hôtel réservé (nom, adresse, téléphone,
+arrivée, départ), rendez-vous de prise de dossard, autres solutions pour dormir,
+nutrition et ravitaillement, informations importantes, autres informations — un
+**planning** qui met bout à bout toutes les échéances à venir, et un **suivi**
+d'éléments à cocher (« dossard retiré », « hôtel réservé »…). Détail complet :
+[docs/05-courses-et-planning.md](docs/05-courses-et-planning.md).
 
 ## 2. Architecture
 
@@ -94,11 +104,12 @@ synchronisation de vos séances.
 | `src/auth/google.rs` | OAuth 2.0 + PKCE, vérification de l'`id_token` via JWKS |
 | `src/auth/device.rs` | Appairage montre ↔ navigateur (device authorization grant) |
 | `src/routes/api.rs` | API `/api/v1/*` : ingestion, listes, stats, export GPX |
-| `src/routes/web.rs` | Pages web (maud) : tableau de bord, détail, appairage, jetons |
+| `src/routes/web.rs` | Pages web (maud) : tableau de bord, détail, appairage, jetons, **fiches de course et planning** |
 | `src/routes/mod.rs` | Routeur global, sondes `/healthz` et `/readyz` |
 | `src/assets.rs` + `static/` | CSS et JS embarqués dans le binaire |
-| `migrations/0001_init.sql` | Schéma PostgreSQL (idempotent, rejoué au démarrage) |
-| `tests/api.rs` | 10 tests d'intégration (flux complet, schéma dédié par test) |
+| `migrations/0001_init.sql` | Schéma PostgreSQL initial (idempotent, rejoué au démarrage) |
+| `migrations/0002_races.sql` | Courses à venir et suivi de préparation (idempotent aussi) |
+| `tests/api.rs` | 16 tests d'intégration (flux complet, schéma dédié par test) |
 
 ### 3.3 Les autres crates
 
@@ -154,6 +165,7 @@ synchronisation de vos séances.
 | `docs/02-architecture-rust-wearos.md` | Architecture Rust/Wear OS, pont FFI, algorithme d'allure, batterie, permissions |
 | `docs/03-plan-action.md` | Plan de développement de l'application montre |
 | `docs/04-backend-web-et-deploiement.md` | Backend, auth, API, modèle de données, exploitation |
+| `docs/05-courses-et-planning.md` | Courses à venir : fiches, planning, suivi, API et modèle de données |
 | `docs/README.md` | Index des documents |
 
 ## 4. Plan d'action complet
@@ -305,7 +317,7 @@ Détail complet, dépannage et sauvegardes : [deploy/README.md](deploy/README.md
 
 | Vérification | Résultat |
 |---|---|
-| `cargo test --workspace` | **89 tests** : 71 cœur, 6 FFI, 12 backend (dont 10 d'intégration exécutés contre PostgreSQL) |
+| `cargo test --workspace` | **99 tests** : 71 cœur, 6 FFI, 21 backend (dont 16 d'intégration exécutés contre PostgreSQL), 1 test de documentation |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 avertissement |
 | `cargo fmt --all --check` | conforme |
 | `helm lint` / `helm template` | 0 échec |
@@ -329,6 +341,12 @@ Détail complet, dépannage et sauvegardes : [deploy/README.md](deploy/README.md
   `sslmode` est configurable pour un serveur externe.
 - Les versions de Wear OS, permissions de santé et règles Play Store évoluent :
   à revalider sur la version ciblée avant publication.
+- **La « carte » d'une course est un lien**, pas une carte interactive : elle ouvre
+  OpenStreetMap sur les coordonnées si elles sont renseignées, sinon sur le nom du
+  lieu. Aucun script tiers, aucune donnée envoyée à un service de cartographie.
+- **Les liens saisis dans une fiche de course sont vérifiés** : seuls `http://` et
+  `https://` sont acceptés, pour qu'un lien stocké ne puisse pas devenir un script
+  exécutable dans la page.
 
 ## 10. Prochaines actions
 

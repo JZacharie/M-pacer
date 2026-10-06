@@ -915,15 +915,24 @@ fn race_form_body(date: &str, extra: &[(&str, &str)]) -> String {
         ("bib_pickup_date".into(), date.to_string()),
         ("bib_pickup_time".into(), "15:00".into()),
         ("bib_pickup_location".into(), "Village depart".into()),
-        ("live_url".into(), "https://live.example.org/coureur/1234".into()),
-        ("registration_url".into(), "https://marathon.example.org/inscription".into()),
+        (
+            "live_url".into(),
+            "https://live.example.org/coureur/1234".into(),
+        ),
+        (
+            "registration_url".into(),
+            "https://marathon.example.org/inscription".into(),
+        ),
         ("hotel_name".into(), "Ibis Lyon Centre".into()),
         ("hotel_address".into(), "12 rue de la Paix, Lyon".into()),
         ("hotel_booked".into(), "1".into()),
         ("hotel_check_in".into(), date.to_string()),
         ("lodging_notes".into(), "Camping possible a 5 km".into()),
         ("nutrition_notes".into(), "Ravitos tous les 5 km".into()),
-        ("important_info".into(), "Certificat medical obligatoire".into()),
+        (
+            "important_info".into(),
+            "Certificat medical obligatoire".into(),
+        ),
         ("notes".into(), "Depart en train la veille".into()),
         ("goal_time".into(), "3:30:00".into()),
     ];
@@ -946,11 +955,7 @@ fn race_form_body(date: &str, extra: &[(&str, &str)]) -> String {
 }
 
 /// Cree une course par le formulaire web et renvoie son identifiant.
-async fn create_race_through_web(
-    app: &Router,
-    session: &str,
-    date: &str,
-) -> String {
+async fn create_race_through_web(app: &Router, session: &str, date: &str) -> String {
     let response = app
         .clone()
         .oneshot(form_request(
@@ -1034,7 +1039,10 @@ async fn race_sheet_holds_everything_a_runner_needs() {
         "Suivi des elements importants",
         "Dossard retire",
     ] {
-        assert!(body.contains(expected), "« {expected} » absent de la fiche : {body}");
+        assert!(
+            body.contains(expected),
+            "« {expected} » absent de la fiche : {body}"
+        );
     }
     assert!(body.contains("0 / 8 prets"), "{body}");
 
@@ -1042,7 +1050,11 @@ async fn race_sheet_holds_everything_a_runner_needs() {
     let tasks = mpacer_api::db::list_race_tasks(&state.pool, &_user.id, &race_id)
         .await
         .unwrap();
-    assert_eq!(tasks.len(), 8, "les elements de suivi par defaut sont crees");
+    assert_eq!(
+        tasks.len(),
+        8,
+        "les elements de suivi par defaut sont crees"
+    );
     let response = app
         .clone()
         .oneshot(form_request(
@@ -1069,7 +1081,11 @@ async fn race_sheet_holds_everything_a_runner_needs() {
         .oneshot(form_request(
             "POST",
             &format!("/courses/{race_id}/suivi"),
-            &format!("label={}&due={}", encode("Reconnaissance du parcours"), date),
+            &format!(
+                "label={}&due={}",
+                encode("Reconnaissance du parcours"),
+                date
+            ),
             &session,
         ))
         .await
@@ -1079,7 +1095,9 @@ async fn race_sheet_holds_everything_a_runner_needs() {
         .await
         .unwrap();
     assert_eq!(tasks.len(), 9);
-    assert!(tasks.iter().any(|task| task.label == "Reconnaissance du parcours" && task.due_at_ms.is_some()));
+    assert!(tasks
+        .iter()
+        .any(|task| task.label == "Reconnaissance du parcours" && task.due_at_ms.is_some()));
 
     // La fiche se modifie.
     let response = app
@@ -1087,7 +1105,10 @@ async fn race_sheet_holds_everything_a_runner_needs() {
         .oneshot(form_request(
             "POST",
             &format!("/courses/{race_id}/modifier"),
-            &race_form_body(&date, &[("bib_number", "4321"), ("name", "Marathon de Lyon 2027")]),
+            &race_form_body(
+                &date,
+                &[("bib_number", "4321"), ("name", "Marathon de Lyon 2027")],
+            ),
             &session,
         ))
         .await
@@ -1123,10 +1144,12 @@ async fn race_sheet_holds_everything_a_runner_needs() {
     )
     .await;
     assert!(!body.contains("Marathon de Lyon 2027"), "{body}");
-    assert!(mpacer_api::db::list_race_tasks(&state.pool, &_user.id, &race_id)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        mpacer_api::db::list_race_tasks(&state.pool, &_user.id, &race_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -1156,8 +1179,14 @@ async fn planning_lists_upcoming_races_in_order() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_text(response).await;
     assert!(body.contains("Depart - Marathon de Lyon"), "{body}");
-    assert!(body.contains("Prise de dossard - Marathon de Lyon"), "{body}");
-    assert!(body.contains("Arrivee a l'hotel - Ibis Lyon Centre"), "{body}");
+    assert!(
+        body.contains("Prise de dossard - Marathon de Lyon"),
+        "{body}"
+    );
+    assert!(
+        body.contains("Arrivee a l'hotel - Ibis Lyon Centre"),
+        "{body}"
+    );
     assert!(body.contains("Place Bellecour"), "{body}");
     // Le depart (09:30) precede la prise de dossard (15:00) le meme jour.
     let depart = body.find("Depart - Marathon de Lyon").unwrap();
@@ -1254,11 +1283,17 @@ async fn races_api_creates_reads_updates_and_deletes() {
         .unwrap();
     let list: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
     assert_eq!(list["total"], serde_json::json!(1));
-    assert_eq!(list["items"][0]["name"], serde_json::json!("Trail des volcans"));
+    assert_eq!(
+        list["items"][0]["name"],
+        serde_json::json!("Trail des volcans")
+    );
 
     let response = app
         .clone()
-        .oneshot(get_with_cookie(&format!("/api/v1/races/{race_id}"), &session))
+        .oneshot(get_with_cookie(
+            &format!("/api/v1/races/{race_id}"),
+            &session,
+        ))
         .await
         .unwrap();
     let detail: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
@@ -1266,13 +1301,14 @@ async fn races_api_creates_reads_updates_and_deletes() {
     assert_eq!(detail["tasks"].as_array().unwrap().len(), 8);
 
     // Mise a jour.
-    let payload = serde_json::json!({ "name": "Trail des volcans", "bib_number": "88" }).to_string();
+    let payload =
+        serde_json::json!({ "name": "Trail des volcans", "bib_number": "88" }).to_string();
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("PUT")
-                .uri(&format!("/api/v1/races/{race_id}"))
+                .uri(format!("/api/v1/races/{race_id}"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::COOKIE, &session)
                 .body(Body::from(payload))
@@ -1307,7 +1343,7 @@ async fn races_api_creates_reads_updates_and_deletes() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(&format!("/api/v1/races/{race_id}"))
+                .uri(format!("/api/v1/races/{race_id}"))
                 .header(header::COOKIE, &session)
                 .body(Body::empty())
                 .unwrap(),
@@ -1316,9 +1352,11 @@ async fn races_api_creates_reads_updates_and_deletes() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     let response = app
-        .oneshot(get_with_cookie(&format!("/api/v1/races/{race_id}"), &session))
+        .oneshot(get_with_cookie(
+            &format!("/api/v1/races/{race_id}"),
+            &session,
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
-

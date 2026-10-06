@@ -38,7 +38,10 @@ pub fn router() -> Router<AppState> {
         .route("/courses/planning", get(planning_page))
         .route("/courses/nouvelle", get(race_new_page).post(race_create))
         .route("/courses/{id}", get(race_page))
-        .route("/courses/{id}/modifier", get(race_edit_page).post(race_update))
+        .route(
+            "/courses/{id}/modifier",
+            get(race_edit_page).post(race_update),
+        )
         .route("/courses/{id}/supprimer", post(race_delete))
         .route("/courses/{id}/suivi", post(race_task_create))
         .route("/courses/{id}/suivi/{task}", post(race_task_toggle))
@@ -1171,13 +1174,7 @@ impl RaceForm {
 }
 
 /// Champ texte du formulaire.
-fn text_field(
-    name: &str,
-    label: &str,
-    value: &str,
-    input_type: &str,
-    placeholder: &str,
-) -> Markup {
+fn text_field(name: &str, label: &str, value: &str, input_type: &str, placeholder: &str) -> Markup {
     html! {
         div class="field" {
             label for=(name) { (label) }
@@ -1297,7 +1294,6 @@ fn race_form(action: &str, values: &RaceForm, error: Option<&str>, submit: &str)
 
 fn race_form_response(
     user: &User,
-    title: &str,
     heading: &str,
     action: &str,
     values: &RaceForm,
@@ -1312,7 +1308,7 @@ fn race_form_response(
         }
         (race_form(action, values, error, submit))
     };
-    (status, page(layout(title, Some(user), content))).into_response()
+    (status, page(layout(heading, Some(user), content))).into_response()
 }
 
 /// Ligne de resume d'une course : quand et ou.
@@ -1501,22 +1497,23 @@ async fn planning_page(
     // prise de dossard, hotel et elements de suivi dates.
     let mut entries: Vec<AgendaEntry> = Vec::new();
     for race in &upcoming {
-        let place = race.start_location.clone().or_else(|| race.location.clone());
-        let hotel = race
-            .hotel_name
+        let place = race
+            .start_location
             .clone()
-            .unwrap_or_else(|| race.name.clone());
-        let mut push = |at_ms: Option<i64>, kind: &'static str, title: String, detail: Option<String>| {
-            if let Some(at_ms) = at_ms {
-                entries.push(AgendaEntry {
-                    at_ms,
-                    kind,
-                    title,
-                    detail,
-                    race_id: race.id.clone(),
-                });
-            }
-        };
+            .or_else(|| race.location.clone());
+        let hotel = race.hotel_name.clone().unwrap_or_else(|| race.name.clone());
+        let mut push =
+            |at_ms: Option<i64>, kind: &'static str, title: String, detail: Option<String>| {
+                if let Some(at_ms) = at_ms {
+                    entries.push(AgendaEntry {
+                        at_ms,
+                        kind,
+                        title,
+                        detail,
+                        race_id: race.id.clone(),
+                    });
+                }
+            };
         push(
             race.start_at_ms,
             "depart",
@@ -1619,7 +1616,6 @@ async fn race_new_page(OptionalUser(user): OptionalUser) -> AppResult<Response> 
     Ok(race_form_response(
         &user,
         "Nouvelle course",
-        "Nouvelle course",
         "/courses/nouvelle",
         &RaceForm::default(),
         None,
@@ -1641,7 +1637,6 @@ async fn race_create(
         Err(message) => {
             return Ok(race_form_response(
                 &user,
-                "Nouvelle course",
                 "Nouvelle course",
                 "/courses/nouvelle",
                 &form,
@@ -1670,7 +1665,6 @@ async fn race_edit_page(
     Ok(race_form_response(
         &user,
         "Modifier la course",
-        "Modifier la course",
         &format!("/courses/{id}/modifier"),
         &RaceForm::from_race(&race),
         None,
@@ -1695,7 +1689,6 @@ async fn race_update(
             return Ok(race_form_response(
                 &user,
                 "Modifier la course",
-                "Modifier la course",
                 &action,
                 &form,
                 Some(&message),
@@ -1704,7 +1697,8 @@ async fn race_update(
             ))
         }
     };
-    let updated = crate::db::update_race(&state.pool, &user.id, &id, &input, state.now_ms()).await?;
+    let updated =
+        crate::db::update_race(&state.pool, &user.id, &id, &input, state.now_ms()).await?;
     if updated.is_none() {
         return Err(AppError::NotFound);
     }
@@ -1945,4 +1939,3 @@ async fn race_task_delete(
     }
     Ok(Redirect::to(&format!("/courses/{id}")).into_response())
 }
-

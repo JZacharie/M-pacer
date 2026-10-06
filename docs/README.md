@@ -9,6 +9,7 @@ Index des documents. Le point d'entrée reste le [README principal](../README.md
 | [02 - Architecture Rust / Wear OS](02-architecture-rust-wearos.md) | savoir pourquoi le calcul est en Rust et l'interface en Kotlin, comment fonctionne l'algorithme d'allure sur 2 minutes, quelles permissions sont nécessaires et ce que consomme la batterie |
 | [03 - Plan d'action (application montre)](03-plan-action.md) | planifier le travail côté Wear OS : phases, tâches, critères d'acceptation, risques, stratégie de test |
 | [04 - Backend, interface web et déploiement](04-backend-web-et-deploiement.md) | comprendre l'API, l'authentification Google, le modèle de données PostgreSQL et l'exploitation du service |
+| [05 - Courses à venir : fiches, planning et suivi](05-courses-et-planning.md) | préparer une course : dossard, horaires, lieux, live, hébergement, nutrition, informations importantes et éléments à cocher |
 | [Guide de déploiement](../deploy/README.md) | déployer concrètement sur le cluster k3s **jo3** : image, secrets, Helm, ingress, TLS, sauvegardes, dépannage |
 
 ## Parcours conseillés

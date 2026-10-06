@@ -15,6 +15,7 @@ use axum::routing::{get, post};
 use axum::{Form, Router};
 use cookie::{Cookie, SameSite};
 use maud::{html, Markup, DOCTYPE};
+use mpacer_core::cardio::HeartRateZones;
 use mpacer_core::units::{format_duration, format_pace, UnitSystem};
 use serde::Deserialize;
 
@@ -607,45 +608,240 @@ async fn workout_page(
         .map(|s| s.unit_system)
         .unwrap_or(UnitSystem::Metric);
 
+    // Tout est calcule avant le rendu : une seule passe sur la trace.
+    let moving_s = summary
+        .as_ref()
+        .map(|summary| summary.duration_s)
+        .unwrap_or(workout.duration_s);
+    let elapsed_total_s = summary
+        .as_ref()
+        .map(|summary| summary.total_elapsed_s())
+        .unwrap_or(workout.duration_s);
+    let paused_s = summary
+        .as_ref()
+        .map(|summary| summary.paused_s())
+        .unwrap_or(0.0);
+    let split_list = summary
+        .as_ref()
+        .map(mpacer_core::analysis::splits)
+        .unwrap_or_default();
+    let heart = summary.as_ref().and_then(|summary| {
+        mpacer_core::cardio::summarize(&summary.heart_rate, HeartRateZones::default())
+    });
+    let drift = summary.as_ref().and_then(|summary| {
+        mpacer_core::cardio::cardiac_drift(&summary.track, &summary.heart_rate)
+    });
+    let acceleration = summary
+        .as_ref()
+        .and_then(mpacer_core::analysis::acceleration);
+    let elevation_gain = summary
+        .as_ref()
+        .map(|summary| mpacer_core::analysis::elevation_gain_m(&summary.track))
+        .unwrap_or(0.0);
+    let plan = summary.as_ref().and_then(|summary| summary.plan);
+
     let content = html! {
         section class="hero" {
             h1 { (format_date(workout.started_at_ms)) }
             p class="muted" {
                 (format_distance(workout.distance_m, units)) " - "
-                (format_duration(workout.duration_s)) " - "
-                (format_pace(Some(workout.average_pace_s_per_km))) " /km"
+                (format_duration(moving_s)) " en mouvement - "
+                (format_pace(Some(workout.average_pace_s_per_km))) " /" (units.label())
             }
             div class="actions" {
                 a class="button" href={ "/workouts/" (workout.id) "/gpx" } { "Telecharger le GPX" }
                 form method="post" action={ "/workouts/" (workout.id) "/delete" }
-                     onsubmit="return confirm('Supprimer definitivement cette seance ?');" {
+                     data-confirm="Supprimer definitivement cette seance ?" {
                     button class="ghost danger" type="submit" { "Supprimer" }
                 }
             }
         }
         @if let Some(summary) = &summary {
-            section {
-                h2 { "Tours" }
-                @if summary.laps.is_empty() {
+            // -------------------------------------------- en-tete de resume
+            section class="mini-cards" {
+                (mini_card("Distance", &format_distance(summary.distance_m, units)))
+                (mini_card("Temps en mouvement", &format_duration(summary.duration_s)))
+                (mini_card("Temps ecoule", &format_duration(elapsed_total_s)))
+                (mini_card("Allure moyenne", &format!("{} /{}", format_pace(summary.average_pace(units)), units.label())))
+                @if let Some(heart) = &heart {
+                    (mini_card("FC moyenne", &format!("{:.0} bpm", heart.average_bpm)))
+                    (mini_card("FC max", &format!("{} bpm", heart.max_bpm)))
+                }
+                @if elevation_gain > 0.5 {
+                    (mini_card("Denivele +", &format!("{elevation_gain:.0} m")))
+                }
+                @if paused_s > 0.5 {
+                    (mini_card("Pauses", &format!("{} en {}", format_duration(paused_s), summary.pauses.len())))
+                }
+            }
+
+            // -------------------------------------------- graphique multi-courbes
+            @if summary.track.len() > 10 {
+                section class="panel" {
+                    div class="section-head" {
+                        h2 { "Graphique" }
+                        span class="muted" { "allure, frequence cardiaque et altitude sur la distance" }
+                    }
+                    (performance_chart(summary, units))
+                }
+            }
+
+            // -------------------------------------------- plan de course
+            @if let Some(plan) = plan {
+                section class="panel" {
+                    h2 { "Plan de course" }
+                    div class="mini-cards" {
+                        (mini_card("Cible", &format!("{} sur {}", format_duration(plan.target_time_s), format_distance(plan.distance_m, units))))
+                        (mini_card("Realise", &format_duration(summary.duration_s)))
+                        (mini_card("Ecart au finish", &signed_seconds(summary.duration_s - plan.target_time_s)))
+                        (mini_card("Allure cible", &format!("{} /{}", format_pace(Some(plan.average_pace(units))), units.label())))
+                        (mini_card("Allure realisee", &format!("{} /{}", format_pace(summary.average_pace(units)), units.label())))
+                        @if plan.negative_split.enabled {
+                            (mini_card("Negative split", &format!("{:.1} %", plan.negative_split.ratio * 100.0)))
+                        }
+                    }
+                    @if !split_list.is_empty() {
+                        (plan_delta_chart(&split_list))
+                        p class="muted" { "Ecart cumule au plan (barres vers le haut : en avance ; vers le bas : en retard)." }
+                    }
+                }
+            }
+
+            // -------------------------------------------- cardio
+            @if let Some(heart) = &heart {
+                section class="panel" {
+                    div class="section-head" {
+                        h2 { "Frequence cardiaque" }
+                        span class="muted" { (heart.sample_count) " mesures - zones en % de la FC max (" (heart.zones.max_bpm) " bpm)" }
+                    }
+                    (heart_rate_zones(heart))
+                    @if let Some(drift) = drift {
+                        p class="muted" {
+                            "Derive cardiaque (decouplage aerobie) : "
+                            strong { (format!("{:+.1} %", drift.decoupling_percent)) }
+                            " entre la premiere et la seconde moitie."
+                        }
+                    }
+                }
+            }
+
+            // -------------------------------------------- temps de passage
+            section class="panel" {
+                h2 { "Temps de passage" }
+                @if split_list.is_empty() {
                     p class="muted" { "Aucun tour enregistre." }
                 } @else {
-                    (pace_chart(&summary.laps, units))
                     table {
-                        thead { tr { th { "Tour" } th { "Distance" } th { "Duree" } th { "Allure" } } }
+                        thead {
+                            tr {
+                                th { "#" }
+                                th { "Distance" }
+                                th { "Temps" }
+                                th { "Allure" }
+                                th { "Ecart" }
+                                @if heart.is_some() { th { "FC" } }
+                                @if elevation_gain > 0.5 { th { "D+" } }
+                                @if plan.is_some() { th { "Plan" } }
+                            }
+                        }
                         tbody {
-                            @for lap in &summary.laps {
+                            @for split in &split_list {
                                 tr {
-                                    td { (lap.index) }
-                                    td { (format_distance(lap.distance_m, units)) }
-                                    td { (format_duration(lap.duration_s)) }
-                                    td { (format_pace(Some(lap.pace_in(units)))) " /" (units.label()) }
+                                    td { (split.index) }
+                                    td { (format_distance(split.distance_m, units)) }
+                                    td { (format_duration(split.duration_s)) }
+                                    td { (format_pace(Some(split.pace_s_per_km))) " /" (units.label()) }
+                                    td {
+                                        @match split.pace_delta_s {
+                                            Some(delta) => (signed_seconds(delta)),
+                                            None => "-",
+                                        }
+                                    }
+                                    @if heart.is_some() {
+                                        td {
+                                            @match split.heart_rate_avg {
+                                                Some(average) => (format!("{average:.0}")),
+                                                None => "-",
+                                            }
+                                        }
+                                    }
+                                    @if elevation_gain > 0.5 {
+                                        td { (format!("{:.0} m", split.elevation_gain_m)) }
+                                    }
+                                    @if plan.is_some() {
+                                        td {
+                                            @match split.plan_delta_s {
+                                                Some(delta) => (signed_seconds(delta)),
+                                                None => "-",
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-            section {
+
+            // -------------------------------------------- chronologie
+            section class="panel" {
+                h2 { "Chronologie" }
+                div class="mini-cards" {
+                    (mini_card("Temps de course", &format_duration(summary.duration_s)))
+                    (mini_card("Temps ecoule", &format_duration(elapsed_total_s)))
+                    (mini_card("Temps de pause", &format!("{} en {}", format_duration(paused_s), summary.pauses.len())))
+                }
+                @if summary.pauses.is_empty() {
+                    p class="muted" { "Aucune pause pendant cette seance." }
+                } @else {
+                    ul class="pauses" {
+                        @for (index, pause) in summary.pauses.iter().enumerate() {
+                            li {
+                                strong { "Pause " (index + 1) }
+                                " a " (format_duration(pause.at_s))
+                                " (" (format_distance(pause.at_distance_m, units)) ") pendant "
+                                (format_duration(pause.duration_s))
+                                " - " (if pause.automatic { "automatique" } else { "manuelle" })
+                            }
+                        }
+                    }
+                }
+                @if let Some(acceleration) = &acceleration {
+                    h3 { "Acceleration" }
+                    p class="muted" {
+                        "Allure de croisiere de reference : "
+                        (format_pace(Some(units.pace_from_speed(acceleration.cruise_speed_mps).unwrap_or(0.0))))
+                        " /" (units.label())
+                    }
+                    table {
+                        thead { tr { th { "Phase" } th { "A la distance" } th { "Temps pour atteindre l'allure" } th { "Distance de la phase" } } }
+                        tbody {
+                            @for phase in &acceleration.phases {
+                                tr {
+                                    td { @if phase.after_pause { "Reprise" } @else { "Depart" } }
+                                    td { (format_distance(phase.at_distance_m, units)) }
+                                    td {
+                                        @match phase.seconds {
+                                            Some(seconds) => (format_duration(seconds)),
+                                            None => "non atteinte",
+                                        }
+                                    }
+                                    td { (format_distance(phase.distance_m, units)) }
+                                }
+                            }
+                        }
+                    }
+                    (acceleration_bar(acceleration))
+                    p class="muted" {
+                        "Temps passe a accelerer : " (format_duration(acceleration.accelerating_s))
+                        " - allure stable : " (format_duration(acceleration.steady_s))
+                        " - ralentissement : " (format_duration(acceleration.decelerating_s))
+                    }
+                }
+            }
+
+            // -------------------------------------------- meilleures distances
+            section class="panel" {
                 h2 { "Meilleures distances" }
                 @if summary.best_efforts.is_empty() {
                     p class="muted" { "Distance trop courte pour un temps de reference." }
@@ -731,35 +927,328 @@ fn layout(title: &str, user: Option<&User>, content: Markup) -> Markup {
     }
 }
 
-/// Histogramme SVG des allures de tour (aucune librairie de graphiques).
-fn pace_chart(laps: &[mpacer_core::lap::Lap], units: UnitSystem) -> Markup {
-    let paces: Vec<f64> = laps
-        .iter()
-        .map(|lap| lap.pace_in(units))
-        .filter(|pace| pace.is_finite() && *pace > 0.0)
-        .collect();
-    if paces.is_empty() {
-        return html! {};
+// ------------------------------------------------------- graphiques de seance
+//
+// Aucune librairie de graphiques : quelques polylignes SVG suffisent, et le
+// rendu reste identique partout (y compris sans JavaScript).
+
+/// Largeur du repere SVG (le CSS l'etire sur toute la page).
+const CHART_WIDTH: f64 = 1000.0;
+/// Hauteur du repere du graphique multi-courbes.
+const CHART_HEIGHT: f64 = 340.0;
+/// Marge gauche, pour les libelles de valeurs.
+const CHART_LEFT: f64 = 64.0;
+/// Marge droite.
+const CHART_RIGHT: f64 = 14.0;
+
+/// Petite carte de statistique (en-tete de resume).
+fn mini_card(label: &str, value: &str) -> Markup {
+    html! {
+        div class="mini-card" {
+            span class="card-label" { (label) }
+            strong { (value) }
+        }
     }
-    let fastest = paces.iter().cloned().fold(f64::INFINITY, f64::min);
-    let slowest = paces.iter().cloned().fold(0.0_f64, f64::max);
-    let span = (slowest - fastest).max(1.0);
-    let width = (laps.len() as f64 * 28.0).max(120.0);
-    let height = 120.0;
+}
+
+/// Duree signee ("+1:23", "-0:45"), pour les ecarts au plan.
+fn signed_seconds(seconds: f64) -> String {
+    if seconds.abs() < 0.5 {
+        return "0 s".to_string();
+    }
+    format!(
+        "{}{}",
+        if seconds >= 0.0 { "+" } else { "-" },
+        format_duration(seconds.abs())
+    )
+}
+
+/// Bornes d'une serie, elargies quand elle est parfaitement plate.
+fn series_range(values: &[f64]) -> (f64, f64) {
+    let low = values.iter().cloned().fold(f64::INFINITY, f64::min);
+    let high = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    if !low.is_finite() || !high.is_finite() {
+        return (0.0, 1.0);
+    }
+    if (high - low).abs() < 1e-6 {
+        return (low - 0.5, high + 0.5);
+    }
+    (low, high)
+}
+
+/// Projette une serie (distance en m, valeur) dans une bande verticale du SVG.
+fn band_points(
+    series: &[(f64, f64)],
+    total_m: f64,
+    plot_width: f64,
+    band: (f64, f64),
+    range: (f64, f64),
+    invert: bool,
+) -> Vec<(f64, f64)> {
+    let (top, bottom) = band;
+    let (low, high) = range;
+    let span = (high - low).abs().max(1e-9);
+    series
+        .iter()
+        .map(|(distance, value)| {
+            let ratio = ((value - low) / span).clamp(0.0, 1.0);
+            let ratio = if invert { 1.0 - ratio } else { ratio };
+            let x = CHART_LEFT + (distance / total_m).clamp(0.0, 1.0) * plot_width;
+            let y = bottom - ratio * (bottom - top);
+            (x, y)
+        })
+        .collect()
+}
+
+/// Attribut "points" d'une polyligne SVG.
+fn polyline_points(points: &[(f64, f64)]) -> String {
+    points
+        .iter()
+        .map(|(x, y)| format!("{x:.1},{y:.1}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Graphique multi-courbes : allure, frequence cardiaque et altitude, sur la
+/// meme axe de distance, chacun dans sa bande et sur sa propre echelle.
+fn performance_chart(
+    summary: &mpacer_core::history::WorkoutSummary,
+    units: UnitSystem,
+) -> Markup {
+    let plot_width = CHART_WIDTH - CHART_LEFT - CHART_RIGHT;
+    let total_m = summary.distance_m.max(1.0);
+    let pace_band = (16.0, 120.0);
+    let cardio_band = (152.0, 256.0);
+    let elevation_band = (278.0, 326.0);
+
+    // Allure : courbe de vitesse lissee, replacee sur l'axe des distances.
+    let curve = mpacer_core::analysis::speed_curve(&summary.track, 10.0);
+    let step = (curve.len() / 260).max(1);
+    let mut pace_series: Vec<(f64, f64)> = Vec::new();
+    for sample in curve.iter().step_by(step) {
+        if sample.speed_mps <= 0.3 {
+            continue;
+        }
+        if let Some(distance) =
+            mpacer_core::analysis::distance_at_elapsed_s(&summary.track, sample.t_s)
+        {
+            pace_series.push((distance, 1000.0 / sample.speed_mps));
+        }
+    }
+
+    let cardio_step = (summary.heart_rate.len() / 260).max(1);
+    let cardio_series: Vec<(f64, f64)> = summary
+        .heart_rate
+        .iter()
+        .step_by(cardio_step)
+        .filter_map(|sample| {
+            mpacer_core::best_distances::distance_at_time_m(&summary.track, sample.t_ms)
+                .map(|distance| (distance, sample.bpm as f64))
+        })
+        .collect();
+
+    let elevation_step = (summary.track.len() / 260).max(1);
+    let elevation_series: Vec<(f64, f64)> = summary
+        .track
+        .iter()
+        .step_by(elevation_step)
+        .filter_map(|point| {
+            point
+                .elevation_m
+                .map(|elevation| (point.dist_m, elevation))
+        })
+        .collect();
+
+    let pace_range = series_range(&pace_series.iter().map(|(_, pace)| *pace).collect::<Vec<_>>());
+    let cardio_range =
+        series_range(&cardio_series.iter().map(|(_, bpm)| *bpm).collect::<Vec<_>>());
+    let elevation_range = series_range(
+        &elevation_series
+            .iter()
+            .map(|(_, elevation)| *elevation)
+            .collect::<Vec<_>>(),
+    );
+
+    let pace_points = band_points(
+        &pace_series,
+        total_m,
+        plot_width,
+        pace_band,
+        pace_range,
+        true,
+    );
+    let cardio_points = band_points(
+        &cardio_series,
+        total_m,
+        plot_width,
+        cardio_band,
+        cardio_range,
+        false,
+    );
+    let elevation_points = band_points(
+        &elevation_series,
+        total_m,
+        plot_width,
+        elevation_band,
+        elevation_range,
+        false,
+    );
 
     html! {
-        svg class="chart" viewBox=(format!("0 0 {width} {height}")) preserveAspectRatio="none" {
-            @for (index, pace) in paces.iter().enumerate() {
-                @let ratio = 1.0 - ((pace - fastest) / span);
-                @let bar_height = 20.0 + ratio * (height - 30.0);
-                rect
-                    x=(format!("{:.1}", index as f64 * 28.0 + 4.0))
-                    y=(format!("{:.1}", height - bar_height))
-                    width="20"
-                    height=(format!("{:.1}", bar_height))
-                    rx="3" {
-                    title { (format_pace(Some(*pace))) " /" (units.label()) }
+        div class="chart-block" {
+            svg class="chart multi" viewBox=(format!("0 0 {CHART_WIDTH} {CHART_HEIGHT}")) preserveAspectRatio="none" {
+                rect class="band" x="0" y=(format!("{:.0}", pace_band.0 - 10.0))
+                     width=(format!("{CHART_WIDTH:.0}")) height=(format!("{:.0}", pace_band.1 - pace_band.0 + 20.0)) {}
+                rect class="band" x="0" y=(format!("{:.0}", cardio_band.0 - 10.0))
+                     width=(format!("{CHART_WIDTH:.0}")) height=(format!("{:.0}", cardio_band.1 - cardio_band.0 + 20.0)) {}
+                rect class="band" x="0" y=(format!("{:.0}", elevation_band.0 - 8.0))
+                     width=(format!("{CHART_WIDTH:.0}")) height=(format!("{:.0}", elevation_band.1 - elevation_band.0 + 16.0)) {}
+                @for split in mpacer_core::analysis::splits(summary) {
+                    @let x = CHART_LEFT + (split.cumulative_distance_m / total_m).clamp(0.0, 1.0) * plot_width;
+                    line class="grid" x1=(format!("{x:.1}")) y1="6" x2=(format!("{x:.1}")) y2=(format!("{:.0}", CHART_HEIGHT - 6.0)) {}
                 }
+                @if !pace_points.is_empty() {
+                    polyline class="trace pace" points=(polyline_points(&pace_points)) {}
+                }
+                @if !cardio_points.is_empty() {
+                    polyline class="trace cardio" points=(polyline_points(&cardio_points)) {}
+                }
+                @if !elevation_points.is_empty() {
+                    polyline class="trace elevation" points=(polyline_points(&elevation_points)) {}
+                }
+                text class="chart-label" x="4" y=(format!("{:.0}", pace_band.0 + 10.0)) {
+                    (format_pace(Some(pace_range.0))) " /" (units.label())
+                }
+                text class="chart-label" x="4" y=(format!("{:.0}", pace_band.1)) {
+                    (format_pace(Some(pace_range.1)))
+                }
+                @if !cardio_series.is_empty() {
+                    text class="chart-label" x="4" y=(format!("{:.0}", cardio_band.0 + 10.0)) { (format!("{:.0} bpm", cardio_range.1)) }
+                    text class="chart-label" x="4" y=(format!("{:.0}", cardio_band.1)) { (format!("{:.0}", cardio_range.0)) }
+                }
+                @if !elevation_series.is_empty() {
+                    text class="chart-label" x="4" y=(format!("{:.0}", elevation_band.0 + 10.0)) { (format!("{:.0} m", elevation_range.1)) }
+                    text class="chart-label" x="4" y=(format!("{:.0}", elevation_band.1)) { (format!("{:.0}", elevation_range.0)) }
+                }
+                text class="chart-label" x=(format!("{CHART_LEFT:.0}")) y=(format!("{:.0}", CHART_HEIGHT - 2.0)) { "0" }
+                text class="chart-label" x=(format!("{:.0}", CHART_WIDTH - CHART_RIGHT)) y=(format!("{:.0}", CHART_HEIGHT - 2.0)) text-anchor="end" {
+                    (format_distance(total_m, units))
+                }
+            }
+            div class="legend" {
+                span class="legend-item pace" { "Allure" }
+                @if !cardio_series.is_empty() {
+                    span class="legend-item cardio" { "Frequence cardiaque" }
+                }
+                @if !elevation_series.is_empty() {
+                    span class="legend-item elevation" { "Altitude" }
+                }
+            }
+        }
+    }
+}
+
+/// Ecart cumule au plan, tronçon par tronçon : au-dessus de l'axe, le coureur
+/// est en avance ; en dessous, il est en retard.
+fn plan_delta_chart(splits: &[mpacer_core::analysis::Split]) -> Markup {
+    const HEIGHT: f64 = 150.0;
+    let left = 20.0;
+    let plot_width = CHART_WIDTH - left - CHART_RIGHT;
+    let total_m = splits
+        .last()
+        .map(|split| split.cumulative_distance_m)
+        .unwrap_or(1.0)
+        .max(1.0);
+    let max_delta = splits
+        .iter()
+        .filter_map(|split| split.plan_delta_s)
+        .fold(1.0_f64, |largest, delta| largest.max(delta.abs()));
+    let zero = HEIGHT / 2.0;
+    let slot = plot_width / splits.len().max(1) as f64;
+    let bar_width = (slot - 6.0).max(2.0);
+
+    html! {
+        svg class="chart bars" viewBox=(format!("0 0 {CHART_WIDTH} {HEIGHT}")) preserveAspectRatio="none" {
+            line class="axis" x1="0" y1=(format!("{zero:.0}")) x2=(format!("{CHART_WIDTH:.0}")) y2=(format!("{zero:.0}")) {}
+            @for split in splits {
+                @if let Some(delta) = split.plan_delta_s {
+                    @let ahead = delta < 0.0;
+                    @let height = (delta.abs() / max_delta) * (zero - 16.0);
+                    @let distance = split.cumulative_distance_m - split.distance_m / 2.0;
+                    @let x = left + (distance / total_m).clamp(0.0, 1.0) * plot_width;
+                    rect
+                        class=(if ahead { "bar positive" } else { "bar negative" })
+                        x=(format!("{x:.1}"))
+                        y=(format!("{:.1}", if ahead { zero - height } else { zero }))
+                        width=(format!("{bar_width:.1}"))
+                        height=(format!("{:.1}", height.max(1.5))) {
+                        title { (format!("{} : {}", format_distance(split.cumulative_distance_m, UnitSystem::Metric), signed_seconds(delta))) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Repartition du temps par zone de frequence cardiaque.
+fn heart_rate_zones(heart: &mpacer_core::cardio::HeartRateSummary) -> Markup {
+    let total = heart.total_seconds().max(1.0);
+    html! {
+        div class="zones" {
+            div class="zone-bar" {
+                @for (index, seconds) in heart.zone_seconds.iter().enumerate() {
+                    @if *seconds > 0.0 {
+                        div class={ "zone-segment z" (index + 1) }
+                            style=(format!("width: {:.3}%", seconds / total * 100.0)) {
+                            title { (mpacer_core::cardio::ZONE_NAMES[index]) " : " (format_duration(*seconds)) }
+                        }
+                    }
+                }
+                @if heart.below_zone1_s > 0.0 {
+                    div class="zone-segment z0" style=(format!("width: {:.3}%", heart.below_zone1_s / total * 100.0)) {
+                        title { "Sous la zone 1 : " (format_duration(heart.below_zone1_s)) }
+                    }
+                }
+            }
+            table {
+                thead { tr { th { "Zone" } th { "Plage" } th { "Temps" } th { "%" } } }
+                tbody {
+                    @for (index, seconds) in heart.zone_seconds.iter().enumerate() {
+                        @let bounds = heart.zones.boundaries()[index];
+                        tr {
+                            td { (mpacer_core::cardio::ZONE_NAMES[index]) }
+                            td { (format!("{:.0} - {:.0} bpm", bounds.0, bounds.1)) }
+                            td { (format_duration(*seconds)) }
+                            td { (format!("{:.0} %", heart.zone_percent(index))) }
+                        }
+                    }
+                    @if heart.below_zone1_s > 0.0 {
+                        tr {
+                            td { "Sous la zone 1" }
+                            td { (format!("< {:.0} bpm", heart.zones.boundaries()[0].0)) }
+                            td { (format_duration(heart.below_zone1_s)) }
+                            td { (format!("{:.0} %", heart.below_zone1_s / total * 100.0)) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Repartition du temps entre acceleration, allure stable et ralentissement.
+fn acceleration_bar(analysis: &mpacer_core::analysis::AccelerationAnalysis) -> Markup {
+    let total = (analysis.accelerating_s + analysis.steady_s + analysis.decelerating_s).max(1.0);
+    html! {
+        div class="zone-bar" {
+            div class="zone-segment accel" style=(format!("width: {:.3}%", analysis.accelerating_s / total * 100.0)) {
+                title { "Acceleration : " (format_duration(analysis.accelerating_s)) }
+            }
+            div class="zone-segment steady" style=(format!("width: {:.3}%", analysis.steady_s / total * 100.0)) {
+                title { "Allure stable : " (format_duration(analysis.steady_s)) }
+            }
+            div class="zone-segment decel" style=(format!("width: {:.3}%", analysis.decelerating_s / total * 100.0)) {
+                title { "Ralentissement : " (format_duration(analysis.decelerating_s)) }
             }
         }
     }

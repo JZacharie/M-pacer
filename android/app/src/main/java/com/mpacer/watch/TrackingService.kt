@@ -52,8 +52,16 @@ class TrackingService : Service() {
         when (intent?.action) {
             ACTION_START -> start(armed = false)
             ACTION_ARM -> start(armed = true)
-            ACTION_PAUSE -> publish(core.pause(now()))
-            ACTION_RESUME -> publish(core.resume(now()))
+            ACTION_PAUSE -> {
+                publish(core.pause(now()))
+                // En pause, plus besoin d'une position par seconde : on baisse la
+                // cadence (l'auto-reprise continue de fonctionner, en 3 s).
+                requestLocations(precisionMaximale = false)
+            }
+            ACTION_RESUME -> {
+                publish(core.resume(now()))
+                requestLocations(precisionMaximale = true)
+            }
             ACTION_STOP -> stopWorkout()
         }
         return START_STICKY
@@ -61,17 +69,31 @@ class TrackingService : Service() {
 
     private fun start(armed: Boolean) {
         startedAtMs = System.currentTimeMillis()
+        derniereNotification = "Preparation GPS..."
+        derniereNotificationMs = System.currentTimeMillis()
         startForeground(NOTIFICATION_ID, notification("Preparation GPS..."))
         publish(if (armed) core.arm(now()) else core.start(now()))
         requestLocations()
     }
 
-    private fun requestLocations() {
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L)
-            .setMinUpdateIntervalMillis(1000L)
+    /**
+     * Demande de position. Pleine precision (1 Hz) pendant l'effort, cadence reduite
+     * (3 s, precision equilibree) en pause : le GPS reste le premier poste de
+     * consommation de la montre.
+     */
+    private fun requestLocations(precisionMaximale: Boolean = true) {
+        val intervalle = if (precisionMaximale) 1000L else 3000L
+        val priorite = if (precisionMaximale) {
+            Priority.PRIORITY_HIGH_ACCURACY
+        } else {
+            Priority.PRIORITY_BALANCED_POWER_ACCURACY
+        }
+        val request = LocationRequest.Builder(priorite, intervalle)
+            .setMinUpdateIntervalMillis(intervalle)
             .setMinUpdateDistanceMeters(0f)
             .build()
         try {
+            locations.removeLocationUpdates(locationCallback)
             locations.requestLocationUpdates(request, locationCallback, mainLooper)
         } catch (security: SecurityException) {
             // Permission revoquee en cours de seance : on arrete proprement.
@@ -106,6 +128,9 @@ class TrackingService : Service() {
         val summary = core.summary(startedAtMs)
         WorkoutArchive.save(this, summary)
         locations.removeLocationUpdates(locationCallback)
+        // Envoi immediat de la seance terminee (le scope appartient au processus :
+        // il n'est pas annule par le stopSelf() ci-dessous).
+        SyncClient.syncInBackground(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -117,6 +142,10 @@ class TrackingService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /** Dernier texte de notification publie, pour eviter les republications inutiles. */
+    private var derniereNotification: String? = null
+    private var derniereNotificationMs = 0L
 
     private fun now(): Long = System.currentTimeMillis()
 
@@ -146,9 +175,20 @@ class TrackingService : Service() {
             .build()
     }
 
+    /**
+     * Republier une notification a chaque position coute cher (aller-retour vers
+     * system_server, bandeau retravaille). On ne la met a jour que si le texte change,
+     * et au plus une fois toutes les 5 secondes.
+     */
     private fun updateNotification(output: EngineOutput) {
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(NOTIFICATION_ID, notification(MpacerFormat.summaryLine(output)))
+        val texte = MpacerFormat.summaryLine(output)
+        val maintenant = System.currentTimeMillis()
+        if (texte == derniereNotification || maintenant - derniereNotificationMs < INTERVALLE_NOTIFICATION_MS) {
+            return
+        }
+        derniereNotification = texte
+        derniereNotificationMs = maintenant
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(texte))
     }
 
     companion object {
@@ -160,6 +200,9 @@ class TrackingService : Service() {
 
         private const val CHANNEL_ID = "mpacer.workout"
         private const val NOTIFICATION_ID = 42
+
+        /** Cadence minimale de republication de la notification. */
+        private const val INTERVALLE_NOTIFICATION_MS = 5000L
 
         private val _state = MutableStateFlow(WatchState.disconnected())
         val state: StateFlow<WatchState> = _state.asStateFlow()

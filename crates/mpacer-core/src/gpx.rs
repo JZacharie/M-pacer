@@ -115,6 +115,10 @@ mod tests {
                 },
             ],
             unit_system: UnitSystem::Metric,
+            elapsed_s: 60.0,
+            pauses: vec![],
+            heart_rate: vec![],
+            plan: None,
         };
         let gpx = export_gpx(&workout);
         assert!(gpx.starts_with("<?xml"));

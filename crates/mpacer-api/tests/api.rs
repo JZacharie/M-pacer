@@ -555,6 +555,10 @@ async fn google_login_creates_a_session_and_dashboard() {
         best_efforts: serde_json::json!([]),
         track: vec![],
         unit_system: Some(mpacer_core::units::UnitSystem::Metric),
+        elapsed_s: 0.0,
+        pauses: vec![],
+        heart_rate: vec![],
+        plan: None,
     };
     let payload = serde_json::to_string(&upload).unwrap();
     mpacer_api::db::upsert_workout(&_state.pool, &owner.id, &upload, &payload, _state.now_ms())
@@ -830,6 +834,10 @@ async fn stats_page_renders_weekly_volume() {
         best_efforts: serde_json::json!([]),
         track: vec![],
         unit_system: Some(mpacer_core::units::UnitSystem::Metric),
+        elapsed_s: 0.0,
+        pauses: vec![],
+        heart_rate: vec![],
+        plan: None,
     };
     let payload = serde_json::to_string(&upload).unwrap();
     mpacer_api::db::upsert_workout(&state.pool, &user.id, &upload, &payload, state.now_ms())

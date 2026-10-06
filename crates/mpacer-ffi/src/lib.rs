@@ -64,6 +64,11 @@ pub enum Command {
         #[serde(default)]
         speed_mps: Option<f64>,
     },
+    /// Mesure de frequence cardiaque (capteur de la montre ou ceinture).
+    HeartRate {
+        t_ms: i64,
+        bpm: u16,
+    },
     Start {
         t_ms: i64,
     },
@@ -169,6 +174,10 @@ impl Handle {
                     sample = sample.with_speed(speed);
                 }
                 Response::Output(Box::new(self.engine.on_gps(sample)))
+            }
+            Command::HeartRate { t_ms, bpm } => {
+                self.engine.on_heart_rate(t_ms, bpm);
+                Response::Output(Box::new(self.engine.tick(t_ms)))
             }
             Command::Start { t_ms } => Response::Output(Box::new(self.engine.start(t_ms))),
             Command::Arm { t_ms } => Response::Output(Box::new(self.engine.arm(t_ms))),

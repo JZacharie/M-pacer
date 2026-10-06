@@ -32,6 +32,39 @@ pub const STANDARD_DISTANCES: &[(f64, &str)] = &[
     (21_097.5, "Half marathon"),
 ];
 
+/// Ecart entre deux points de trace au-dela duquel on ne sait plus rien :
+/// pause, perte de signal. Aucune valeur n'est inventee a travers un tel trou.
+pub const TRACK_GAP_S: f64 = 5.0;
+
+/// Interpole la distance cumulee (m) a un instant donne.
+///
+/// Renvoie `None` en dehors de la trace ou a travers un trou : c'est ce qui
+/// permet de ne pas attribuer a une course le temps passe a l'arret.
+pub fn distance_at_time_m(points: &[TrackPoint], t_ms: i64) -> Option<f64> {
+    let first = points.first()?;
+    let last = points.last()?;
+    if t_ms < first.t_ms || t_ms > last.t_ms {
+        return None;
+    }
+    let index = points.partition_point(|point| point.t_ms < t_ms);
+    if index == 0 {
+        return Some(first.dist_m);
+    }
+    if index >= points.len() {
+        return Some(last.dist_m);
+    }
+    let (a, b) = (points[index - 1], points[index]);
+    let span = (b.t_ms - a.t_ms) as f64 / 1000.0;
+    if span <= 0.0 {
+        return Some(b.dist_m);
+    }
+    if span > TRACK_GAP_S {
+        return None;
+    }
+    let ratio = (t_ms - a.t_ms) as f64 / 1000.0 / span;
+    Some(a.dist_m + (b.dist_m - a.dist_m) * ratio)
+}
+
 /// Interpole le temps (ms) a une distance cumulee donnee.
 pub fn time_at_distance_ms(points: &[TrackPoint], dist_m: f64) -> Option<i64> {
     if points.len() < 2 {

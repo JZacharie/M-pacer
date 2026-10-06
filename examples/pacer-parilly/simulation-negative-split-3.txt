@@ -1,0 +1,54 @@
+M-pacer 0.1.0 - simulation : 70 min max, mode AchievePlannedTime, cible 15000 m en 1:00:00, negative split 3 %
+
+[VERT ] t=  5:00 dist=1.21 km allure= 4:07 tour= 4:07 | ecart plan -7 m
+    🔊 Allure 4:07 par kilometers. Distance 1.21 km. Temps 5:00. Vous etes en retard de 0:02, soit 7 m.
+[VERT ] t= 10:00 dist=2.43 km allure= 4:05 tour= 4:05 | ecart plan -8 m
+    🔊 Allure 4:05 par kilometers. Distance 2.43 km. Temps 10:00. Vous etes en retard de 0:02, soit 8 m.
+[VERT ] t= 15:00 dist=3.66 km allure= 4:03 tour= 4:03 | ecart plan -6 m
+    🔊 Allure 4:03 par kilometers. Distance 3.66 km. Temps 15:00. Vous etes en retard de 0:02, soit 6 m.
+[VERT ] t= 20:00 dist=4.89 km allure= 4:03 tour= 4:03 | ecart plan -6 m
+    🔊 Allure 4:03 par kilometers. Distance 4.89 km. Temps 20:00. Vous etes en retard de 0:02, soit 6 m.
+[VERT ] t= 25:00 dist=6.14 km allure= 4:02 tour= 4:04 | ecart plan -6 m
+    🔊 Allure 4:02 par kilometers. Distance 6.14 km. Temps 25:00. Vous etes en retard de 0:01, soit 6 m.
+[VERT ] t= 30:00 dist=7.39 km allure= 4:00 tour= 4:00 | ecart plan -2 m
+    🔊 Allure 4:00 par kilometers. Distance 7.39 km. Temps 30:00. Vous etes sur le plan.
+[VERT ] t= 35:00 dist=8.63 km allure= 4:00 tour= 3:59 | ecart plan -5 m
+    🔊 Allure 4:00 par kilometers. Distance 8.63 km. Temps 35:00. Vous etes en retard de 0:01, soit 5 m.
+[VERT ] t= 40:00 dist=9.89 km allure= 3:59 tour= 3:58 | ecart plan -7 m
+    🔊 Allure 3:59 par kilometers. Distance 9.89 km. Temps 40:00. Vous etes en retard de 0:02, soit 7 m.
+[VERT ] t= 45:00 dist=11.16 km allure= 3:56 tour= 3:55 | ecart plan -5 m
+    🔊 Allure 3:56 par kilometers. Distance 11.16 km. Temps 45:00. Vous etes en retard de 0:01, soit 5 m.
+[VERT ] t= 50:00 dist=12.43 km allure= 3:55 tour= 3:55 | ecart plan -5 m
+    🔊 Allure 3:55 par kilometers. Distance 12.43 km. Temps 50:00. Vous etes sur le plan.
+[VERT ] t= 55:00 dist=13.71 km allure= 3:53 tour= 3:54 | ecart plan -8 m
+    🔊 Allure 3:53 par kilometers. Distance 13.71 km. Temps 55:00. Vous etes en retard de 0:02, soit 8 m.
+[VERT ] t=1:00:00 dist=14.99 km allure= 3:53 tour= 3:54 | ecart plan -8 m
+    🔊 Allure 3:53 par kilometers. Distance 14.99 km. Temps 1:00:00. Vous etes en retard de 0:02, soit 8 m.
+    🔊 Seance terminee. 15.00 km en 1:00:03.
+
+--- Resume de la seance ---
+Distance      : 15.00 km
+Duree         : 1:00:03
+Allure moyenne: 4:00 min/km
+Tours         : 15
+  tour  1 : 1.00 km en 4:08
+  tour  2 : 1.00 km en 4:07
+  tour  3 : 1.00 km en 4:05
+  tour  4 : 1.00 km en 4:03
+  tour  5 : 1.00 km en 4:03
+  tour  6 : 1.00 km en 4:02
+  tour  7 : 1.00 km en 4:00
+  tour  8 : 1.00 km en 4:01
+  tour  9 : 1.00 km en 3:59
+  tour 10 : 1.00 km en 3:58
+  tour 11 : 1.00 km en 3:57
+  tour 12 : 1.00 km en 3:56
+  tour 13 : 1.00 km en 3:56
+  tour 14 : 1.00 km en 3:54
+  tour 15 : 1.00 km en 3:54
+Meilleurs temps:
+            1 km : 3:53
+            1 mi : 6:15
+            5 km : 19:36
+            5 mi : 31:46
+           10 km : 39:36

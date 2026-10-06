@@ -5,8 +5,10 @@
 //! `EngineOutput` complet (metriques + panneau + annonces vocales) pret a
 //! etre affiche.
 
+use crate::analysis::Pause;
 use crate::assistant::{Assistant, AssistantConfig, AssistantPanel};
 use crate::best_distances::{best_efforts, TrackPoint, STANDARD_DISTANCES};
+use crate::cardio::{HeartRateSample, HeartRateZones};
 use crate::gps::{GpsMonitor, GpsSample, GpsStatus, GpsThresholds, StatusLight};
 use crate::history::WorkoutSummary;
 use crate::lap::{Lap, LapTracker};
@@ -27,6 +29,8 @@ pub struct EngineConfig {
     pub gps: GpsThresholds,
     pub workout: WorkoutConfig,
     pub voice: VoiceConfig,
+    /// Reference des zones de frequence cardiaque (FC max, FC de repos).
+    pub heart_rate: HeartRateZones,
 }
 
 impl Default for EngineConfig {
@@ -39,6 +43,7 @@ impl Default for EngineConfig {
             gps: GpsThresholds::default(),
             workout: WorkoutConfig::default(),
             voice: VoiceConfig::default(),
+            heart_rate: HeartRateZones::default(),
         }
     }
 }
@@ -64,6 +69,10 @@ pub struct EngineOutput {
     pub lap_completed: Option<Lap>,
     pub events: Vec<WorkoutEvent>,
     pub messages: Vec<VoiceMessage>,
+    /// Derniere frequence cardiaque recue (bpm).
+    pub heart_rate_bpm: Option<u16>,
+    /// Zone de la derniere frequence (1 a 5), absente sous la zone 1.
+    pub heart_rate_zone: Option<u8>,
 }
 
 impl Default for EngineOutput {
@@ -83,6 +92,8 @@ impl Default for EngineOutput {
             lap_completed: None,
             events: Vec::new(),
             messages: Vec::new(),
+            heart_rate_bpm: None,
+            heart_rate_zone: None,
         }
     }
 }
@@ -99,6 +110,16 @@ pub struct PacerEngine {
     voice: VoiceCoach,
     track: Vec<TrackPoint>,
     opponent_name: Option<String>,
+    /// Mesures de frequence cardiaque, horodatees.
+    heart_rate: Vec<HeartRateSample>,
+    /// Pauses terminees.
+    pauses: Vec<Pause>,
+    /// Pause en cours : (temps de course, distance, automatique, instant).
+    open_pause: Option<(f64, f64, bool, TimestampMs)>,
+    /// Instant du depart de la seance.
+    started_t_ms: Option<TimestampMs>,
+    /// Dernier instant vu par le moteur (borne du temps ecoule).
+    last_t_ms: TimestampMs,
 }
 
 impl Default for PacerEngine {
@@ -121,6 +142,11 @@ impl PacerEngine {
             voice: VoiceCoach::new(config.voice),
             track: Vec::new(),
             opponent_name: None,
+            heart_rate: Vec::new(),
+            pauses: Vec::new(),
+            open_pause: None,
+            started_t_ms: None,
+            last_t_ms: 0,
         }
     }
 
@@ -175,21 +201,44 @@ impl PacerEngine {
     /// Demarre la seance (bouton vert).
     pub fn start(&mut self, t_ms: TimestampMs) -> EngineOutput {
         let events = self.workout.start(t_ms);
-        self.laps.start(t_ms);
-        self.track.clear();
-        self.pace.clear();
-        self.voice.reset();
+        self.begin_recording(t_ms);
         self.step(t_ms, events, false)
     }
 
     /// Demarrage suspendu (appui long) : le chrono attend le premier mouvement.
     pub fn arm(&mut self, t_ms: TimestampMs) -> EngineOutput {
         let events = self.workout.arm(t_ms);
-        self.laps.start(t_ms);
+        self.begin_recording(t_ms);
+        self.step(t_ms, events, false)
+    }
+
+    /// Remise a zero des enregistrements annexes (trace, cardio, pauses).
+    fn begin_recording(&mut self, t_ms: TimestampMs) {
+        // Le suivi de tours raisonne en temps de course : le depart vaut zero.
+        self.laps.start(0.0);
         self.track.clear();
         self.pace.clear();
         self.voice.reset();
-        self.step(t_ms, events, false)
+        self.heart_rate.clear();
+        self.pauses.clear();
+        self.open_pause = None;
+        self.started_t_ms = Some(t_ms);
+        self.last_t_ms = t_ms;
+    }
+
+    /// Enregistre une mesure de frequence cardiaque (montre ou ceinture).
+    ///
+    /// Aucun recalcul n'est declenche ici : la mesure remonte a l'affichage au
+    /// prochain pas (GPS ou tick). Sans cela, le cardio et le GPS arrivant a la
+    /// meme seconde feraient avancer deux fois le coach vocal.
+    ///
+    /// Les mesures sont conservees meme pendant une pause : la frequence de
+    /// recupération fait partie de la seance, meme si elle ne compte pas dans
+    /// l'allure.
+    pub fn on_heart_rate(&mut self, t_ms: TimestampMs, bpm: u16) {
+        if bpm > 0 {
+            self.heart_rate.push(HeartRateSample { t_ms, bpm });
+        }
     }
 
     pub fn pause(&mut self, t_ms: TimestampMs) -> EngineOutput {
@@ -229,6 +278,11 @@ impl PacerEngine {
         self.voice.reset();
         self.track.clear();
         self.opponent_name = None;
+        self.heart_rate.clear();
+        self.pauses.clear();
+        self.open_pause = None;
+        self.started_t_ms = None;
+        self.last_t_ms = 0;
     }
 
     // ------------------------------------------------------------- alimentation
@@ -268,6 +322,7 @@ impl PacerEngine {
         mut events: Vec<WorkoutEvent>,
         fresh_gps: bool,
     ) -> EngineOutput {
+        self.last_t_ms = t_ms;
         self.workout.tick(t_ms);
 
         if fresh_gps {
@@ -282,10 +337,14 @@ impl PacerEngine {
             }
         }
 
+        self.record_pauses(t_ms, &events);
+
         // Tours franchis.
         let mut lap_completed = None;
         if self.workout.state().is_active() {
-            let laps = self.laps.update(t_ms, self.workout.distance_m());
+            let laps = self
+                .laps
+                .update(self.workout.elapsed_s(), self.workout.distance_m());
             if let Some(lap) = laps.last() {
                 lap_completed = Some(*lap);
             }
@@ -315,6 +374,45 @@ impl PacerEngine {
         }
 
         self.output(events, messages, lap_completed, panel, t_ms)
+    }
+
+    /// Ouvre ou ferme une pause a partir des evenements de la seance.
+    ///
+    /// Le temps de course est fige au declenchement : c'est lui qui situe la
+    /// pause dans la seance (le temps ecoule, lui, continue d'avancer).
+    fn record_pauses(&mut self, t_ms: TimestampMs, events: &[WorkoutEvent]) {
+        for event in events {
+            match event {
+                WorkoutEvent::Paused | WorkoutEvent::AutoPaused => {
+                    if self.open_pause.is_none() {
+                        self.open_pause = Some((
+                            self.workout.elapsed_s(),
+                            self.workout.distance_m(),
+                            *event == WorkoutEvent::AutoPaused,
+                            t_ms,
+                        ));
+                    }
+                }
+                WorkoutEvent::Resumed | WorkoutEvent::AutoResumed | WorkoutEvent::Stopped => {
+                    self.close_pause(t_ms);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn close_pause(&mut self, t_ms: TimestampMs) {
+        if let Some((at_s, at_distance_m, automatic, started)) = self.open_pause.take() {
+            let duration_s = ((t_ms - started) as f64 / 1000.0).max(0.0);
+            if duration_s > 0.0 {
+                self.pauses.push(Pause {
+                    at_s,
+                    at_distance_m,
+                    duration_s,
+                    automatic,
+                });
+            }
+        }
     }
 
     fn current_panel(&self) -> AssistantPanel {
@@ -366,7 +464,7 @@ impl PacerEngine {
             current_pace,
             current_lap_pace: self.laps.current_lap_pace(
                 self.config.units,
-                self.last_seen_ms(),
+                self.workout.elapsed_s(),
                 distance,
             ),
             previous_lap_pace: self.laps.previous_lap_pace(),
@@ -376,11 +474,13 @@ impl PacerEngine {
             lap_completed,
             events,
             messages,
+            heart_rate_bpm: self.heart_rate.last().map(|sample| sample.bpm),
+            heart_rate_zone: self
+                .heart_rate
+                .last()
+                .map(|sample| self.config.heart_rate.zone_of(sample.bpm as f64))
+                .filter(|zone| *zone > 0),
         }
-    }
-
-    fn last_seen_ms(&self) -> TimestampMs {
-        self.track.last().map(|p| p.t_ms).unwrap_or(0)
     }
 
     // ---------------------------------------------------------------- accesseurs
@@ -405,6 +505,16 @@ impl PacerEngine {
         &self.track
     }
 
+    /// Mesures de frequence cardiaque enregistrees.
+    pub fn heart_rate(&self) -> &[HeartRateSample] {
+        &self.heart_rate
+    }
+
+    /// Pauses terminees.
+    pub fn pauses(&self) -> &[Pause] {
+        &self.pauses
+    }
+
     /// Construit le resume final de la seance (historique + export).
     pub fn summary(&self, started_at_ms: TimestampMs) -> WorkoutSummary {
         let distance_m = self.workout.distance_m();
@@ -413,6 +523,15 @@ impl PacerEngine {
             duration_s / (distance_m / 1000.0)
         } else {
             0.0
+        };
+        // Temps ecoule : du depart au dernier instant vu par le moteur, pauses
+        // comprises. Une montre arretee par le systeme retombe sur la duree de
+        // course plutot que d'inventer une valeur.
+        let elapsed_s = match self.started_t_ms {
+            Some(_) if self.last_t_ms > started_at_ms => {
+                (self.last_t_ms - started_at_ms) as f64 / 1000.0
+            }
+            _ => duration_s,
         };
         WorkoutSummary {
             id: format!("{started_at_ms}"),
@@ -424,6 +543,10 @@ impl PacerEngine {
             best_efforts: best_efforts(&self.track, STANDARD_DISTANCES),
             track: self.track.clone(),
             unit_system: self.config.units,
+            elapsed_s,
+            pauses: self.pauses.clone(),
+            heart_rate: self.heart_rate.clone(),
+            plan: self.assistant.plan().copied(),
         }
     }
 }

@@ -56,6 +56,19 @@ pub struct WorkoutUpload {
     pub track: Vec<mpacer_core::best_distances::TrackPoint>,
     #[serde(default)]
     pub unit_system: Option<mpacer_core::units::UnitSystem>,
+    /// Temps total ecoule, pauses comprises (s) : permet d'afficher le temps
+    /// de pause sans le recalculer cote serveur.
+    #[serde(default)]
+    pub elapsed_s: f64,
+    /// Pauses de la seance (manuelles et automatiques).
+    #[serde(default)]
+    pub pauses: Vec<mpacer_core::analysis::Pause>,
+    /// Mesures de frequence cardiaque (bpm).
+    #[serde(default)]
+    pub heart_rate: Vec<mpacer_core::cardio::HeartRateSample>,
+    /// Plan de course suivi (allure cible, negative split).
+    #[serde(default)]
+    pub plan: Option<mpacer_core::race_plan::RacePlan>,
 }
 
 /// Valeur par defaut des listes absentes (tableau vide, jamais `null`).
@@ -80,6 +93,25 @@ impl WorkoutUpload {
         }
         if self.duration_s > 48.0 * 3600.0 {
             return Err("duree invraisemblable (> 48 h)".into());
+        }
+        if !self.elapsed_s.is_finite() || self.elapsed_s < 0.0 {
+            return Err("temps ecoule invalide".into());
+        }
+        if self.pauses.iter().any(|pause| {
+            !pause.duration_s.is_finite()
+                || pause.duration_s < 0.0
+                || pause.duration_s > 24.0 * 3600.0
+                || !pause.at_s.is_finite()
+                || pause.at_s < 0.0
+        }) {
+            return Err("pause invraisemblable".into());
+        }
+        if self
+            .heart_rate
+            .iter()
+            .any(|sample| !(20..=250).contains(&sample.bpm))
+        {
+            return Err("frequence cardiaque invraisemblable".into());
         }
         Ok(())
     }

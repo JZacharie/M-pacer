@@ -4,14 +4,21 @@
 //! pour transfert ou reinstallation), mais avec un format JSON documente et
 //! versionne plutot qu'un format binaire proprietaire.
 
+use crate::analysis::Pause;
 use crate::best_distances::{BestEffort, TrackPoint};
+use crate::cardio::HeartRateSample;
 use crate::lap::Lap;
+use crate::race_plan::RacePlan;
 use crate::units::UnitSystem;
 use serde::{Deserialize, Serialize};
 
 /// Version du format d'echange.
+///
+/// Version 2 : frequence cardiaque, pauses, temps ecoule et plan de course.
+/// Les seances version 1 restent lisibles (les champs absents retombent sur
+/// leur valeur par defaut).
 pub const PAC_FORMAT: &str = "mpacer.pac";
-pub const PAC_VERSION: u32 = 1;
+pub const PAC_VERSION: u32 = 2;
 
 /// Resume complet d'une seance enregistree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -28,6 +35,21 @@ pub struct WorkoutSummary {
     pub best_efforts: Vec<BestEffort>,
     pub track: Vec<TrackPoint>,
     pub unit_system: UnitSystem,
+    /// Temps total ecoule, pauses comprises (s).
+    ///
+    /// Zero pour une seance enregistree avant cette version : l'affichage
+    /// retombe alors sur la duree de course.
+    #[serde(default)]
+    pub elapsed_s: f64,
+    /// Pauses de la seance, dans l'ordre.
+    #[serde(default)]
+    pub pauses: Vec<Pause>,
+    /// Mesures de frequence cardiaque (bpm), si la montre en fournit.
+    #[serde(default)]
+    pub heart_rate: Vec<HeartRateSample>,
+    /// Plan de course suivi pendant la seance (mode "temps cible").
+    #[serde(default)]
+    pub plan: Option<RacePlan>,
 }
 
 impl WorkoutSummary {
@@ -46,6 +68,28 @@ impl WorkoutSummary {
             return None;
         }
         Some(self.distance_m / self.duration_s)
+    }
+
+    /// Temps total ecoule, pauses comprises (s).
+    ///
+    /// Les seances anterieures a la version 2 du format n'ont pas cette valeur :
+    /// elles retombent sur la duree de course plutot que d'afficher zero.
+    pub fn total_elapsed_s(&self) -> f64 {
+        if self.elapsed_s > 0.0 {
+            self.elapsed_s
+        } else {
+            self.duration_s
+        }
+    }
+
+    /// Duree cumulee des pauses (s).
+    pub fn paused_s(&self) -> f64 {
+        crate::analysis::total_pause_s(&self.pauses)
+    }
+
+    /// Vrai si la seance porte des mesures de frequence cardiaque.
+    pub fn has_heart_rate(&self) -> bool {
+        !self.heart_rate.is_empty()
     }
 }
 
@@ -125,6 +169,18 @@ mod tests {
                 elevation_m: Some(300.0),
             }],
             unit_system: UnitSystem::Metric,
+            elapsed_s: 1560.0,
+            pauses: vec![Pause {
+                at_s: 600.0,
+                at_distance_m: 2000.0,
+                duration_s: 60.0,
+                automatic: false,
+            }],
+            heart_rate: vec![HeartRateSample {
+                t_ms: 0,
+                bpm: 140,
+            }],
+            plan: Some(RacePlan::new(5000.0, 1500.0)),
         }
     }
 

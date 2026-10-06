@@ -19,8 +19,10 @@
 //!
 //! Point d'entree recommande : `engine::PacerEngine`.
 
+pub mod analysis;
 pub mod assistant;
 pub mod best_distances;
+pub mod cardio;
 pub mod engine;
 pub mod geo;
 pub mod gps;
@@ -34,7 +36,9 @@ pub mod units;
 pub mod voice;
 pub mod workout;
 
+pub use analysis::{AccelerationAnalysis, AccelerationPhase, Pause, Split};
 pub use assistant::{Assistant, AssistantMode, AssistantPanel};
+pub use cardio::{HeartRateSample, HeartRateSummary, HeartRateZones, ZoneMethod};
 pub use engine::{EngineConfig, EngineOutput, PacerEngine};
 pub use gps::{GpsMonitor, GpsSample, GpsStatus, StatusLight};
 pub use pace::PaceEngine;

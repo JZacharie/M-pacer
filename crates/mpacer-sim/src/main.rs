@@ -11,7 +11,9 @@
 //! Utile pour regler les seuils (bruit GPS, detection de changement d'allure,
 //! negative split) sans sortir courir, et pour verifier un scenario de course.
 
+use mpacer_core::analysis::{acceleration, splits};
 use mpacer_core::assistant::{AssistantConfig, AssistantMode};
+use mpacer_core::cardio::{self, HeartRateZones, ZONE_NAMES};
 use mpacer_core::engine::{EngineConfig, PacerEngine};
 use mpacer_core::geo::Position;
 use mpacer_core::gps::GpsSample;
@@ -33,10 +35,18 @@ struct Options {
     noise_m: f64,
     display_every_s: u64,
     seed: u64,
+    /// Parcours suivi par le coureur simule (None : ligne droite).
+    course: Option<&'static [(f64, f64)]>,
     /// Backend M-pacer ou envoyer la seance (optionnel).
     api_url: Option<String>,
     /// Jeton d'appareil deja obtenu (sinon appairage interactif).
     api_token: Option<String>,
+    /// Simuler une frequence cardiaque (montre ou ceinture).
+    heart_rate: bool,
+    /// Frequence cardiaque maximale, pour le calcul des zones.
+    hr_max: u16,
+    /// Nombre de pauses inserees dans la seance.
+    pauses: u32,
 }
 
 impl Default for Options {
@@ -51,10 +61,34 @@ impl Default for Options {
             noise_m: 3.0,
             display_every_s: 60,
             seed: 0x5EED_1234,
+            course: None,
             api_url: None,
             api_token: None,
+            heart_rate: true,
+            hr_max: 190,
+            pauses: 2,
         }
     }
+}
+
+/// Simule une frequence cardiaque realiste : montee en regime, derive
+/// progressive avec la distance, recuperation pendant les pauses.
+fn simulate_heart_rate(
+    current: &mut f64,
+    distance_km: f64,
+    paused: bool,
+    rng: &mut Rng,
+) -> u16 {
+    let target = if paused {
+        108.0
+    } else {
+        // La FC cible monte doucement avec la distance : c'est la derive cardiaque.
+        148.0 + distance_km * 0.45
+    };
+    // Constante de temps ~20 s : ni saut instantane, ni lenteur irrealiste.
+    *current += (target - *current) * 0.05 + rng.noise(0.9);
+    *current = current.clamp(60.0, 200.0);
+    current.round() as u16
 }
 
 /// Generateur pseudo-aleatoire xorshift (aucune dependance externe).
@@ -91,9 +125,13 @@ OPTIONS:\n\
   --speed MPS       ignore : l'allure suit le plan (compatibilite)\n\
   --units U         metric | imperial (defaut metric)\n\
   --noise M         bruit GPS gaussien, en metres (defaut 3)\n\
+  --course NOM      parcours suivi : line (defaut) ou bordeaux\n\
   --every S         periode d'affichage en secondes (defaut 60)\n\
   --gpx PATH        ecrit la trace GPX en fin de simulation\n\
   --seed N          graine du generateur de bruit\n\
+  --no-hr           ne pas simuler de frequence cardiaque\n\
+  --hr-max N        frequence cardiaque maximale pour les zones (defaut 190)\n\
+  --pauses N        nombre de pauses inserees, 0 pour aucune (defaut 2)\n\
 \n\
 SYNCHRONISATION (optionnelle):\n\
   --api-url URL     envoie la seance au backend M-pacer (ex. https://mpacer.p.zacharie.org)\n\
@@ -101,6 +139,76 @@ SYNCHRONISATION (optionnelle):\n\
 \n\
   --help            affiche cette aide"
     );
+}
+
+/// Boucle inspiree des quais de Bordeaux (Quinconces, Chartrons, pont Chaban-Delmas,
+/// rive droite, pont de pierre, place de la Bourse). Trace **synthetique** : ce n'est
+/// pas le parcours officiel du Marathon de Bordeaux, mais il en suit la geographie.
+const PARCOURS_BORDEAUX: &[(f64, f64)] = &[
+    (44.8437, -0.5747), // place des Quinconces
+    (44.8489, -0.5722), // quais des Chartrons (sud)
+    (44.8555, -0.5680), // Chartrons
+    (44.8590, -0.5620), // approche du pont Chaban-Delmas
+    (44.8615, -0.5560), // pont Chaban-Delmas, rive droite
+    (44.8645, -0.5540), // parc aux Angeliques
+    (44.8580, -0.5480), // quais de la rive droite (nord)
+    (44.8482, -0.5482), // quais de la rive droite (sud)
+    (44.8410, -0.5560), // approche du pont de pierre
+    (44.8375, -0.5655), // pont de pierre, rive gauche
+    (44.8385, -0.5705), // quais sud
+    (44.8412, -0.5695), // place de la Bourse
+    (44.8437, -0.5747), // retour aux Quinconces
+];
+
+/// Distance approximative entre deux points (equirectangulaire, suffisant a l'echelle
+/// d'une ville).
+fn distance_m(a: (f64, f64), b: (f64, f64)) -> f64 {
+    let lat_m = (b.0 - a.0) * 111_195.0;
+    let lon_m = (b.1 - a.1) * 111_195.0 * a.0.to_radians().cos();
+    (lat_m * lat_m + lon_m * lon_m).sqrt()
+}
+
+/// Parcours ferme : conversion d'une distance parcourue en position, avec bouclage.
+struct Trace {
+    points: &'static [(f64, f64)],
+    cumul: Vec<f64>,
+    total: f64,
+}
+
+impl Trace {
+    fn new(points: &'static [(f64, f64)]) -> Self {
+        let mut cumul = Vec::with_capacity(points.len());
+        cumul.push(0.0);
+        for index in 1..points.len() {
+            let pas = distance_m(points[index - 1], points[index]);
+            let precedent = cumul[index - 1];
+            cumul.push(precedent + pas);
+        }
+        let total = *cumul.last().unwrap_or(&0.0);
+        Self { points, cumul, total }
+    }
+
+    /// Position a `distance_m` du depart ; le parcours recommence si on le depasse.
+    fn position(&self, distance_m: f64) -> (f64, f64) {
+        if self.total <= 0.0 || self.points.len() < 2 {
+            return self.points.first().copied().unwrap_or((45.0, 0.0));
+        }
+        let d = distance_m.rem_euclid(self.total);
+        let mut index = self.cumul.partition_point(|v| *v <= d).max(1) - 1;
+        if index + 1 >= self.points.len() {
+            index = self.points.len() - 2;
+        }
+        let debut = self.cumul[index];
+        let longueur = self.cumul[index + 1] - debut;
+        let ratio = if longueur > 0.0 { (d - debut) / longueur } else { 0.0 };
+        let (lat1, lon1) = self.points[index];
+        let (lat2, lon2) = self.points[index + 1];
+        (lat1 + (lat2 - lat1) * ratio, lon1 + (lon2 - lon1) * ratio)
+    }
+
+    fn longueur_m(&self) -> f64 {
+        self.total
+    }
 }
 
 fn parse_args() -> Result<(Options, Option<String>), String> {
@@ -124,10 +232,22 @@ fn parse_args() -> Result<(Options, Option<String>), String> {
             "--time" => options.target_s = value()?.parse().map_err(|_| "temps invalide")?,
             "--split" => options.split_ratio = value()?.parse().map_err(|_| "ratio invalide")?,
             "--noise" => options.noise_m = value()?.parse().map_err(|_| "bruit invalide")?,
+            "--course" => {
+                options.course = match value()?.as_str() {
+                    "bordeaux" => Some(PARCOURS_BORDEAUX),
+                    "line" | "ligne" | "aucun" => None,
+                    autre => return Err(format!("parcours inconnu : {autre} (bordeaux, line)")),
+                }
+            }
             "--every" => {
                 options.display_every_s = value()?.parse().map_err(|_| "periode invalide")?
             }
             "--seed" => options.seed = value()?.parse().map_err(|_| "graine invalide")?,
+            "--no-hr" => options.heart_rate = false,
+            "--hr-max" => options.hr_max = value()?.parse().map_err(|_| "FC max invalide")?,
+            "--pauses" => {
+                options.pauses = value()?.parse().map_err(|_| "nombre de pauses invalide")?
+            }
             "--api-url" => options.api_url = Some(value()?),
             "--api-token" => options.api_token = Some(value()?),
             "--speed" => {
@@ -208,9 +328,19 @@ async fn main() {
 
     // Le plan sert a piloter la vitesse du coureur simule.
     let plan = engine.assistant().plan().copied();
+    let trace = options.course.map(Trace::new);
+    if let Some(trace) = trace.as_ref() {
+        println!(
+            "Parcours : boucle de {:.2} km (trace synthetique inspiree de Bordeaux)",
+            trace.longueur_m() / 1000.0
+        );
+    }
     let mut rng = Rng(options.seed);
-    let mut lat = 45.0;
-    let mut lon = 3.0;
+    // Le point de depart doit etre celui du parcours : sinon le premier point GPS
+    // saute de plusieurs centaines de kilometres et le moteur rejette la trace.
+    let (mut lat, mut lon) = trace
+        .as_ref()
+        .map_or((45.0, 3.0), |trace| trace.position(0.0));
     // Horodatage realiste : la trace GPX produite est directement exploitable.
     let started_at_ms: i64 = 1_700_000_000_000;
     let mut t_ms: i64 = started_at_ms;
@@ -232,20 +362,72 @@ async fn main() {
 
     let total_samples = (options.minutes * 60.0) as u64;
     let mut travelled = 0.0_f64;
+
+    // Pauses prevues : une a 25 %, 60 % puis 95 % de la distance.
+    let pause_plan: Vec<(f64, f64)> = (0..options.pauses)
+        .map(|index| {
+            let fraction = 0.25 + 0.35 * index as f64;
+            (options.distance_m * fraction, 40.0 - 10.0 * index as f64)
+        })
+        .collect();
+    let mut next_pause = 0_usize;
+    let mut remaining_pause_s = 0.0_f64;
+    let mut heart_rate = 88.0_f64;
+
     for second in 0..total_samples {
         t_ms += 1000;
+
+        // Entree en pause : le chrono de course s'arrete, le temps ecoule continue.
+        if remaining_pause_s <= 0.0
+            && next_pause < pause_plan.len()
+            && travelled >= pause_plan[next_pause].0
+        {
+            remaining_pause_s = pause_plan[next_pause].1;
+            next_pause += 1;
+            let output = engine.pause(t_ms);
+            if options.heart_rate {
+                let bpm = simulate_heart_rate(&mut heart_rate, travelled / 1000.0, true, &mut rng);
+                engine.on_heart_rate(t_ms, bpm);
+            }
+            print_output(&output, options.units, options.display_every_s, second + 1);
+            continue;
+        }
+
+        let paused = remaining_pause_s > 0.0;
+        if paused {
+            remaining_pause_s -= 1.0;
+            if remaining_pause_s <= 0.0 {
+                engine.resume(t_ms);
+            }
+        }
+
         // Vitesse : celle du plan (shadow runner) si disponible, sinon 3.33 m/s.
-        let speed = match plan {
+        let target_speed = match plan {
             Some(plan) => 1000.0 / plan.pace_at_distance_s_per_km(travelled),
             None => 3.3333,
         };
-        let step_m = speed + rng.noise(0.25);
-        let heading_lat = step_m / 111_195.0;
-        let heading_lon = rng.noise(0.0015) / 111_195.0;
-        lat += heading_lat;
-        lon += heading_lon;
-        let position = Position::new(lat, lon);
+        let step_m = if paused {
+            0.0
+        } else {
+            target_speed + rng.noise(0.25)
+        };
+        // Sur un parcours declare, la position suit la trace ; sinon on avance vers le nord.
+        if let Some(trace) = trace.as_ref() {
+            let (p_lat, p_lon) = trace.position(travelled + step_m);
+            lat = p_lat;
+            lon = p_lon;
+        } else if step_m > 0.0 {
+            lat += step_m / 111_195.0;
+        }
+        // Bruit GPS : l'option --noise etait documentee mais inutilisee.
+        let bruit_lat = rng.noise(options.noise_m) / 111_195.0;
+        let bruit_lon = rng.noise(options.noise_m) / (111_195.0 * lat.to_radians().cos().abs().max(0.2));
+        let position = Position::new(lat + bruit_lat, lon + bruit_lon);
         let accuracy = 5.0 + rng.noise(1.5).abs();
+        if options.heart_rate {
+            let bpm = simulate_heart_rate(&mut heart_rate, travelled / 1000.0, paused, &mut rng);
+            engine.on_heart_rate(t_ms, bpm);
+        }
         let output = engine.on_gps(GpsSample::new(t_ms, position, accuracy).with_speed(step_m));
         travelled += step_m;
         let elapsed = second + 1;
@@ -266,19 +448,113 @@ async fn main() {
         "Distance      : {}",
         options.units.format_distance(summary.distance_m)
     );
-    println!("Duree         : {}", format_duration(summary.duration_s));
     println!(
         "Allure moyenne: {} {}",
         format_pace(summary.average_pace(options.units)),
         options.units.pace_label()
     );
-    println!("Tours         : {}", summary.laps.len());
-    for lap in &summary.laps {
+
+    // Chrono : temps de course, temps ecoule et pauses.
+    println!("\n--- Chrono ---");
+    println!("Temps de course: {}", format_duration(summary.duration_s));
+    println!("Temps ecoule   : {}", format_duration(summary.total_elapsed_s()));
+    println!(
+        "Pauses         : {} pour {}",
+        summary.pauses.len(),
+        format_duration(summary.paused_s())
+    );
+    for pause in &summary.pauses {
         println!(
-            "  tour {:>2} : {} en {}",
-            lap.index,
-            options.units.format_distance(lap.distance_m),
-            format_duration(lap.duration_s)
+            "  pause a {} ({}), duree {}",
+            format_duration(pause.at_s),
+            options.units.format_distance(pause.at_distance_m),
+            format_duration(pause.duration_s)
+        );
+    }
+
+    // Temps de passage, avec le plan et le cardio quand ils existent.
+    println!("\n--- Temps de passage ---");
+    for split in splits(&summary) {
+        let cardio = match (split.heart_rate_avg, split.heart_rate_max) {
+            (Some(average), Some(max)) => format!(" fc {average:.0}/{max}"),
+            _ => String::new(),
+        };
+        let plan = match split.plan_delta_s {
+            Some(delta) => format!(" plan {delta:+.0} s"),
+            None => String::new(),
+        };
+        println!(
+            "  {:>2} : {:>7} en {:>6} a {:>5} {}{}{}",
+            split.index,
+            options.units.format_distance(split.distance_m),
+            format_duration(split.duration_s),
+            format_pace(Some(split.pace_s_per_km)),
+            options.units.pace_label(),
+            cardio,
+            plan
+        );
+    }
+
+    // Cardio : moyennes, zones et derive.
+    if let Some(heart) = cardio::summarize(&summary.heart_rate, HeartRateZones::new(options.hr_max)) {
+        println!("\n--- Cardio ---");
+        println!("FC moyenne     : {:.0} bpm", heart.average_bpm);
+        println!("FC max / min   : {} / {} bpm", heart.max_bpm, heart.min_bpm);
+        for (index, seconds) in heart.zone_seconds.iter().enumerate() {
+            println!(
+                "  {:>16} : {:>6} ({:>4.0} %)",
+                ZONE_NAMES[index],
+                format_duration(*seconds),
+                heart.zone_percent(index)
+            );
+        }
+        if let Some(drift) = cardio::cardiac_drift(&summary.track, &summary.heart_rate) {
+            println!("Derive cardiaque: {:+.1} %", drift.decoupling_percent);
+        }
+    }
+
+    // Plan de course : cible contre realise.
+    if let Some(plan) = &summary.plan {
+        println!("\n--- Plan de course ---");
+        println!(
+            "Cible          : {} sur {}",
+            format_duration(plan.target_time_s),
+            options.units.format_distance(plan.distance_m)
+        );
+        println!(
+            "Realise        : {} (ecart {:+.0} s)",
+            format_duration(summary.duration_s),
+            summary.duration_s - plan.target_time_s
+        );
+    }
+
+    // Acceleration : depart, reprises, repartition du temps.
+    if let Some(acceleration) = acceleration(&summary) {
+        println!("\n--- Acceleration ---");
+        for phase in &acceleration.phases {
+            let label = if phase.after_pause {
+                "reprise"
+            } else {
+                "depart "
+            };
+            match phase.seconds {
+                Some(seconds) => println!(
+                    "  {} a {} : {} pour atteindre l'allure de croisiere",
+                    label,
+                    options.units.format_distance(phase.at_distance_m),
+                    format_duration(seconds)
+                ),
+                None => println!(
+                    "  {label} a {} : allure de croisiere non atteinte",
+                    options.units.format_distance(phase.at_distance_m)
+                ),
+            }
+        }
+        println!(
+            "  temps a accelerer {} / allure stable {} / ralentissement {}",
+            format_duration(acceleration.accelerating_s),
+            format_duration(acceleration.steady_s),
+            format_duration(acceleration.decelerating_s)
         );
     }
     if summary.best_efforts.is_empty() {
@@ -391,14 +667,23 @@ fn print_output(
             )
         })
         .unwrap_or_default();
+    let cardio = match output.heart_rate_bpm {
+        Some(bpm) => match output.heart_rate_zone {
+            Some(zone) => format!(" | fc={bpm} Z{zone}"),
+            None => format!(" | fc={bpm}"),
+        },
+        None => String::new(),
+    };
     if second > 0 {
         println!(
-            "[{}] t={:>6} dist={:>7} allure={:>5} tour={:>5}{}",
+            "[{}] t={:>6} ecoule={:>6} dist={:>7} allure={:>5} tour={:>5}{}{}",
             status,
             format_duration(output.elapsed_s),
+            second,
             units.format_distance(output.distance_m),
             format_pace(output.current_pace),
             format_pace(output.current_lap_pace),
+            cardio,
             panel
         );
     }

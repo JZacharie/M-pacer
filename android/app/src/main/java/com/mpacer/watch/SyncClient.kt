@@ -5,8 +5,11 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -41,6 +44,12 @@ object SyncClient {
 
     private const val TAG = "SyncClient"
     private const val PREFS_FILE = "mpacer_sync"
+
+    /**
+     * Scope lie au processus, et non a un ecran : l'envoi lance a la fin d'une seance
+     * doit survivre a l'arret du service de suivi (qui appelle stopSelf()).
+     */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private const val KEY_TOKEN = "device_token"
     private const val KEY_BASE_URL = "base_url"
     private const val KEY_SYNCED_IDS = "synced_ids"
@@ -183,6 +192,24 @@ object SyncClient {
      * (les seances deja acceptees restent marquees, les autres seront renvoyees).
      * @return le nombre de seances envoyees pendant cet appel.
      */
+    /**
+     * Envoie les seances en attente sans bloquer l'appelant : utilise a la fin d'une
+     * seance pour que l'utilisateur n'ait pas a ouvrir l'ecran de synchronisation.
+     * Si la montre n'est pas appairee, l'archive reste sur la montre (aucun echec).
+     */
+    fun syncInBackground(context: Context) {
+        if (!isPaired(context)) {
+            Log.i(TAG, "seance conservee localement : montre non appairee")
+            return
+        }
+        val application = context.applicationContext
+        scope.launch {
+            runCatching { syncPending(application) }
+                .onSuccess { Log.i(TAG, "seances envoyees automatiquement : " + it) }
+                .onFailure { Log.w(TAG, "envoi automatique impossible : " + it.message) }
+        }
+    }
+
     suspend fun syncPending(context: Context): Int {
         val token = token(context)
         if (token == null) {

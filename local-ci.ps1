@@ -55,6 +55,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $script:JavaHomeForce = $JavaHome
 $script:Manquants = 0
+$script:PlateformeOk = $false
+$script:NdkTrouve = $false
+$script:CargoNdkAbsent = $true
+$script:CiblesManquantes = @()
+$script:CmakeOk = $false
 $racine = $PSScriptRoot
 $dossierAndroid = Join-Path $racine 'android'
 $dossierJniLibs = Join-Path $dossierAndroid 'app/src/main/jniLibs'
@@ -123,6 +128,36 @@ function Resolve-JavaHome {
     return $null
 }
 
+function Install-CmdlineTools([string] $sdk) {
+    # Le SDK Android ne contient pas forcement sdkmanager : on recupere les
+    # command-line tools officiels, puis on les place dans cmdline-tools/latest.
+    $urls = @(
+        'https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip',
+        'https://dl.google.com/android/repository/commandlinetools-win-13114758_latest.zip'
+    )
+    $zip = Join-Path $env:TEMP 'mpacer-cmdline-tools.zip'
+    $extraction = Join-Path $env:TEMP 'mpacer-cmdline-tools-extract'
+    foreach ($url in $urls) {
+        Info ('telechargement des command-line tools : ' + $url)
+        try {
+            Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -ErrorAction Stop
+        } catch {
+            Alerte ('telechargement impossible : ' + $_.Exception.Message)
+            continue
+        }
+        if ((Get-Item $zip).Length -lt 1MB) { Alerte 'archive suspecte (trop petite), essai suivant'; continue }
+        if (Test-Path $extraction) { Remove-Item -Recurse -Force $extraction }
+        Expand-Archive -Path $zip -DestinationPath $extraction -Force
+        $dest = Join-Path $sdk 'cmdline-tools/latest'
+        New-Item -ItemType Directory -Force -Path $dest | Out-Null
+        Copy-Item (Join-Path $extraction 'cmdline-tools/*') $dest -Recurse -Force
+        $sdkmanager = Join-Path $dest 'bin/sdkmanager.bat'
+        if (Test-Path $sdkmanager) { Ok ('command-line tools installes : ' + $dest); return $sdkmanager }
+        Alerte 'sdkmanager.bat absent apres extraction'
+    }
+    return $null
+}
+
 function Invoke-Gradle([string[]] $arguments) {
     Push-Location $dossierAndroid
     try {
@@ -156,7 +191,7 @@ if ($sdk) {
     Ok ('SDK Android : ' + $sdk)
     $env:ANDROID_HOME = $sdk
     $env:ANDROID_SDK_ROOT = $sdk
-    if (Test-Path (Join-Path $sdk 'platforms/android-35')) { Ok 'plateforme android-35 presente' }
+    if (Test-Path (Join-Path $sdk 'platforms/android-35')) { Ok 'plateforme android-35 presente'; $script:PlateformeOk = $true }
     else { Echec 'plateforme android-35 absente'; Info ('sdkmanager "platforms;android-35"  (SDK : ' + $sdk + ')') }
     if (Test-Path (Join-Path $sdk 'build-tools')) { Ok 'build-tools presents' }
     else { Echec 'build-tools absents'; Info 'sdkmanager "build-tools;35.0.0"' }
@@ -176,17 +211,24 @@ if ($besoinRust) {
             $ndk = Get-ChildItem (Join-Path $sdk 'ndk') -Directory -ErrorAction SilentlyContinue |
                 Sort-Object Name -Descending | Select-Object -First 1
         }
-        if ($ndk) { Ok ('NDK : ' + $ndk.Name) }
+        if ($ndk) { Ok ('NDK : ' + $ndk.Name); $script:NdkTrouve = $true }
         else { Echec 'NDK introuvable dans le SDK'; Info 'sdkmanager "ndk;27.2.12479018"' }
+
+        if ($sdk -and (Test-Path (Join-Path $sdk 'cmake'))) { $script:CmakeOk = $true }
 
         $cibles = (& rustup target list --installed) -join ' '
         foreach ($cible in @('aarch64-linux-android', 'armv7-linux-androideabi', 'x86_64-linux-android')) {
             if ($cibles -match [regex]::Escape($cible)) { Ok ('cible rustup ' + $cible) }
-            else { Echec ('cible rustup manquante : ' + $cible); Info ('rustup target add ' + $cible) }
+            else {
+                Echec ('cible rustup manquante : ' + $cible)
+                Info ('rustup target add ' + $cible)
+                $script:CiblesManquantes += $cible
+            }
         }
 
         $cargoNdk = ((& cargo ndk --version 2>&1) -join ' ').Trim()
         $cargoNdkAbsent = ($cargoNdk -match 'no such command') -or ($cargoNdk -match '^error')
+        $script:CargoNdkAbsent = $cargoNdkAbsent
         if (-not $cargoNdkAbsent) { Ok ('cargo-ndk : ' + $cargoNdk) }
         else { Echec 'cargo-ndk introuvable'; Info 'cargo install cargo-ndk   (ou relancez avec -Bootstrap)' }
     }
@@ -228,8 +270,10 @@ if ($Bootstrap) {
     if ($sdk) {
         $sdkManager = Get-ChildItem $sdk -Recurse -Depth 3 -Filter 'sdkmanager.bat' -ErrorAction SilentlyContinue |
             Select-Object -First 1
+        if (-not $sdkManager) { $sdkManager = Install-CmdlineTools $sdk }
     }
     if ($sdkManager) {
+        if ($javaHome -and $javaHome -ne 'PATH') { $env:JAVA_HOME = $javaHome }
         Info ('sdkmanager : ' + $sdkManager.FullName)
         1..40 | ForEach-Object { 'y' } | & $sdkManager.FullName --licenses | Out-Null
         & $sdkManager.FullName 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
@@ -253,6 +297,29 @@ if ($Check) {
     }
     Ok 'tous les prerequis sont presents'
     exit 0
+}
+
+# ---------------------------------------------------------------- 1 ter. controle bloquant
+
+if (-not $Check) {
+    $bloquants = @()
+    if (-not $javaHome) { $bloquants += 'JDK 17+ (JAVA_HOME ou -JavaHome)' }
+    if (-not $sdk) { $bloquants += 'SDK Android (ANDROID_HOME)' }
+    if ((-not $script:PlateformeOk) -and ($Target -ne 'rust')) { $bloquants += 'plateforme android-35' }
+    if ($besoinRust) {
+        if (-not (Test-Commande 'cargo')) { $bloquants += 'cargo (https://rustup.rs)' }
+        if (-not $script:NdkTrouve) { $bloquants += 'NDK (sdkmanager "ndk;27.2.12479018")' }
+        if ($script:CargoNdkAbsent) { $bloquants += 'cargo-ndk (cargo install cargo-ndk)' }
+        foreach ($cible in $script:CiblesManquantes) { $bloquants += ('cible rustup ' + $cible) }
+    }
+    if ($bloquants.Count -gt 0) {
+        Etape 'Compilation interrompue'
+        foreach ($item in $bloquants) { Echec $item }
+        Alerte 'Corrigez ces prerequis, ou lancez : pwsh ./local-ci.ps1 -Bootstrap'
+        Info 'Diagnostic seul a tout moment : pwsh ./local-ci.ps1 -Check'
+        exit 1
+    }
+    Ok 'prerequis bloquants : tous presents'
 }
 
 # ---------------------------------------------------------------- 2. nettoyage

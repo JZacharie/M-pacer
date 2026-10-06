@@ -13,7 +13,7 @@ image:
   # interface meme si main est plus recent. Apres chaque publication :
   #   git log -1 --format=%h           # le sha court du commit deploye
   #   -> reporter la valeur ici, commit, push ; ArgoCD synchronise seul.
-  tag: sha-d2da41b
+  tag: sha-1501e41
   pullPolicy: Always
 
 imagePullSecrets:

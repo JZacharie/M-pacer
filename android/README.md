@@ -76,6 +76,29 @@ $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
 
 ## Commandes de build
 
+### 0. Tout en une commande : `local-ci.ps1`
+
+Le script [local-ci.ps1](../local-ci.ps1) (a la racine du depot) enchaine
+verification de l'environnement, compilation du coeur Rust pour les trois ABI,
+assemblage Gradle et installation eventuelle sur la montre :
+
+```powershell
+pwsh ./local-ci.ps1 -Check                 # diagnostic seul (code de sortie 1 si un prerequis manque)
+pwsh ./local-ci.ps1                        # montre, debug
+pwsh ./local-ci.ps1 -Target all            # montre + telephone
+pwsh ./local-ci.ps1 -Release               # APK release (si android/keystore.properties)
+pwsh ./local-ci.ps1 -ApiUrl http://192.168.0.152:8080 -Install
+pwsh ./local-ci.ps1 -Bootstrap             # installe cibles rustup, cargo-ndk et paquets du SDK
+pwsh ./local-ci.ps1 -Clean -Test           # nettoyage + tests du coeur Rust avant build
+```
+
+Le script detecte le JDK (y compris le JBR embarque par Android Studio via
+`-JavaHome`), le SDK et le NDK, et affiche pour chaque manque la commande exacte
+a lancer. Le coeur Rust est compile par `cargo ndk` puis Gradle est appele avec
+`-Pmpacer.buildRust=false` : la chaine Rust n'est pas executee deux fois.
+
+### Commandes manuelles
+
 Toutes les commandes se lancent depuis `android/`. Sous Windows, utiliser
 `gradlew.bat` (ou `./gradlew` si un shell POSIX est disponible).
 

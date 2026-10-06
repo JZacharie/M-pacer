@@ -44,9 +44,11 @@ android {
             }
         }
 
-        // Backend auto-heberge. Valeur par defaut surchargeable sans recompiler :
-        //   adb shell am start -n com.mpacer.watch/.MainActivity --es api_url http://hote:8080
-        buildConfigField("String", "DEFAULT_API_URL", "\"http://10.0.2.2:8080\"")
+        // Backend auto-heberge. Surchargeable :
+        //   a la compilation : ./gradlew assembleDebug -Pmpacer.apiUrl=http://192.168.0.152:8080
+        //   a l'execution    : adb shell am start -n com.mpacer.watch/.MainActivity --es api_url http://hote:8080
+        val apiUrlDefaut = (findProperty("mpacer.apiUrl") as String?) ?: "http://10.0.2.2:8080"
+        buildConfigField("String", "DEFAULT_API_URL", "\"$apiUrlDefaut\"")
         buildConfigField("String", "PAIRING_LABEL", "\"Montre M-pacer\"")
     }
 

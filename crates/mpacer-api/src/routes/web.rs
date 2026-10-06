@@ -6,7 +6,7 @@
 use crate::auth::device;
 use crate::auth::{AuthUser, OptionalUser, SESSION_COOKIE};
 use crate::error::{AppError, AppResult};
-use crate::models::User;
+use crate::models::{Race, RaceInput, RaceTask, User};
 use crate::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
@@ -34,6 +34,18 @@ pub fn router() -> Router<AppState> {
         .route("/workouts/{id}", get(workout_page))
         .route("/workouts/{id}/gpx", get(workout_gpx))
         .route("/workouts/{id}/delete", post(delete_workout))
+        .route("/courses", get(races_page))
+        .route("/courses/planning", get(planning_page))
+        .route("/courses/nouvelle", get(race_new_page).post(race_create))
+        .route("/courses/{id}", get(race_page))
+        .route("/courses/{id}/modifier", get(race_edit_page).post(race_update))
+        .route("/courses/{id}/supprimer", post(race_delete))
+        .route("/courses/{id}/suivi", post(race_task_create))
+        .route("/courses/{id}/suivi/{task}", post(race_task_toggle))
+        .route(
+            "/courses/{id}/suivi/{task}/supprimer",
+            post(race_task_delete),
+        )
         .route("/static/app.css", get(stylesheet))
         .route("/static/app.js", get(script))
 }
@@ -697,6 +709,8 @@ fn layout(title: &str, user: Option<&User>, content: Markup) -> Markup {
                         @if let Some(user) = user {
                             span class="who" { (user.name.clone().unwrap_or_else(|| user.email.clone())) }
                             a href="/" { "Seances" }
+                            a href="/courses" { "Courses" }
+                            a href="/courses/planning" { "Planning" }
                             a href="/stats" { "Statistiques" }
                             a href="/link" { "Appairer" }
                             a href="/settings" { "Jetons" }
@@ -792,3 +806,1143 @@ fn message_erreur(code: &str) -> String {
         other => format!("Connexion impossible ({other})."),
     }
 }
+
+// ------------------------------------------------------------------ courses
+//
+// Trois ecrans, dans l'ordre du parcours reel du coureur :
+//   * « Vos courses » : une carte par course (dossard, horaire, suivi) ;
+//   * « Planning »    : l'agenda des echeances a venir (depart, dossard, hotel,
+//                       elements de suivi) ;
+//   * la fiche        : tout ce qui compte pour cette course, modifiable, avec
+//                       le suivi des elements importants a cocher.
+
+/// Une echeance du planning, quelle que soit son origine.
+struct AgendaEntry {
+    at_ms: i64,
+    kind: &'static str,
+    title: String,
+    detail: Option<String>,
+    race_id: String,
+}
+
+/// Valeur de formulaire nettoyee (chaine vide -> `None`).
+fn some(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Formate un nombre pour un champ de formulaire ("42.195", "10").
+fn format_number(value: f64) -> String {
+    format!("{value}")
+}
+
+fn local_dt(ms: i64) -> Option<chrono::DateTime<chrono::Local>> {
+    chrono::DateTime::from_timestamp_millis(ms).map(|dt| dt.with_timezone(&chrono::Local))
+}
+
+/// Date seule d'un horodatage (ms), au format d'un `input type="date"`.
+fn format_date_input(ms: i64) -> String {
+    local_dt(ms)
+        .map(|dt| dt.format("%Y-%m-%d").to_string())
+        .unwrap_or_default()
+}
+
+/// Heure seule d'un horodatage (ms), au format d'un `input type="time"`.
+fn format_time_input(ms: i64) -> String {
+    local_dt(ms)
+        .map(|dt| dt.format("%H:%M").to_string())
+        .unwrap_or_default()
+}
+
+/// Date et heure lisibles ; l'heure est omise quand elle vaut minuit, cas d'une
+/// course dont seul le jour est connu.
+fn format_datetime_short(ms: i64) -> String {
+    match local_dt(ms) {
+        Some(dt) if dt.time() == chrono::NaiveTime::MIN => dt.format("%d/%m/%Y").to_string(),
+        Some(dt) => dt.format("%d/%m/%Y a %H:%M").to_string(),
+        None => "-".to_string(),
+    }
+}
+
+/// Heure d'un horodatage, sauf quand elle vaut minuit : une simple date ne
+/// doit pas s'afficher comme un rendez-vous a 00:00.
+fn format_time_short(ms: i64) -> Option<String> {
+    match local_dt(ms) {
+        Some(dt) if dt.time() != chrono::NaiveTime::MIN => Some(dt.format("%H:%M").to_string()),
+        _ => None,
+    }
+}
+
+/// Jour court, pour les pastilles d'agenda ("12/10").
+fn format_day_month(ms: i64) -> String {
+    local_dt(ms)
+        .map(|dt| dt.format("%d/%m").to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+/// Mois en toutes lettres, en francais (chrono formate en anglais).
+fn month_label(ms: i64) -> String {
+    use chrono::Datelike;
+    const MONTHS: [&str; 12] = [
+        "janvier",
+        "fevrier",
+        "mars",
+        "avril",
+        "mai",
+        "juin",
+        "juillet",
+        "aout",
+        "septembre",
+        "octobre",
+        "novembre",
+        "decembre",
+    ];
+    match local_dt(ms) {
+        Some(dt) => format!("{} {}", MONTHS[(dt.month0() as usize).min(11)], dt.year()),
+        None => "sans date".to_string(),
+    }
+}
+
+/// Compte a rebours en jours calendaires ("dans 12 jours", "demain").
+fn countdown_label(start_ms: Option<i64>, now_ms: i64) -> String {
+    let Some(start) = start_ms else {
+        return "date a definir".to_string();
+    };
+    let (Some(day), Some(today)) = (
+        local_dt(start).map(|dt| dt.date_naive()),
+        local_dt(now_ms).map(|dt| dt.date_naive()),
+    ) else {
+        return "-".to_string();
+    };
+    match (day - today).num_days() {
+        0 => "aujourd'hui".to_string(),
+        1 => "demain".to_string(),
+        days if days > 1 => format!("dans {days} jours"),
+        -1 => "hier".to_string(),
+        days => format!("il y a {} jours", -days),
+    }
+}
+
+/// Encodage pourcent minimal, suffisant pour une recherche OpenStreetMap.
+fn percent_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            b' ' => out.push('+'),
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+/// Lien cartographique : coordonnees si on les a, sinon le nom du lieu.
+fn map_url(race: &Race) -> Option<String> {
+    if let (Some(latitude), Some(longitude)) = (race.latitude, race.longitude) {
+        return Some(format!(
+            "https://www.openstreetmap.org/?mlat={latitude}&mlon={longitude}#map=15/{latitude}/{longitude}"
+        ));
+    }
+    race.start_location
+        .as_ref()
+        .or(race.location.as_ref())
+        .map(|place| {
+            format!(
+                "https://www.openstreetmap.org/search?query={}",
+                percent_encode(place)
+            )
+        })
+}
+
+/// Analyse une date (`YYYY-MM-DD`) et une heure (`HH:MM`) locales.
+///
+/// Une heure seule est refusee (elle serait rattachee a un jour arbitraire) et
+/// une date seule est acceptee a minuit : c'est le cas d'une course dont
+/// l'horaire n'est pas encore publie.
+fn parse_local_datetime(date: &str, time: &str) -> Result<Option<i64>, String> {
+    let date = date.trim();
+    let time = time.trim();
+    if date.is_empty() {
+        if time.is_empty() {
+            return Ok(None);
+        }
+        return Err("precisez la date qui va avec l'horaire".to_string());
+    }
+    let time = if time.is_empty() { "00:00" } else { time };
+    let naive = chrono::NaiveDateTime::parse_from_str(&format!("{date} {time}"), "%Y-%m-%d %H:%M")
+        .map_err(|_| "date ou horaire illisible".to_string())?;
+    let stamp = naive
+        .and_local_timezone(chrono::Local)
+        .single()
+        .ok_or_else(|| "horaire ambigu (changement d'heure)".to_string())?;
+    Ok(Some(stamp.timestamp_millis()))
+}
+
+/// Analyse un nombre decimal (la virgule francaise est acceptee).
+fn parse_number(value: &str, label: &str) -> Result<Option<f64>, String> {
+    let text = value.trim().replace(',', ".");
+    if text.is_empty() {
+        return Ok(None);
+    }
+    text.parse::<f64>()
+        .map(Some)
+        .map_err(|_| format!("{label} doit etre un nombre"))
+}
+
+/// Analyse un objectif de temps : `1:23:45`, `42:15` ou des minutes seules.
+fn parse_duration(value: &str) -> Result<Option<f64>, String> {
+    let text = value.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    let error = || "objectif de temps illisible (exemples : 1:23:45, 42:15)".to_string();
+    let parts: Vec<f64> = text
+        .split(':')
+        .map(|part| part.trim().parse::<f64>().map_err(|_| error()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let seconds = match parts.as_slice() {
+        [minutes] => minutes * 60.0,
+        [minutes, seconds] => minutes * 60.0 + seconds,
+        [hours, minutes, seconds] => hours * 3600.0 + minutes * 60.0 + seconds,
+        _ => return Err(error()),
+    };
+    Ok(Some(seconds))
+}
+
+/// Valeurs brutes du formulaire de course.
+///
+/// Des chaines, et non des nombres : le formulaire peut ainsi etre reaffiche
+/// tel que l'utilisateur l'a saisi quand une valeur est refusee, sans rien
+/// perdre ni rien inventer.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct RaceForm {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    time: String,
+    #[serde(default)]
+    distance_km: String,
+    #[serde(default)]
+    discipline: String,
+    #[serde(default)]
+    location: String,
+    #[serde(default)]
+    start_location: String,
+    #[serde(default)]
+    bib_number: String,
+    #[serde(default)]
+    bib_pickup_date: String,
+    #[serde(default)]
+    bib_pickup_time: String,
+    #[serde(default)]
+    bib_pickup_location: String,
+    #[serde(default)]
+    live_url: String,
+    #[serde(default)]
+    registration_url: String,
+    #[serde(default)]
+    website_url: String,
+    #[serde(default)]
+    latitude: String,
+    #[serde(default)]
+    longitude: String,
+    #[serde(default)]
+    hotel_name: String,
+    #[serde(default)]
+    hotel_address: String,
+    #[serde(default)]
+    hotel_phone: String,
+    #[serde(default)]
+    hotel_url: String,
+    #[serde(default)]
+    hotel_booked: String,
+    #[serde(default)]
+    hotel_check_in: String,
+    #[serde(default)]
+    hotel_check_out: String,
+    #[serde(default)]
+    lodging_notes: String,
+    #[serde(default)]
+    nutrition_notes: String,
+    #[serde(default)]
+    important_info: String,
+    #[serde(default)]
+    notes: String,
+    #[serde(default)]
+    goal_time: String,
+}
+
+impl RaceForm {
+    /// Pre-remplit le formulaire depuis une fiche existante.
+    fn from_race(race: &Race) -> RaceForm {
+        RaceForm {
+            name: race.name.clone(),
+            date: race.start_at_ms.map(format_date_input).unwrap_or_default(),
+            time: race.start_at_ms.map(format_time_input).unwrap_or_default(),
+            distance_km: race
+                .distance_m
+                .map(|meters| format_number(meters / 1000.0))
+                .unwrap_or_default(),
+            discipline: race.discipline.clone().unwrap_or_default(),
+            location: race.location.clone().unwrap_or_default(),
+            start_location: race.start_location.clone().unwrap_or_default(),
+            bib_number: race.bib_number.clone().unwrap_or_default(),
+            bib_pickup_date: race
+                .bib_pickup_at_ms
+                .map(format_date_input)
+                .unwrap_or_default(),
+            bib_pickup_time: race
+                .bib_pickup_at_ms
+                .map(format_time_input)
+                .unwrap_or_default(),
+            bib_pickup_location: race.bib_pickup_location.clone().unwrap_or_default(),
+            live_url: race.live_url.clone().unwrap_or_default(),
+            registration_url: race.registration_url.clone().unwrap_or_default(),
+            website_url: race.website_url.clone().unwrap_or_default(),
+            latitude: race.latitude.map(format_number).unwrap_or_default(),
+            longitude: race.longitude.map(format_number).unwrap_or_default(),
+            hotel_name: race.hotel_name.clone().unwrap_or_default(),
+            hotel_address: race.hotel_address.clone().unwrap_or_default(),
+            hotel_phone: race.hotel_phone.clone().unwrap_or_default(),
+            hotel_url: race.hotel_url.clone().unwrap_or_default(),
+            hotel_booked: if race.hotel_booked {
+                "1".to_string()
+            } else {
+                String::new()
+            },
+            hotel_check_in: race
+                .hotel_check_in_ms
+                .map(format_date_input)
+                .unwrap_or_default(),
+            hotel_check_out: race
+                .hotel_check_out_ms
+                .map(format_date_input)
+                .unwrap_or_default(),
+            lodging_notes: race.lodging_notes.clone().unwrap_or_default(),
+            nutrition_notes: race.nutrition_notes.clone().unwrap_or_default(),
+            important_info: race.important_info.clone().unwrap_or_default(),
+            notes: race.notes.clone().unwrap_or_default(),
+            goal_time: race
+                .goal_time_s
+                .map(mpacer_core::units::format_duration)
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Convertit la saisie en champs enregistrables.
+    fn to_input(&self) -> Result<RaceInput, String> {
+        Ok(RaceInput {
+            name: self.name.clone(),
+            start_at_ms: parse_local_datetime(&self.date, &self.time)?,
+            distance_m: parse_number(&self.distance_km, "la distance")?.map(|km| km * 1000.0),
+            discipline: some(&self.discipline),
+            location: some(&self.location),
+            start_location: some(&self.start_location),
+            bib_number: some(&self.bib_number),
+            bib_pickup_at_ms: parse_local_datetime(&self.bib_pickup_date, &self.bib_pickup_time)?,
+            bib_pickup_location: some(&self.bib_pickup_location),
+            live_url: some(&self.live_url),
+            registration_url: some(&self.registration_url),
+            website_url: some(&self.website_url),
+            latitude: parse_number(&self.latitude, "la latitude")?,
+            longitude: parse_number(&self.longitude, "la longitude")?,
+            hotel_name: some(&self.hotel_name),
+            hotel_address: some(&self.hotel_address),
+            hotel_phone: some(&self.hotel_phone),
+            hotel_url: some(&self.hotel_url),
+            hotel_booked: !self.hotel_booked.trim().is_empty(),
+            hotel_check_in_ms: parse_local_datetime(&self.hotel_check_in, "")?,
+            hotel_check_out_ms: parse_local_datetime(&self.hotel_check_out, "")?,
+            lodging_notes: some(&self.lodging_notes),
+            nutrition_notes: some(&self.nutrition_notes),
+            important_info: some(&self.important_info),
+            notes: some(&self.notes),
+            goal_time_s: parse_duration(&self.goal_time)?,
+        })
+    }
+}
+
+/// Champ texte du formulaire.
+fn text_field(
+    name: &str,
+    label: &str,
+    value: &str,
+    input_type: &str,
+    placeholder: &str,
+) -> Markup {
+    html! {
+        div class="field" {
+            label for=(name) { (label) }
+            input type=(input_type) id=(name) name=(name) value=(value) placeholder=(placeholder);
+        }
+    }
+}
+
+/// Zone de texte du formulaire.
+fn area_field(name: &str, label: &str, value: &str, placeholder: &str) -> Markup {
+    html! {
+        div class="field" {
+            label for=(name) { (label) }
+            textarea id=(name) name=(name) rows="3" placeholder=(placeholder) { (value) }
+        }
+    }
+}
+
+/// Ligne d'information : la valeur manquante est montree, pas cachee, pour que
+/// le coureur voie d'un coup d'oeil ce qu'il lui reste a remplir.
+fn info_row(label: &str, value: Option<&str>) -> Markup {
+    html! {
+        div class="info-row" {
+            span class="info-label" { (label) }
+            @match value {
+                Some(value) => span class="info-value" { (value) },
+                None => span class="info-value empty" { "non renseigne" },
+            }
+        }
+    }
+}
+
+/// Ligne d'information contenant un lien externe.
+fn link_row(label: &str, url: Option<&str>, text: &str) -> Markup {
+    html! {
+        div class="info-row" {
+            span class="info-label" { (label) }
+            @match url {
+                Some(url) => span class="info-value" {
+                    a href=(url) target="_blank" rel="noopener noreferrer" { (text) }
+                },
+                None => span class="info-value empty" { "non renseigne" },
+            }
+        }
+    }
+}
+
+/// Le formulaire complet d'une course, en sections.
+fn race_form(action: &str, values: &RaceForm, error: Option<&str>, submit: &str) -> Markup {
+    html! {
+        form class="race-form" method="post" action=(action) {
+            @if let Some(error) = error {
+                p class="alert" { (error) }
+            }
+            section class="panel" {
+                h2 { "La course" }
+                div class="grid-2" {
+                    (text_field("name", "Nom de la course *", &values.name, "text", "Marathon de Lyon"))
+                    (text_field("discipline", "Discipline", &values.discipline, "text", "Route, trail, ultra..."))
+                    (text_field("date", "Date", &values.date, "date", ""))
+                    (text_field("time", "Horaire de depart", &values.time, "time", ""))
+                    (text_field("distance_km", "Distance (km)", &values.distance_km, "text", "42.195"))
+                    (text_field("goal_time", "Objectif de temps", &values.goal_time, "text", "3:30:00"))
+                    (text_field("location", "Ville / region", &values.location, "text", "Lyon"))
+                    (text_field("start_location", "Lieu de depart", &values.start_location, "text", "Place Bellecour"))
+                    (text_field("latitude", "Latitude", &values.latitude, "text", "45.7578"))
+                    (text_field("longitude", "Longitude", &values.longitude, "text", "4.8320"))
+                }
+            }
+            section class="panel" {
+                h2 { "Dossard et inscription" }
+                div class="grid-2" {
+                    (text_field("bib_number", "Numero de dossard", &values.bib_number, "text", "1234"))
+                    (text_field("bib_pickup_date", "Prise de dossard - date", &values.bib_pickup_date, "date", ""))
+                    (text_field("bib_pickup_time", "Prise de dossard - heure", &values.bib_pickup_time, "time", ""))
+                    (text_field("bib_pickup_location", "Prise de dossard - lieu", &values.bib_pickup_location, "text", "Village depart, stand 12"))
+                    (text_field("registration_url", "Lien d'inscription", &values.registration_url, "url", "https://..."))
+                    (text_field("website_url", "Site officiel de la course", &values.website_url, "url", "https://..."))
+                }
+            }
+            section class="panel" {
+                h2 { "Suivi en direct" }
+                (text_field("live_url", "Lien du live (tracking)", &values.live_url, "url", "https://live.exemple.org/coureur/1234"))
+                p class="muted" { "Ce lien sera accessible depuis la fiche et partageable avec vos proches." }
+            }
+            section class="panel" {
+                h2 { "Hebergement" }
+                div class="field check" {
+                    label {
+                        input type="checkbox" name="hotel_booked" value="1" checked[!values.hotel_booked.trim().is_empty()];
+                        " Hotel reserve"
+                    }
+                }
+                div class="grid-2" {
+                    (text_field("hotel_name", "Nom de l'hotel", &values.hotel_name, "text", "Ibis Lyon Centre"))
+                    (text_field("hotel_address", "Adresse", &values.hotel_address, "text", "12 rue de la Paix, Lyon"))
+                    (text_field("hotel_phone", "Telephone", &values.hotel_phone, "text", "+33 4 00 00 00 00"))
+                    (text_field("hotel_url", "Lien de reservation", &values.hotel_url, "url", "https://..."))
+                    (text_field("hotel_check_in", "Arrivee", &values.hotel_check_in, "date", ""))
+                    (text_field("hotel_check_out", "Depart", &values.hotel_check_out, "date", ""))
+                }
+                (area_field("lodging_notes", "Autres solutions pour dormir", &values.lodging_notes, "Camping, famille sur place, auberge..."))
+            }
+            section class="panel" {
+                h2 { "Informations importantes" }
+                (area_field("nutrition_notes", "Nutrition et ravitaillement", &values.nutrition_notes, "Ravitos tous les 5 km, gel au 25e km, boisson a emporter..."))
+                (area_field("important_info", "Informations importantes pour la course", &values.important_info, "Certificat medical, PPS, consignes, barrieres horaires, meteo..."))
+                (area_field("notes", "Autres informations", &values.notes, "Transport, accompagnants, dossards des amis..."))
+            }
+            div class="actions" {
+                button type="submit" { (submit) }
+                a class="button ghost" href="/courses" { "Annuler" }
+            }
+        }
+    }
+}
+
+fn race_form_response(
+    user: &User,
+    title: &str,
+    heading: &str,
+    action: &str,
+    values: &RaceForm,
+    error: Option<&str>,
+    submit: &str,
+    status: StatusCode,
+) -> Response {
+    let content = html! {
+        section class="hero" {
+            h1 { (heading) }
+            p class="muted" { "Renseignez ce que vous savez : la fiche se complete au fil des semaines." }
+        }
+        (race_form(action, values, error, submit))
+    };
+    (status, page(layout(title, Some(user), content))).into_response()
+}
+
+/// Ligne de resume d'une course : quand et ou.
+fn race_summary_line(race: &Race) -> String {
+    let mut parts = Vec::new();
+    match race.start_at_ms {
+        Some(ms) => parts.push(format_datetime_short(ms)),
+        None => parts.push("date a definir".to_string()),
+    }
+    if let Some(place) = race.start_location.as_ref().or(race.location.as_ref()) {
+        parts.push(place.clone());
+    }
+    parts.join(" - ")
+}
+
+/// Carte d'une course : l'essentiel visible sans ouvrir la fiche.
+fn race_card(race: &Race, tasks: &[RaceTask], now_ms: i64) -> Markup {
+    let done = tasks.iter().filter(|task| task.done).count();
+    let total = tasks.len();
+    let next_task = tasks.iter().find(|task| !task.done);
+    let ratio = if total == 0 {
+        0.0
+    } else {
+        done as f64 / total as f64 * 100.0
+    };
+
+    html! {
+        article class="race-card" {
+            div class="race-card-head" {
+                h3 { a href={ "/courses/" (race.id) } { (race.name) } }
+                span class="countdown" { (countdown_label(race.start_at_ms, now_ms)) }
+            }
+            p class="muted" { (race_summary_line(race)) }
+            div class="chips" {
+                @if let Some(bib) = &race.bib_number {
+                    span class="chip" { "Dossard " (bib) }
+                }
+                @if let Some(distance) = race.distance_m {
+                    span class="chip" { (format_distance(distance, UnitSystem::Metric)) }
+                }
+                @if let Some(discipline) = &race.discipline {
+                    span class="chip" { (discipline) }
+                }
+                @if race.hotel_booked {
+                    span class="chip ok" { "Hotel reserve" }
+                } @else if race.hotel_name.is_some() {
+                    span class="chip warn" { "Hotel a confirmer" }
+                }
+                @if race.live_url.is_some() {
+                    span class="chip" { "Live" }
+                }
+            }
+            @if total > 0 {
+                div class="progress" {
+                    span class="muted" { "Suivi : " (done) "/" (total) }
+                    @if let Some(task) = next_task {
+                        span class="muted" { " - a faire : " (task.label) }
+                    }
+                }
+                div class="bar" {
+                    div class="bar-fill" style=(format!("width: {ratio:.0}%")) {}
+                }
+            }
+        }
+    }
+}
+
+/// Etiquette d'une echeance du planning.
+fn agenda_label(kind: &str) -> &'static str {
+    match kind {
+        "depart" => "Depart",
+        "dossard" => "Dossard",
+        "hotel" => "Hotel",
+        _ => "Suivi",
+    }
+}
+
+async fn races_page(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let now = state.now_ms();
+    let upcoming = crate::db::list_upcoming_races(&state.pool, &user.id, now).await?;
+    let past = crate::db::list_past_races(&state.pool, &user.id, now).await?;
+
+    let mut cards = Vec::with_capacity(upcoming.len());
+    let mut pending_tasks = 0_usize;
+    for race in &upcoming {
+        let tasks = crate::db::list_race_tasks(&state.pool, &user.id, &race.id).await?;
+        pending_tasks += tasks.iter().filter(|task| !task.done).count();
+        cards.push(race_card(race, &tasks, now));
+    }
+
+    let next_race = upcoming
+        .iter()
+        .find(|race| race.start_at_ms.is_some())
+        .map(|race| format!("{} - {}", race.name, countdown_label(race.start_at_ms, now)))
+        .unwrap_or_else(|| "-".to_string());
+
+    let content = html! {
+        section class="hero" {
+            h1 { "Vos courses" }
+            p class="muted" { "Chaque course a sa fiche : dossard, horaires, lieux, live, hebergement et elements a preparer." }
+        }
+        section class="cards" {
+            div class="card" {
+                span class="card-label" { "Courses a venir" }
+                strong { (upcoming.len()) }
+            }
+            div class="card" {
+                span class="card-label" { "Prochain depart" }
+                strong class="small" { (next_race) }
+            }
+            div class="card" {
+                span class="card-label" { "Elements a preparer" }
+                strong { (pending_tasks) }
+            }
+            div class="card" {
+                span class="card-label" { "Deja courues" }
+                strong { (past.len()) }
+            }
+        }
+        section {
+            div class="section-head" {
+                h2 { "Cartes des courses" }
+                div class="actions" {
+                    a class="button ghost" href="/courses/planning" { "Planning" }
+                    a class="button" href="/courses/nouvelle" { "Ajouter une course" }
+                }
+            }
+            @if cards.is_empty() {
+                p class="muted" {
+                    "Aucune course enregistree. Ajoutez votre prochaine course pour suivre son dossard, "
+                    "son horaire, son lieu de depart, son live et votre hebergement."
+                }
+            } @else {
+                div class="race-grid" {
+                    @for card in &cards {
+                        (card)
+                    }
+                }
+            }
+        }
+        @if !past.is_empty() {
+            section {
+                h2 { "Deja courues" }
+                table {
+                    thead { tr { th { "Date" } th { "Course" } th { "Distance" } th { "Dossard" } th {} } }
+                    tbody {
+                        @for race in &past {
+                            tr {
+                                td { (race.start_at_ms.map(format_datetime_short).unwrap_or_else(|| "-".into())) }
+                                td { (race.name) }
+                                td {
+                                    @match race.distance_m {
+                                        Some(distance) => (format_distance(distance, UnitSystem::Metric)),
+                                        None => "-",
+                                    }
+                                }
+                                td { (race.bib_number.clone().unwrap_or_else(|| "-".into())) }
+                                td { a href={ "/courses/" (race.id) } { "Fiche" } }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+    Ok(page(layout("Vos courses", Some(&user), content)))
+}
+
+async fn planning_page(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let now = state.now_ms();
+    let upcoming = crate::db::list_upcoming_races(&state.pool, &user.id, now).await?;
+
+    // Le planning rassemble des echeances venues de plusieurs champs : depart,
+    // prise de dossard, hotel et elements de suivi dates.
+    let mut entries: Vec<AgendaEntry> = Vec::new();
+    for race in &upcoming {
+        let place = race.start_location.clone().or_else(|| race.location.clone());
+        let hotel = race
+            .hotel_name
+            .clone()
+            .unwrap_or_else(|| race.name.clone());
+        let mut push = |at_ms: Option<i64>, kind: &'static str, title: String, detail: Option<String>| {
+            if let Some(at_ms) = at_ms {
+                entries.push(AgendaEntry {
+                    at_ms,
+                    kind,
+                    title,
+                    detail,
+                    race_id: race.id.clone(),
+                });
+            }
+        };
+        push(
+            race.start_at_ms,
+            "depart",
+            format!("Depart - {}", race.name),
+            place.clone(),
+        );
+        push(
+            race.bib_pickup_at_ms,
+            "dossard",
+            format!("Prise de dossard - {}", race.name),
+            race.bib_pickup_location.clone().or_else(|| place.clone()),
+        );
+        push(
+            race.hotel_check_in_ms,
+            "hotel",
+            format!("Arrivee a l'hotel - {hotel}"),
+            race.hotel_address.clone(),
+        );
+        push(
+            race.hotel_check_out_ms,
+            "hotel",
+            format!("Depart de l'hotel - {hotel}"),
+            race.hotel_address.clone(),
+        );
+        for task in crate::db::list_race_tasks(&state.pool, &user.id, &race.id).await? {
+            if task.done {
+                continue;
+            }
+            push(
+                task.due_at_ms,
+                "suivi",
+                task.label.clone(),
+                Some(race.name.clone()),
+            );
+        }
+    }
+    entries.sort_by_key(|entry| entry.at_ms);
+
+    // Regroupement par mois, sans dependance a une bibliotheque de calendrier.
+    let mut months: Vec<(String, Vec<&AgendaEntry>)> = Vec::new();
+    for entry in &entries {
+        let label = month_label(entry.at_ms);
+        match months.last_mut() {
+            Some((current, items)) if *current == label => items.push(entry),
+            _ => months.push((label, vec![entry])),
+        }
+    }
+
+    let content = html! {
+        section class="hero" {
+            h1 { "Planning" }
+            p class="muted" { "Toutes les echeances de vos prochaines courses, dans l'ordre." }
+            div class="actions" {
+                a class="button ghost" href="/courses" { "Vos courses" }
+                a class="button" href="/courses/nouvelle" { "Ajouter une course" }
+            }
+        }
+        @if entries.is_empty() {
+            section {
+                p class="muted" {
+                    "Rien au planning. Renseignez la date de depart, la prise de dossard, "
+                    "l'arrivee a l'hotel ou l'echeance d'un element de suivi pour le remplir."
+                }
+            }
+        } @else {
+            @for (month, items) in &months {
+                section {
+                    h2 { (month) }
+                    ul class="agenda" {
+                        @for entry in items {
+                            li class={ "agenda-item " (entry.kind) } {
+                                span class="agenda-day" {
+                                    (format_day_month(entry.at_ms))
+                                    @if let Some(time) = format_time_short(entry.at_ms) {
+                                        span class="agenda-time" { (time) }
+                                    }
+                                }
+                                div class="agenda-body" {
+                                    span class="agenda-kind" { (agenda_label(entry.kind)) }
+                                    a class="agenda-title" href={ "/courses/" (entry.race_id) } { (entry.title) }
+                                    @if let Some(detail) = &entry.detail {
+                                        span class="muted" { (detail) }
+                                    }
+                                }
+                                span class="agenda-when muted" { (countdown_label(Some(entry.at_ms), now)) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+    Ok(page(layout("Planning", Some(&user), content)))
+}
+
+async fn race_new_page(OptionalUser(user): OptionalUser) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    Ok(race_form_response(
+        &user,
+        "Nouvelle course",
+        "Nouvelle course",
+        "/courses/nouvelle",
+        &RaceForm::default(),
+        None,
+        "Ajouter la course",
+        StatusCode::OK,
+    ))
+}
+
+async fn race_create(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Form(form): Form<RaceForm>,
+) -> AppResult<Response> {
+    let input = match form.to_input().and_then(|input| {
+        input.validate()?;
+        Ok(input)
+    }) {
+        Ok(input) => input,
+        Err(message) => {
+            return Ok(race_form_response(
+                &user,
+                "Nouvelle course",
+                "Nouvelle course",
+                "/courses/nouvelle",
+                &form,
+                Some(&message),
+                "Ajouter la course",
+                StatusCode::BAD_REQUEST,
+            ))
+        }
+    };
+    let race = crate::db::insert_race(&state.pool, &user.id, &input, state.now_ms()).await?;
+    tracing::info!(user = %user.email, race = %race.id, "course ajoutee");
+    Ok(Redirect::to(&format!("/courses/{}", race.id)).into_response())
+}
+
+async fn race_edit_page(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let race = crate::db::get_race(&state.pool, &user.id, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(race_form_response(
+        &user,
+        "Modifier la course",
+        "Modifier la course",
+        &format!("/courses/{id}/modifier"),
+        &RaceForm::from_race(&race),
+        None,
+        "Enregistrer",
+        StatusCode::OK,
+    ))
+}
+
+async fn race_update(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Form(form): Form<RaceForm>,
+) -> AppResult<Response> {
+    let action = format!("/courses/{id}/modifier");
+    let input = match form.to_input().and_then(|input| {
+        input.validate()?;
+        Ok(input)
+    }) {
+        Ok(input) => input,
+        Err(message) => {
+            return Ok(race_form_response(
+                &user,
+                "Modifier la course",
+                "Modifier la course",
+                &action,
+                &form,
+                Some(&message),
+                "Enregistrer",
+                StatusCode::BAD_REQUEST,
+            ))
+        }
+    };
+    let updated = crate::db::update_race(&state.pool, &user.id, &id, &input, state.now_ms()).await?;
+    if updated.is_none() {
+        return Err(AppError::NotFound);
+    }
+    Ok(Redirect::to(&format!("/courses/{id}")).into_response())
+}
+
+async fn race_delete(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    if !crate::db::delete_race(&state.pool, &user.id, &id).await? {
+        return Err(AppError::NotFound);
+    }
+    tracing::info!(user = %user.email, race = %id, "course supprimee");
+    Ok(Redirect::to("/courses").into_response())
+}
+
+async fn race_page(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let race = crate::db::get_race(&state.pool, &user.id, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let tasks = crate::db::list_race_tasks(&state.pool, &user.id, &race.id).await?;
+    let now = state.now_ms();
+    let done = tasks.iter().filter(|task| task.done).count();
+
+    // Valeurs derivees calculees avant le rendu : aucune reference a un temporaire.
+    let start_line = race.start_at_ms.map(format_datetime_short);
+    let distance_line = race
+        .distance_m
+        .map(|meters| format_distance(meters, UnitSystem::Metric));
+    let goal_line = race.goal_time_s.map(mpacer_core::units::format_duration);
+    let pickup_line = race.bib_pickup_at_ms.map(format_datetime_short);
+    let check_in_line = race.hotel_check_in_ms.map(format_datetime_short);
+    let check_out_line = race.hotel_check_out_ms.map(format_datetime_short);
+    let map = map_url(&race);
+
+    let content = html! {
+        section class="hero" {
+            div class="race-title" {
+                h1 { (race.name) }
+                span class="countdown" { (countdown_label(race.start_at_ms, now)) }
+            }
+            p class="muted" { (race_summary_line(&race)) }
+            div class="actions" {
+                a class="button" href={ "/courses/" (race.id) "/modifier" } { "Modifier la fiche" }
+                @if let Some(url) = &map {
+                    a class="button ghost" href=(url) target="_blank" rel="noopener noreferrer" { "Voir sur la carte" }
+                }
+                form method="post" action={ "/courses/" (race.id) "/supprimer" }
+                     data-confirm="Supprimer definitivement cette course et son suivi ?" {
+                    button class="ghost danger" type="submit" { "Supprimer" }
+                }
+            }
+        }
+        section class="panel" {
+            h2 { "La course" }
+            (info_row("Date et horaire de depart", start_line.as_deref()))
+            (info_row("Lieu de depart", race.start_location.as_deref().or(race.location.as_deref())))
+            (info_row("Ville / region", race.location.as_deref()))
+            (info_row("Distance", distance_line.as_deref()))
+            (info_row("Discipline", race.discipline.as_deref()))
+            (info_row("Objectif de temps", goal_line.as_deref()))
+            (link_row("Inscription", race.registration_url.as_deref(), "Page d'inscription"))
+            (link_row("Site officiel", race.website_url.as_deref(), "Site de la course"))
+            @match &map {
+                Some(url) => (link_row("Carte", Some(url.as_str()), "Ouvrir dans OpenStreetMap")),
+                None => (info_row("Carte", None)),
+            }
+        }
+        section class="panel" {
+            h2 { "Dossard" }
+            (info_row("Numero de dossard", race.bib_number.as_deref()))
+            (info_row("Rendez-vous de prise de dossard", pickup_line.as_deref()))
+            (info_row("Lieu de retrait", race.bib_pickup_location.as_deref()))
+        }
+        section class="panel live" {
+            h2 { "Suivi en direct" }
+            @if let Some(url) = &race.live_url {
+                p {
+                    a class="button" href=(url) target="_blank" rel="noopener noreferrer" { "Ouvrir le live" }
+                    span class="muted" { " A partager avec vos proches le jour de la course." }
+                }
+            } @else {
+                (info_row("Lien du live", None))
+            }
+        }
+        section class="panel" {
+            div class="section-head" {
+                h2 { "Hebergement" }
+                @if race.hotel_booked {
+                    span class="pill on" { "reserve" }
+                } @else if race.hotel_name.is_some() {
+                    span class="pill off" { "a confirmer" }
+                }
+            }
+            (info_row("Hotel", race.hotel_name.as_deref()))
+            (info_row("Adresse", race.hotel_address.as_deref()))
+            (info_row("Telephone", race.hotel_phone.as_deref()))
+            (link_row("Reservation", race.hotel_url.as_deref(), "Ouvrir la reservation"))
+            (info_row("Arrivee", check_in_line.as_deref()))
+            (info_row("Depart", check_out_line.as_deref()))
+        }
+        @if let Some(notes) = &race.lodging_notes {
+            section class="panel" {
+                h2 { "Autres solutions pour dormir" }
+                p class="notes" { (notes) }
+            }
+        }
+        @if let Some(notes) = &race.nutrition_notes {
+            section class="panel" {
+                h2 { "Nutrition et ravitaillement" }
+                p class="notes" { (notes) }
+            }
+        }
+        @if let Some(notes) = &race.important_info {
+            section class="panel" {
+                h2 { "Informations importantes pour la course" }
+                p class="notes" { (notes) }
+            }
+        }
+        @if let Some(notes) = &race.notes {
+            section class="panel" {
+                h2 { "Autres informations" }
+                p class="notes" { (notes) }
+            }
+        }
+        section class="panel" {
+            div class="section-head" {
+                h2 { "Suivi des elements importants" }
+                span class="muted" { (done) " / " (tasks.len()) " prets" }
+            }
+            @if tasks.is_empty() {
+                p class="muted" { "Aucun element de suivi. Ajoutez ce qu'il vous reste a preparer." }
+            } @else {
+                ul class="tasks" {
+                    @for task in &tasks {
+                        @let next_done = if task.done { "0" } else { "1" };
+                        @let css = if task.done { "task done" } else { "task" };
+                        @let mark = if task.done { "x" } else { "-" };
+                        li class=(css) {
+                            form method="post" action={ "/courses/" (race.id) "/suivi/" (task.id) } {
+                                input type="hidden" name="done" value=(next_done);
+                                button class="tick" type="submit" title="Cocher ou decocher" { (mark) }
+                            }
+                            span class="task-label" { (task.label) }
+                            @if let Some(due) = task.due_at_ms {
+                                span class="task-due muted" { "echeance " (format_day_month(due)) }
+                            }
+                            form method="post" action={ "/courses/" (race.id) "/suivi/" (task.id) "/supprimer" } {
+                                button class="ghost danger small" type="submit" { "Retirer" }
+                            }
+                        }
+                    }
+                }
+            }
+            form class="race-form inline" method="post" action={ "/courses/" (race.id) "/suivi" } {
+                input type="text" name="label" placeholder="Ajouter un element a preparer" required maxlength="200";
+                input type="date" name="due" title="Echeance (facultative)";
+                button type="submit" { "Ajouter" }
+            }
+        }
+    };
+    Ok(page(layout(&race.name, Some(&user), content)))
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskForm {
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    due: String,
+}
+
+async fn race_task_create(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Form(form): Form<TaskForm>,
+) -> AppResult<Response> {
+    let label = form.label.trim();
+    if label.is_empty() {
+        return Err(AppError::bad_request(
+            "l'element de suivi ne peut pas etre vide",
+        ));
+    }
+    if label.chars().count() > 200 {
+        return Err(AppError::bad_request(
+            "l'element de suivi est trop long (200 caracteres maximum)",
+        ));
+    }
+    let due_at_ms = parse_local_datetime(&form.due, "").map_err(AppError::bad_request)?;
+    let created =
+        crate::db::insert_race_task(&state.pool, &user.id, &id, label, due_at_ms, state.now_ms())
+            .await?;
+    if created.is_none() {
+        return Err(AppError::NotFound);
+    }
+    Ok(Redirect::to(&format!("/courses/{id}")).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskToggleForm {
+    #[serde(default)]
+    done: String,
+}
+
+async fn race_task_toggle(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path((id, task)): Path<(String, String)>,
+    Form(form): Form<TaskToggleForm>,
+) -> AppResult<Response> {
+    let done = form.done.trim() == "1";
+    let updated =
+        crate::db::set_race_task_done(&state.pool, &user.id, &id, &task, done, state.now_ms())
+            .await?;
+    if !updated {
+        return Err(AppError::NotFound);
+    }
+    Ok(Redirect::to(&format!("/courses/{id}")).into_response())
+}
+
+async fn race_task_delete(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path((id, task)): Path<(String, String)>,
+) -> AppResult<Response> {
+    if !crate::db::delete_race_task(&state.pool, &user.id, &id, &task).await? {
+        return Err(AppError::NotFound);
+    }
+    Ok(Redirect::to(&format!("/courses/{id}")).into_response())
+}
+

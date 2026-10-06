@@ -5,7 +5,9 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(mpacer_jni C)
 
-set(RUST_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../jniLibs/${ANDROID_ABI}")
+# Ce fichier vit dans app/src/main/cpp : les .so produits par cargo-ndk sont dans
+# app/src/main/jniLibs/<abi>/, soit un seul niveau au-dessus.
+set(RUST_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../jniLibs/${ANDROID_ABI}")
 
 add_library(mpacer_ffi SHARED IMPORTED)
 set_target_properties(mpacer_ffi PROPERTIES

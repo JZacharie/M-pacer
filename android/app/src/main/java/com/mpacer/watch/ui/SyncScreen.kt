@@ -74,13 +74,12 @@ fun SyncScreen(onBack: () -> Unit) {
         if (!state.paired) {
             Chip(
                 label = {
-                    Text(
-                        when (state.phase) {
-                            SyncPhase.RequestingCode -> "Demande du code..."
-                            SyncPhase.WaitingApproval -> "En attente d approbation..."
-                            else -> "S appairer",
-                        }
-                    )
+                    val libelle = when (state.phase) {
+                        SyncPhase.RequestingCode -> "Demande du code..."
+                        SyncPhase.WaitingApproval -> "En attente d approbation..."
+                        else -> "S appairer"
+                    }
+                    Text(libelle)
                 },
                 enabled = state.phase != SyncPhase.RequestingCode && state.phase != SyncPhase.WaitingApproval,
                 onClick = {

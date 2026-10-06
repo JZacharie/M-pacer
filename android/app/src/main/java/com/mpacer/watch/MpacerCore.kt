@@ -201,8 +201,9 @@ data class EngineOutput(val json: JSONObject) {
     val messages: List<String>
         get() = json.optJSONArray("messages").mapObjects { it.optString("text") }
 
+    /** Evenements de seance ("Armed", "AutoPaused"...) : des chaines JSON cote coeur. */
     val events: List<String>
-        get() = json.optJSONArray("events").mapObjects { it }
+        get() = json.optJSONArray("events").mapObjects { it.optString("kind") }
 }
 
 data class Shadow(val json: JSONObject) {

@@ -128,12 +128,37 @@ function Resolve-JavaHome {
     return $null
 }
 
+function Get-UrlCmdlineTools {
+    # L'index officiel donne l'archive la plus recente : indispensable, car une
+    # version ancienne ne comprend pas les fichiers XML du depot actuel (v4) et
+    # sdkmanager n'installe alors rien (avertissement "SDK XML versions up to 3").
+    $index = 'https://dl.google.com/android/repository/repository2-3.xml'
+    try {
+        $xml = [xml] (Invoke-WebRequest -Uri $index -UseBasicParsing -TimeoutSec 60).Content
+        $paquet = @($xml.sdkRepository.remotePackage) | Where-Object { $_.path -eq 'cmdline-tools;latest' } | Select-Object -First 1
+        if (-not $paquet) { return $null }
+        $archives = @($paquet.archives.archive)
+        $windows = $archives | Where-Object { $_.hostOs -eq 'windows' -and $_.hostArch -eq 'x86_64' } | Select-Object -First 1
+        if (-not $windows) { $windows = $archives | Where-Object { $_.hostOs -eq 'windows' } | Select-Object -First 1 }
+        if (-not $windows) { return $null }
+        $url = [string] $windows.complete.url
+        if ($url -notmatch '^https?://') { $url = 'https://dl.google.com/android/repository/' + $url }
+        return $url
+    } catch {
+        Alerte ('index SDK illisible : ' + $_.Exception.Message)
+        return $null
+    }
+}
+
 function Install-CmdlineTools([string] $sdk) {
     # Le SDK Android ne contient pas forcement sdkmanager : on recupere les
     # command-line tools officiels, puis on les place dans cmdline-tools/latest.
-    $urls = @(
-        'https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip',
-        'https://dl.google.com/android/repository/commandlinetools-win-13114758_latest.zip'
+    $urls = @()
+    $recente = Get-UrlCmdlineTools
+    if ($recente) { $urls += $recente; Info ('archive la plus recente : ' + $recente) }
+    $urls += @(
+        'https://dl.google.com/android/repository/commandlinetools-win-13114758_latest.zip',
+        'https://dl.google.com/android/repository/commandlinetools-win-11076708_latest.zip'
     )
     $zip = Join-Path $env:TEMP 'mpacer-cmdline-tools.zip'
     $extraction = Join-Path $env:TEMP 'mpacer-cmdline-tools-extract'
@@ -162,8 +187,14 @@ function Invoke-Gradle([string[]] $arguments) {
     Push-Location $dossierAndroid
     try {
         $gradlew = if ($IsWindows -or $env:OS -eq 'Windows_NT') { '.\gradlew.bat' } else { './gradlew' }
-        if ($env:JAVA_HOME -and $env:JAVA_HOME -ne 'PATH') {
-            $env:PATH = (Join-Path $env:JAVA_HOME 'bin') + [IO.Path]::PathSeparator + $env:PATH
+        $jh = $script:JavaHomeTrouve
+        if (-not $jh) { $jh = $env:JAVA_HOME }
+        if ($jh -and $jh -ne 'PATH') {
+            $env:JAVA_HOME = $jh
+            $env:PATH = (Join-Path $jh 'bin') + [IO.Path]::PathSeparator + $env:PATH
+            Info ('JAVA_HOME = ' + $jh)
+        } elseif (-not $env:JAVA_HOME) {
+            Alerte 'JAVA_HOME non defini : Gradle risque de refuser de demarrer'
         }
         Info ($gradlew + ' ' + ($arguments -join ' '))
         & $gradlew @arguments
@@ -175,12 +206,18 @@ function Invoke-Gradle([string[]] $arguments) {
 
 Etape 'Environnement'
 $javaHome = Resolve-JavaHome
+$script:JavaHomeTrouve = $null
 if ($javaHome -eq 'PATH') {
     $version = (& java -version 2>&1 | Select-Object -First 1)
     Ok ('JDK trouve dans le PATH : ' + $version)
 } elseif ($javaHome) {
-    $ok17 = Test-Path (Join-Path $javaHome 'bin/java.exe')
-    if ($ok17) { Ok ('JDK : ' + $javaHome) } else { Echec ('JDK incomplet : ' + $javaHome) }
+    $ok17 = (Test-Path (Join-Path $javaHome 'bin/java.exe')) -or (Test-Path (Join-Path $javaHome 'bin/java'))
+    if ($ok17) {
+        Ok ('JDK : ' + $javaHome)
+        # Gradle (et sdkmanager) exigent JAVA_HOME : on l'exporte pour tout le script.
+        $env:JAVA_HOME = $javaHome
+        $script:JavaHomeTrouve = $javaHome
+    } else { Echec ('JDK incomplet : ' + $javaHome) }
 } else {
     Echec 'Aucun JDK 17+ detecte. Installez-le et definissez JAVA_HOME.'
     Info 'winget install Microsoft.OpenJDK.17   (ou Android Studio qui embarque un JBR)'
@@ -191,6 +228,18 @@ if ($sdk) {
     Ok ('SDK Android : ' + $sdk)
     $env:ANDROID_HOME = $sdk
     $env:ANDROID_SDK_ROOT = $sdk
+
+    # local.properties est la maniere standard d'indiquer le SDK : cela permet aussi
+    # d'appeler gradlew directement, sans ANDROID_HOME dans l'environnement.
+    $localProperties = Join-Path $dossierAndroid 'local.properties'
+    # Dans un fichier .properties, l'antislash est un caractere d'echappement :
+    # le chemin doit utiliser des barres obliques, sinon Gradle voit un chemin invalide.
+    $attendu = 'sdk.dir=' + $sdk.Replace('\', '/')
+    $actuel = if (Test-Path $localProperties) { Get-Content $localProperties -Raw } else { '' }
+    if ($actuel -notmatch [regex]::Escape($attendu)) {
+        Set-Content -Path $localProperties -Value $attendu -Encoding ASCII
+        Info ('android/local.properties ecrit : ' + $attendu)
+    }
     if (Test-Path (Join-Path $sdk 'platforms/android-35')) { Ok 'plateforme android-35 presente'; $script:PlateformeOk = $true }
     else { Echec 'plateforme android-35 absente'; Info ('sdkmanager "platforms;android-35"  (SDK : ' + $sdk + ')') }
     if (Test-Path (Join-Path $sdk 'build-tools')) { Ok 'build-tools presents' }
@@ -266,22 +315,34 @@ if ($Bootstrap) {
         } else { Ok 'cargo-ndk deja installe' }
     }
 
-    $sdkManager = $null
+    # Chemin de sdkmanager, toujours sous forme de chaine (Install-CmdlineTools renvoie un chemin)
+    $sdkManagerPath = $null
     if ($sdk) {
-        $sdkManager = Get-ChildItem $sdk -Recurse -Depth 3 -Filter 'sdkmanager.bat' -ErrorAction SilentlyContinue |
+        $trouve = Get-ChildItem $sdk -Recurse -Depth 3 -Filter 'sdkmanager.bat' -ErrorAction SilentlyContinue |
             Select-Object -First 1
-        if (-not $sdkManager) { $sdkManager = Install-CmdlineTools $sdk }
+        if ($trouve) { $sdkManagerPath = $trouve.FullName }
+        if (-not $sdkManagerPath) { $sdkManagerPath = Install-CmdlineTools $sdk }
     }
-    if ($sdkManager) {
-        if ($javaHome -and $javaHome -ne 'PATH') { $env:JAVA_HOME = $javaHome }
-        Info ('sdkmanager : ' + $sdkManager.FullName)
-        1..40 | ForEach-Object { 'y' } | & $sdkManager.FullName --licenses | Out-Null
-        & $sdkManager.FullName 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
+    if ($sdkManagerPath) {
+        if (-not $env:JAVA_HOME -and $javaHome -and $javaHome -ne 'PATH') { $env:JAVA_HOME = $javaHome }
+        Info ('sdkmanager : ' + $sdkManagerPath)
+        1..40 | ForEach-Object { 'y' } | & $sdkManagerPath --licenses | Out-Null
+        Info 'installation de platform-tools, android-35, build-tools 35, NDK 27 et cmake 3.22.1'
+        & $sdkManagerPath 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
         if ($LASTEXITCODE -ne 0) { Alerte 'sdkmanager a retourne une erreur : relancez la commande a la main' }
-        else { Ok 'paquets du SDK Android installes' }
+        else {
+            $plateforme = Test-Path (Join-Path $sdk 'platforms/android-35')
+            $ndk = Test-Path (Join-Path $sdk 'ndk')
+            if ($plateforme -and $ndk) { Ok 'paquets du SDK Android installes (android-35 + NDK)' }
+            else {
+                Alerte 'sdkmanager s''est termine sans tout installer (android-35 / NDK absents)'
+                Info 'Cause probable : command-line tools trop anciens pour le depot actuel.'
+                Info 'Corrigez avec Android Studio (SDK Manager) ou une version recente des command-line tools.'
+            }
+        }
     } else {
-        Alerte 'sdkmanager introuvable : le SDK Android ne contient pas les command-line tools'
-        Info 'Telechargez-les puis relancez -Bootstrap :'
+        Alerte 'sdkmanager introuvable et telechargement impossible'
+        Info 'Installez les command-line tools a la main :'
         Info '  https://developer.android.com/studio#command-line-tools-only'
         Info '  puis sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"'
     }
@@ -391,7 +452,10 @@ if ($taches.Count -gt 0) {
     Invoke-Gradle $arguments
 
     Etape 'Artefacts'
-    $apks = Get-ChildItem (Join-Path $dossierAndroid 'app/build/outputs/apk'), (Join-Path $dossierAndroid 'companion/build/outputs/apk') -Recurse -Filter '*.apk' -ErrorAction SilentlyContinue
+    $dossiers = @()
+    if ($Target -in @('watch', 'all')) { $dossiers += (Join-Path $dossierAndroid 'app/build/outputs/apk') }
+    if ($Target -in @('companion', 'all')) { $dossiers += (Join-Path $dossierAndroid 'companion/build/outputs/apk') }
+    $apks = Get-ChildItem $dossiers -Recurse -Filter '*.apk' -ErrorAction SilentlyContinue
     if (-not $apks) { Alerte 'aucun APK trouve' }
     foreach ($apk in $apks) {
         Ok ($apk.FullName.Replace($racine + '\', '') + '  ' + [math]::Round($apk.Length / 1MB, 1) + ' Mo')

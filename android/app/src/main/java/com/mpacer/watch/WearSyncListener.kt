@@ -1,11 +1,13 @@
 package com.mpacer.watch
 
 import android.app.NotificationChannel
+import android.os.ParcelFileDescriptor
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.google.android.gms.wearable.Asset
 import com.google.android.gms.wearable.DataEvent
 import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.DataMapItem
@@ -38,12 +40,23 @@ class WearSyncListener : WearableListenerService() {
             val item = event.dataItem
             if (item.uri.path != PATH_WORKOUT) continue
             val dataMap = DataMapItem.fromDataItem(item).dataMap
-            val bytes = dataMap.getAsset(KEY_ASSET)?.data
-            if (bytes == null) continue
+            val asset = dataMap.getAsset(KEY_ASSET) ?: continue
+            val bytes = readAsset(asset) ?: continue
             importPayload(String(bytes, Charsets.UTF_8))
             runCatching { Wearable.getDataClient(this).deleteDataItems(item.uri) }
         }
     }
+
+    /**
+     * Lit le contenu d'un Asset recu par le Data Layer.
+     *
+     * Play Services 18.x n'expose plus de champ "data" sur Asset : cote recepteur le
+     * contenu est materialise dans un fichier, accessible par descripteur ou par URI.
+     */
+    private fun readAsset(asset: Asset): ByteArray? = runCatching {
+        asset.fd?.let { fd -> ParcelFileDescriptor.AutoCloseInputStream(fd).use { it.readBytes() } }
+            ?: asset.uri?.let { uri -> contentResolver.openInputStream(uri)?.use { it.readBytes() } }
+    }.getOrNull()
 
     private fun importPayload(text: String) {
         val root = runCatching { JSONObject(text) }.getOrNull() ?: return

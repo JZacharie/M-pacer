@@ -847,3 +847,478 @@ async fn stats_page_renders_weekly_volume() {
     assert!(body.contains("Volume hebdomadaire"), "{body}");
     assert!(body.contains("6.00 km"), "{body}");
 }
+
+// ------------------------------------------------------------------ courses
+
+/// Encodage minimal d'un corps de formulaire (application/x-www-form-urlencoded).
+fn encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            b' ' => out.push('+'),
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+/// Requete de formulaire HTML portant la session du navigateur.
+fn form_request(method: &str, uri: &str, body: &str, session: &str) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(header::COOKIE, session)
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+/// Utilisateur de developpement et cookie de session associe.
+async fn dev_user_session(state: &AppState) -> (mpacer_api::models::User, String) {
+    let user = mpacer_api::db::upsert_user(
+        &state.pool,
+        None,
+        "dev@localhost",
+        None,
+        None,
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+    let session = mpacer_api::auth::issue_session(&state.config, &user, state.now_ms()).unwrap();
+    (user, format!("mpacer_session={session}"))
+}
+
+/// Date locale (YYYY-MM-DD) a J+days.
+fn local_date_in_days(now_ms: i64, days: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(now_ms + days * 86_400_000)
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+/// Corps de formulaire complet decrivant une course.
+fn race_form_body(date: &str, extra: &[(&str, &str)]) -> String {
+    let mut fields: Vec<(String, String)> = vec![
+        ("name".into(), "Marathon de Lyon".into()),
+        ("date".into(), date.to_string()),
+        ("time".into(), "09:30".into()),
+        ("distance_km".into(), "42.195".into()),
+        ("discipline".into(), "Route".into()),
+        ("location".into(), "Lyon".into()),
+        ("start_location".into(), "Place Bellecour".into()),
+        ("bib_number".into(), "1234".into()),
+        ("bib_pickup_date".into(), date.to_string()),
+        ("bib_pickup_time".into(), "15:00".into()),
+        ("bib_pickup_location".into(), "Village depart".into()),
+        ("live_url".into(), "https://live.example.org/coureur/1234".into()),
+        ("registration_url".into(), "https://marathon.example.org/inscription".into()),
+        ("hotel_name".into(), "Ibis Lyon Centre".into()),
+        ("hotel_address".into(), "12 rue de la Paix, Lyon".into()),
+        ("hotel_booked".into(), "1".into()),
+        ("hotel_check_in".into(), date.to_string()),
+        ("lodging_notes".into(), "Camping possible a 5 km".into()),
+        ("nutrition_notes".into(), "Ravitos tous les 5 km".into()),
+        ("important_info".into(), "Certificat medical obligatoire".into()),
+        ("notes".into(), "Depart en train la veille".into()),
+        ("goal_time".into(), "3:30:00".into()),
+    ];
+    // Une cle deja presente est remplacee, jamais repetee : serde_urlencoded
+    // refuse un champ duplique (422), exactement comme un navigateur n'envoyait
+    // qu'une seule valeur par champ texte.
+    for (key, value) in extra {
+        let key = (*key).to_string();
+        let value = (*value).to_string();
+        match fields.iter().position(|(existing, _)| existing == &key) {
+            Some(index) => fields[index].1 = value,
+            None => fields.push((key, value)),
+        }
+    }
+    fields
+        .iter()
+        .map(|(key, value)| format!("{key}={}", encode(value)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+/// Cree une course par le formulaire web et renvoie son identifiant.
+async fn create_race_through_web(
+    app: &Router,
+    session: &str,
+    date: &str,
+) -> String {
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            "/courses/nouvelle",
+            &race_form_body(date, &[]),
+            session,
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .map(|value| value.to_str().unwrap().to_string());
+    let body = body_text(response).await;
+    assert_eq!(status, StatusCode::SEE_OTHER, "corps = {body}");
+    location
+        .expect("redirection vers la fiche")
+        .rsplit('/')
+        .next()
+        .expect("identifiant de course dans la redirection")
+        .to_string()
+}
+
+#[tokio::test]
+async fn race_sheet_holds_everything_a_runner_needs() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (_user, session) = dev_user_session(&state).await;
+    let now = state.now_ms();
+    let date = local_date_in_days(now, 30);
+
+    // Etat initial : aucune course.
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie("/courses", &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("Aucune course enregistree"), "{body}");
+
+    let race_id = create_race_through_web(&app, &session, &date).await;
+
+    // La carte de course resume l'essentiel sans ouvrir la fiche.
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie("/courses", &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("Marathon de Lyon"), "{body}");
+    assert!(body.contains("Dossard 1234"), "{body}");
+    assert!(body.contains("Hotel reserve"), "{body}");
+    assert!(body.contains("42.20 km"), "{body}");
+
+    // La fiche detaillee reprend tous les elements de suivi demandes.
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie(&format!("/courses/{race_id}"), &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_text(response).await;
+    for expected in [
+        "Marathon de Lyon",
+        "Place Bellecour",
+        "09:30",
+        "1234",
+        "15:00",
+        "Village depart",
+        "https://live.example.org/coureur/1234",
+        "Ibis Lyon Centre",
+        "12 rue de la Paix, Lyon",
+        "Camping possible a 5 km",
+        "Ravitos tous les 5 km",
+        "Certificat medical obligatoire",
+        "Depart en train la veille",
+        "3:30:00",
+        "Suivi des elements importants",
+        "Dossard retire",
+    ] {
+        assert!(body.contains(expected), "« {expected} » absent de la fiche : {body}");
+    }
+    assert!(body.contains("0 / 8 prets"), "{body}");
+
+    // Le suivi se coche.
+    let tasks = mpacer_api::db::list_race_tasks(&state.pool, &_user.id, &race_id)
+        .await
+        .unwrap();
+    assert_eq!(tasks.len(), 8, "les elements de suivi par defaut sont crees");
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/courses/{race_id}/suivi/{}", tasks[0].id),
+            "done=1",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie(&format!("/courses/{race_id}"), &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("1 / 8 prets"), "{body}");
+
+    // Un element de suivi peut etre ajoute puis retire.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/courses/{race_id}/suivi"),
+            &format!("label={}&due={}", encode("Reconnaissance du parcours"), date),
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let tasks = mpacer_api::db::list_race_tasks(&state.pool, &_user.id, &race_id)
+        .await
+        .unwrap();
+    assert_eq!(tasks.len(), 9);
+    assert!(tasks.iter().any(|task| task.label == "Reconnaissance du parcours" && task.due_at_ms.is_some()));
+
+    // La fiche se modifie.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/courses/{race_id}/modifier"),
+            &race_form_body(&date, &[("bib_number", "4321"), ("name", "Marathon de Lyon 2027")]),
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie(&format!("/courses/{race_id}"), &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("4321"), "{body}");
+    assert!(body.contains("Marathon de Lyon 2027"), "{body}");
+
+    // Suppression : la course et son suivi disparaissent.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/courses/{race_id}/supprimer"),
+            "",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie("/courses", &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(!body.contains("Marathon de Lyon 2027"), "{body}");
+    assert!(mpacer_api::db::list_race_tasks(&state.pool, &_user.id, &race_id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn planning_lists_upcoming_races_in_order() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (_user, session) = dev_user_session(&state).await;
+    let now = state.now_ms();
+
+    // Rien au planning tant qu'aucune course n'est enregistree.
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie("/courses/planning", &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("Rien au planning"), "{body}");
+
+    let date = local_date_in_days(now, 30);
+    create_race_through_web(&app, &session, &date).await;
+
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/courses/planning", &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_text(response).await;
+    assert!(body.contains("Depart - Marathon de Lyon"), "{body}");
+    assert!(body.contains("Prise de dossard - Marathon de Lyon"), "{body}");
+    assert!(body.contains("Arrivee a l'hotel - Ibis Lyon Centre"), "{body}");
+    assert!(body.contains("Place Bellecour"), "{body}");
+    // Le depart (09:30) precede la prise de dossard (15:00) le meme jour.
+    let depart = body.find("Depart - Marathon de Lyon").unwrap();
+    let dossard = body.find("Prise de dossard - Marathon de Lyon").unwrap();
+    assert!(depart < dossard, "ordre du planning : {body}");
+
+    // Une course passee ne figure plus au planning.
+    let past_date = local_date_in_days(now, -10);
+    create_race_through_web(&app, &session, &past_date).await;
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie("/courses", &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("Deja courues"), "{body}");
+}
+
+#[tokio::test]
+async fn race_form_rejects_a_link_that_is_not_http() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (user, session) = dev_user_session(&state).await;
+    let date = local_date_in_days(state.now_ms(), 20);
+
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            "/courses/nouvelle",
+            &race_form_body(&date, &[("live_url", "javascript:alert(1)")]),
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = body_text(response).await;
+    assert!(body.contains("http:// ou https://"), "{body}");
+    // Rien n'a ete enregistre.
+    assert!(mpacer_api::db::list_races(&state.pool, &user.id)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn races_api_creates_reads_updates_and_deletes() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (user, session) = dev_user_session(&state).await;
+    let start = state.now_ms() + 60 * 24 * 3600 * 1000;
+
+    // Creation.
+    let payload = serde_json::json!({
+        "name": "Trail des volcans",
+        "start_at_ms": start,
+        "distance_m": 25000.0,
+        "bib_number": "77",
+        "start_location": "Le Mont-Dore",
+        "live_url": "https://live.example.org/volcans/77",
+        "hotel_booked": true,
+    })
+    .to_string();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/races")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &session)
+                .body(Body::from(payload))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let race: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    let race_id = race["id"].as_str().unwrap().to_string();
+    assert_eq!(race["hotel_booked"], serde_json::json!(true));
+    // Les elements de suivi accompagnent la course.
+    assert_eq!(
+        mpacer_api::db::list_race_tasks(&state.pool, &user.id, &race_id)
+            .await
+            .unwrap()
+            .len(),
+        8
+    );
+
+    // Lecture de la liste et du detail.
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/api/v1/races", &session))
+        .await
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert_eq!(list["total"], serde_json::json!(1));
+    assert_eq!(list["items"][0]["name"], serde_json::json!("Trail des volcans"));
+
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie(&format!("/api/v1/races/{race_id}"), &session))
+        .await
+        .unwrap();
+    let detail: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert_eq!(detail["race"]["bib_number"], serde_json::json!("77"));
+    assert_eq!(detail["tasks"].as_array().unwrap().len(), 8);
+
+    // Mise a jour.
+    let payload = serde_json::json!({ "name": "Trail des volcans", "bib_number": "88" }).to_string();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(&format!("/api/v1/races/{race_id}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &session)
+                .body(Body::from(payload))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let updated: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert_eq!(updated["bib_number"], serde_json::json!("88"));
+    assert_eq!(updated["distance_m"], serde_json::Value::Null);
+
+    // Validation : un nom vide est refuse.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/races")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &session)
+                .body(Body::from(r#"{"name":"   "}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Suppression.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(&format!("/api/v1/races/{race_id}"))
+                .header(header::COOKIE, &session)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let response = app
+        .oneshot(get_with_cookie(&format!("/api/v1/races/{race_id}"), &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+

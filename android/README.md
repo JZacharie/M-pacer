@@ -230,20 +230,24 @@ intents soient resolus.
 
 ## Points a verifier
 
-1. **Compilation complete** : `./gradlew assembleDebug` sur une machine avec JDK 17,
-   SDK 35, NDK r27 et `cargo-ndk`. Aucun build n a ete lance ici.
+1. ~~**Compilation complete**~~ : **VERIFIE le 6 octobre 2026** avec
+   `pwsh ./local-ci.ps1 -Target all` sur Windows (JDK = JBR d'Android Studio, SDK 35,
+   NDK 27.2.12479018, cargo-ndk 4.1.2, Gradle 8.11.1) :
+   `app-debug.apk` 36,4 Mo et `companion-debug.apk` 11,5 Mo, aucune erreur Kotlin.
+   Les trois ABI embarquent bien `libmpacer_ffi.so` (coeur Rust) et `libmpacer_jni.so`.
 2. **Wrapper** : le `gradle-wrapper.jar` (Gradle 8.11.1) et les scripts `gradlew`/
    `gradlew.bat` proviennent du depot Gradle (tag `v8.11.1`) ; leur somme de controle
    n a pas ete comparee a `gradle-wrapper.jar.sha256`. Sous Linux/macOS, `chmod +x gradlew`.
-3. **Publication des versions** : AGP 8.7.3, Kotlin 2.1.0, Compose BOM 2024.10.01,
-   Wear Compose 1.4.0, OkHttp 4.12.0, kotlinx.serialization 1.7.3, `security-crypto` 1.1.0,
-   `play-services-wearable` 18.2.0, `browser` 1.8.0. Elles ont ete verifiees sur Google
-   Maven / Maven Central, mais la resolution Gradle reelle reste a confirmer.
-4. **CMake et JNI** : le shim `mpacer_jni.c` importe `libmpacer_ffi.so` depuis
-   `src/main/jniLibs/<abi>/`. Verifier l ordre des taches natives et le packaging des `.so`.
-5. **Cargo-ndk** : verifier que `cargo ndk` est dans le `PATH` du processus Gradle et que
-   les trois cibles rustup sont installees ; sinon `-Pmpacer.buildRust=false` avec des
-   `.so` pre-construits.
+3. ~~**Publication des versions**~~ : **VERIFIE** — AGP 8.7.3, Kotlin 2.1.0, Compose BOM
+   2024.10.01, Wear Compose 1.4.0, OkHttp 4.12.0, kotlinx.serialization 1.7.3,
+   `security-crypto` 1.1.0, `play-services-wearable` 18.2.0, `browser` 1.8.0 resolues
+   par Gradle sans conflit.
+4. ~~**CMake et JNI**~~ : **VERIFIE** — le shim `mpacer_jni.c` importe
+   `libmpacer_ffi.so` depuis `src/main/jniLibs/<abi>/` et les deux bibliotheques sont
+   empaquetees cote a cote. Attention : `RUST_LIB_DIR` est relatif au dossier `cpp/`
+   (`../jniLibs`, et non `../../jniLibs`).
+5. ~~**Cargo-ndk**~~ : **VERIFIE** — `local-ci.ps1` compile le coeur avec `cargo ndk`
+   puis appelle Gradle avec `-Pmpacer.buildRust=false` : pas de double compilation.
 6. **EncryptedSharedPreferences** : tester sur un appareil reel (Keystore) ; l API est
    marquee obsolete par AndroidX mais reste fonctionnelle et correspond a la demande.
 7. **Data Layer** : verifier l appairage montre/telephone, la capacite `mpacer_sync`, la

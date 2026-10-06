@@ -1,0 +1,1 @@
+E:\git\JZacharie\M-pacer\android\app\src\main\cpp\CMakeLists.txt

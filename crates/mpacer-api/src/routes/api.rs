@@ -8,7 +8,7 @@ use crate::auth::device::{
 };
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
-use crate::models::{UploadResponse, WorkoutUpload};
+use crate::models::{Race, RaceInput, UploadResponse, WorkoutUpload};
 use crate::state::AppState;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
@@ -30,6 +30,11 @@ pub fn router() -> Router<AppState> {
             get(get_workout).delete(delete_workout),
         )
         .route("/api/v1/workouts/{id}/gpx", get(workout_gpx))
+        .route("/api/v1/races", get(list_races).post(create_race))
+        .route(
+            "/api/v1/races/{id}",
+            get(get_race).put(update_race).delete(delete_race),
+        )
         .route("/api/v1/stats", get(stats))
         .route("/api/v1/export", get(export_pac))
         .route("/api/v1/version", get(version))
@@ -208,6 +213,94 @@ async fn workout_gpx(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     super::gpx_response(&state, &user.id, &id).await
+}
+
+
+// ------------------------------------------------------------------ courses
+
+/// Filtre de la liste des courses.
+#[derive(Debug, Deserialize)]
+struct RaceListQuery {
+    /// Ne renvoyer que les courses a venir (ou sans date connue).
+    #[serde(default)]
+    upcoming: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct RaceListResponse {
+    total: usize,
+    items: Vec<Race>,
+}
+
+/// Liste des courses de l'utilisateur, de la plus proche a la plus lointaine.
+async fn list_races(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Query(query): Query<RaceListQuery>,
+) -> AppResult<Json<RaceListResponse>> {
+    let items = if query.upcoming.unwrap_or(false) {
+        crate::db::list_upcoming_races(&state.pool, &user.id, state.now_ms()).await?
+    } else {
+        crate::db::list_races(&state.pool, &user.id).await?
+    };
+    Ok(Json(RaceListResponse {
+        total: items.len(),
+        items,
+    }))
+}
+
+/// Cree une course ; les elements de suivi par defaut sont ajoutes avec elle.
+async fn create_race(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Json(input): Json<RaceInput>,
+) -> AppResult<(axum::http::StatusCode, Json<Race>)> {
+    let input = input.normalized();
+    input.validate().map_err(AppError::bad_request)?;
+    let race = crate::db::insert_race(&state.pool, &user.id, &input, state.now_ms()).await?;
+    tracing::info!(user = %user.email, race = %race.id, "course enregistree par l'API");
+    Ok((axum::http::StatusCode::CREATED, Json(race)))
+}
+
+/// Une course et son suivi.
+async fn get_race(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Json<serde_json::Value>> {
+    let race = crate::db::get_race(&state.pool, &user.id, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let tasks = crate::db::list_race_tasks(&state.pool, &user.id, &id).await?;
+    Ok(Json(serde_json::json!({ "race": race, "tasks": tasks })))
+}
+
+/// Met a jour une fiche de course (les elements de suivi ne sont pas touches).
+async fn update_race(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Json(input): Json<RaceInput>,
+) -> AppResult<Json<Race>> {
+    let input = input.normalized();
+    input.validate().map_err(AppError::bad_request)?;
+    let race = crate::db::update_race(&state.pool, &user.id, &id, &input, state.now_ms())
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(Json(race))
+}
+
+/// Supprime une course et son suivi.
+async fn delete_race(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<axum::http::StatusCode> {
+    if crate::db::delete_race(&state.pool, &user.id, &id).await? {
+        Ok(axum::http::StatusCode::NO_CONTENT)
+    } else {
+        Err(AppError::NotFound)
+    }
 }
 
 #[derive(Debug, Deserialize)]

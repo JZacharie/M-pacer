@@ -19,11 +19,20 @@ synchronisation de vos séances.
 | Composant | Rôle | État |
 |---|---|---|
 | **Montre Wear OS** | Enregistre la séance (GPS 1 Hz), calcule l'allure, guide le coureur (voix, shadow runner) | Squelette Kotlin, non compilé ici (pas de SDK Android) |
-| **Cœur Rust** | Tous les algorithmes : allure lissée, tours, assistant, voix, GPX, historique | **Fait, testé** (71 tests) |
-| **Backend Rust** | API de synchronisation, OAuth Google, interface web, PostgreSQL | **Fait, testé** (21 tests) |
+| **Cœur Rust** | Tous les algorithmes : allure lissée, tours, assistant, voix, GPX, historique, **analyse de séance** | **Fait, testé** (92 tests) |
+| **Backend Rust** | API de synchronisation, OAuth Google, interface web, PostgreSQL | **Fait, testé** (23 tests) |
+| **Analyse de séance** | Plan de course contre réalisé, fréquence cardiaque et zones, temps de pause, temps d'accélération | **Fait, testé** |
 | **Courses à venir** | Fiches de course, planning des échéances, suivi des éléments à préparer | **Fait, testé** |
 | **PostgreSQL** | Stockage des séances, géré par CloudNativePG dans le cluster | **Déployé sur jo3** (PostgreSQL 18.6) |
 | **Chart Helm** | Déploiement complet (app + base + ingress + TLS) | **Validé** (`helm lint` + `--dry-run=server` sur jo3) |
+
+**L'analyse d'une séance.** Chaque séance synchronisée s'ouvre sur un écran
+d'analyse complet : résumé (temps en mouvement, temps écoulé, temps de pause,
+fréquence cardiaque), **graphique multi-courbes** allure / cardio / altitude,
+**plan de course contre réalisé** avec l'écart cumulé kilomètre par kilomètre,
+**zones de fréquence cardiaque** et dérive cardiaque, **temps de passage**
+enrichis, et **chronologie** des pauses et des phases d'accélération. Détail,
+formules et veille concurrente : [docs/06](docs/06-analyse-seance.md).
 
 **Les courses à venir.** L'interface web ne sert pas qu'à relire le passé : elle
 gère aussi ce que vous préparez. Chaque course a sa **fiche** — numéro de dossard,
@@ -78,13 +87,15 @@ d'éléments à cocher (« dossard retiré », « hôtel réservé »…). Déta
 | `geo.rs` | Distance Haversine, détection de saut GPS |
 | `gps.rs` | Qualité du signal (feu rouge/orange/jaune/vert), filtre anti-aberration |
 | `pace.rs` | **Cœur du produit** : allure moyennée 2 min, détection de changement d'allure |
-| `lap.rs` | Tours km/mile, allure du tour courant et du tour précédent |
+| `lap.rs` | Tours km/mile, allure du tour courant et du tour précédent (temps de course, pauses exclues) |
+| `analysis.rs` | Analyse d'une séance : temps de passage, plan contre réalisé, pauses, accélération |
+| `cardio.rs` | Fréquence cardiaque : zones (% FC max et réserve de FC), bilan, dérive cardiaque |
 | `workout.rs` | Machine à états de séance : démarrage suspendu, pause, auto-pause, reprise |
 | `race_plan.rs` | Negative split et **shadow runner** (plan exact à l'arrivée) |
 | `assistant.rs` | Les 4 modes : allure, temps estimé, plan de course, course à distance |
 | `voice.rs` | Annonces vocales (planification + rédaction FR/EN) |
 | `best_distances.rs` | Meilleurs 1/5/10 km et 1/5 mi dans une séance |
-| `history.rs` | Format d'échange `.pac` (JSON versionné) |
+| `history.rs` | Format d'échange `.pac` version 2 (tours, cardio, pauses, plan, trace) |
 | `gpx.rs` | Export GPX 1.1 |
 | `remote_race.rs` | Protocole et classement de course à distance |
 | `engine.rs` | **Orchestrateur** : une seule structure `EngineOutput` à afficher |
@@ -166,6 +177,7 @@ d'éléments à cocher (« dossard retiré », « hôtel réservé »…). Déta
 | `docs/03-plan-action.md` | Plan de développement de l'application montre |
 | `docs/04-backend-web-et-deploiement.md` | Backend, auth, API, modèle de données, exploitation |
 | `docs/05-courses-et-planning.md` | Courses à venir : fiches, planning, suivi, API et modèle de données |
+| `docs/06-analyse-seance.md` | Analyse d'une séance : veille concurrente (Strava, Garmin, Polar…), écrans, formules des zones FC, du découplage et de l'accélération |
 | `docs/README.md` | Index des documents |
 
 ## 4. Plan d'action complet
@@ -216,6 +228,7 @@ d'éléments à cocher (« dossard retiré », « hôtel réservé »…). Déta
 | Tâche | Statut | Critère d'acceptation |
 |---|---|---|
 | Chaîne Android (JDK, SDK, NDK, cargo-ndk) | 🔲 | `mpacer_version()` affiché sur la montre |
+| Capteur de fréquence cardiaque | 🔲 | la montre alimente le moteur (`on_heart_rate`) : zones, dérive et graphique cardio exploitables |
 | Écran principal + service GPS | 🔲 | 10 km enregistrés sans le téléphone |
 | Voix, boutons du casque, mode ambiant | 🔲 | Séance guidée sans regarder l'écran |
 | Synchronisation depuis la montre | 🔲 | Séance visible dans l'interface web |
@@ -317,7 +330,7 @@ Détail complet, dépannage et sauvegardes : [deploy/README.md](deploy/README.md
 
 | Vérification | Résultat |
 |---|---|
-| `cargo test --workspace` | **99 tests** : 71 cœur, 6 FFI, 21 backend (dont 16 d'intégration exécutés contre PostgreSQL), 1 test de documentation |
+| `cargo test --workspace` | **122 tests** : 92 cœur, 6 FFI, 23 backend (dont 18 d'intégration exécutés contre PostgreSQL), 1 test de documentation |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 avertissement |
 | `cargo fmt --all --check` | conforme |
 | `helm lint` / `helm template` | 0 échec |

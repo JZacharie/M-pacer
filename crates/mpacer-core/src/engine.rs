@@ -533,6 +533,19 @@ impl PacerEngine {
             }
             _ => duration_s,
         };
+        // Une pause encore ouverte (seance arretee sans reprendre) compte aussi.
+        let mut pauses = self.pauses.clone();
+        if let Some((at_s, at_distance_m, automatic, started)) = self.open_pause {
+            let duration_s = ((self.last_t_ms - started) as f64 / 1000.0).max(0.0);
+            if duration_s > 0.0 {
+                pauses.push(Pause {
+                    at_s,
+                    at_distance_m,
+                    duration_s,
+                    automatic,
+                });
+            }
+        }
         WorkoutSummary {
             id: format!("{started_at_ms}"),
             started_at_ms,
@@ -544,7 +557,7 @@ impl PacerEngine {
             track: self.track.clone(),
             unit_system: self.config.units,
             elapsed_s,
-            pauses: self.pauses.clone(),
+            pauses,
             heart_rate: self.heart_rate.clone(),
             plan: self.assistant.plan().copied(),
         }
@@ -708,6 +721,86 @@ mod tests {
         assert_eq!(summary.best_efforts.len(), 1); // 1 km seulement
         assert!((summary.best_efforts[0].time_s - 360.0).abs() < 15.0);
         assert_eq!(summary.track.len(), 400);
+    }
+
+    #[test]
+    fn a_manual_pause_is_recorded_with_its_duration() {
+        let mut engine = ready_engine();
+        engine.start(10_000);
+        run(&mut engine, 11_000, 30, 3.0); // 30 s de course
+        engine.pause(41_000);
+        engine.resume(71_000); // 30 s de pause
+
+        let summary = engine.summary(10_000);
+        assert_eq!(summary.pauses.len(), 1);
+        let pause = summary.pauses[0];
+        assert!((pause.duration_s - 30.0).abs() < 0.01, "pause = {pause:?}");
+        assert!(!pause.automatic);
+        assert!((pause.at_s - 31.0).abs() < 0.5, "at_s = {}", pause.at_s);
+        // Le temps de course exclut la pause, le temps ecoule non.
+        assert!((summary.duration_s - 31.0).abs() < 0.5);
+        assert!((summary.total_elapsed_s() - 61.0).abs() < 0.5);
+        assert!((summary.paused_s() - 30.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn an_automatic_pause_is_flagged_and_recorded() {
+        let mut engine = ready_engine();
+        engine.set_config(EngineConfig {
+            workout: WorkoutConfig {
+                auto_pause: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        engine.start(10_000);
+        run(&mut engine, 11_000, 30, 3.0);
+        let mut lat = 45.0 + (30.0 * 3.0) / 111_195.0;
+        for i in 0..40 {
+            let t = 41_000 + i * 1000;
+            engine.on_gps(GpsSample::new(t, Position::new(lat, 3.0), 4.0).with_speed(0.0));
+            lat += 1e-7;
+        }
+        let summary = engine.summary(10_000);
+        assert_eq!(summary.pauses.len(), 1);
+        assert!(summary.pauses[0].automatic);
+        assert!(summary.pauses[0].duration_s > 5.0);
+    }
+
+    #[test]
+    fn heart_rate_reaches_the_output_and_the_summary() {
+        let mut engine = ready_engine();
+        engine.start(10_000);
+        run(&mut engine, 11_000, 20, 3.0);
+        for second in 1..=20_u16 {
+            engine.on_heart_rate(11_000 + second as i64 * 1000, 140 + second);
+        }
+        let output = engine.tick(50_000);
+        assert_eq!(output.heart_rate_bpm, Some(160));
+        assert_eq!(output.heart_rate_zone, Some(4)); // 160 / 190 = 84 %
+
+        let summary = engine.summary(10_000);
+        assert_eq!(summary.heart_rate.len(), 20);
+        assert_eq!(summary.heart_rate[0].bpm, 141);
+        assert!(summary.has_heart_rate());
+    }
+
+    #[test]
+    fn the_plan_used_by_the_assistant_is_archived_with_the_summary() {
+        let mut engine = ready_engine();
+        engine.set_assistant_config(AssistantConfig {
+            mode: AssistantMode::AchievePlannedTime,
+            race_distance_m: Some(10_000.0),
+            planned_time_s: Some(3000.0),
+            negative_split: NegativeSplit::with_ratio(0.03),
+        });
+        engine.start(10_000);
+        run(&mut engine, 11_000, 60, 3.3333);
+
+        let plan = engine.summary(10_000).plan.expect("plan archive");
+        assert!((plan.target_time_s - 3000.0).abs() < 1e-9);
+        assert!((plan.distance_m - 10_000.0).abs() < 1e-9);
+        assert!(plan.negative_split.enabled);
     }
 
     #[test]

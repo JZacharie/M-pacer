@@ -176,10 +176,7 @@ mod tests {
                 duration_s: 60.0,
                 automatic: false,
             }],
-            heart_rate: vec![HeartRateSample {
-                t_ms: 0,
-                bpm: 140,
-            }],
+            heart_rate: vec![HeartRateSample { t_ms: 0, bpm: 140 }],
             plan: Some(RacePlan::new(5000.0, 1500.0)),
         }
     }

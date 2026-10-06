@@ -97,7 +97,8 @@ session d'au moins 32 caractères.
 Les erreurs sont homogènes : `{"error":"code_stable","message":"explication"}`.
 `authorization_pending` est le seul cas où la montre doit simplement repoller.
 
-Validation à l'ingestion : identifiant présent, durée < 48 h, distance < 500 km.
+Validation à l'ingestion : identifiant présent, durée < 48 h, distance < 500 km,
+fréquence cardiaque entre 20 et 250 bpm, pauses et temps écoulé cohérents.
 Une séance invraisemblable est refusée avec 400 (protection contre un bug de calcul
 côté montre plutôt que contre un utilisateur malveillant).
 
@@ -108,7 +109,7 @@ Rendue côté serveur en Rust (**maud**), sans chaîne JavaScript ni dépendance
 | Page | Contenu |
 |---|---|
 | `/` | tableau de bord : totaux 30 jours, montres appairées, historique cliquable |
-| `/workouts/{id}` | détail : résumé, histogramme SVG des allures de tour, tours, meilleures distances, export GPX, suppression |
+| `/workouts/{id}` | **analyse de séance** : résumé (mouvement, écoulé, pauses), graphique allure / cardio / altitude, plan de course contre réalisé, zones de fréquence cardiaque et dérive cardiaque, temps de passage, chronologie des pauses et phases d'accélération, meilleures distances, export GPX, suppression |
 | `/courses` | **cartes des courses** : compte à rebours, dossard, distance, hôtel, progression du suivi, courses déjà courues |
 | `/courses/planning` | **planning** : agenda des échéances à venir (départ, prise de dossard, hôtel, éléments de suivi datés) par mois |
 | `/courses/{id}` | **fiche de course** : dossard, horaires, lieux, live, hébergement, nutrition, informations importantes, suivi à cocher |
@@ -145,7 +146,10 @@ race_tasks(id, race_id, user_id, label, due_at_ms, done, done_at_ms, position, c
 - Les horodatages sont des `BIGINT` (millisecondes UNIX) et les mesures des
   `DOUBLE PRECISION` : aucun problème de fuseau horaire, aucune perte de précision.
 - `payload` contient le `WorkoutSummary` complet en JSON (tours, meilleures distances,
-  trace GPS) : relecture et export GPX avec le même code que la montre.
+  trace GPS) : relecture et export GPX avec le même code que la montre. La version 2
+  du format `.pac` y ajoute la **fréquence cardiaque**, les **pauses**, le **temps
+  écoulé** et le **plan de course** ; une séance version 1 reste lisible, les champs
+  absents retombant sur leur valeur par défaut.
 - Le schéma est **idempotent** (`CREATE TABLE IF NOT EXISTS`) et appliqué à chaque
   démarrage : aucun outil de migration à installer.
 - Toutes les requêtes utilisent des **paramètres numérotés** (`$1`, `$2`…), jamais de

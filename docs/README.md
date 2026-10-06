@@ -10,6 +10,7 @@ Index des documents. Le point d'entrée reste le [README principal](../README.md
 | [03 - Plan d'action (application montre)](03-plan-action.md) | planifier le travail côté Wear OS : phases, tâches, critères d'acceptation, risques, stratégie de test |
 | [04 - Backend, interface web et déploiement](04-backend-web-et-deploiement.md) | comprendre l'API, l'authentification Google, le modèle de données PostgreSQL et l'exploitation du service |
 | [05 - Courses à venir : fiches, planning et suivi](05-courses-et-planning.md) | préparer une course : dossard, horaires, lieux, live, hébergement, nutrition, informations importantes et éléments à cocher |
+| [06 - Analyse d'une séance](06-analyse-seance.md) | lire un écran d'analyse : veille concurrente (Strava, Garmin, Polar, Coros…), plan contre réalisé, zones de fréquence cardiaque, découplage et temps d'accélération |
 | [Guide de déploiement](../deploy/README.md) | déployer concrètement sur le cluster k3s **jo3** : image, secrets, Helm, ingress, TLS, sauvegardes, dépannage |
 
 ## Parcours conseillés

@@ -320,8 +320,7 @@ pub fn acceleration(summary: &WorkoutSummary) -> Option<AccelerationAnalysis> {
         let seconds = reached.map(|sample| sample.t_s - start_s);
         let at_distance_m = distance_at_elapsed_s(&summary.track, start_s).unwrap_or(0.0);
         let end_s = reached.map(|sample| sample.t_s).unwrap_or(start_s);
-        let end_distance =
-            distance_at_elapsed_s(&summary.track, end_s).unwrap_or(at_distance_m);
+        let end_distance = distance_at_elapsed_s(&summary.track, end_s).unwrap_or(at_distance_m);
         phases.push(AccelerationPhase {
             at_s: start_s,
             at_distance_m,
@@ -453,8 +452,8 @@ mod tests {
 
     #[test]
     fn negative_split_plan_slows_down_at_the_start() {
-        let plan = RacePlan::new(10_000.0, 3000.0)
-            .with_negative_split(NegativeSplit::with_ratio(0.03));
+        let plan =
+            RacePlan::new(10_000.0, 3000.0).with_negative_split(NegativeSplit::with_ratio(0.03));
         let start = plan.pace_at_distance_s_per_km(500.0);
         let finish = plan.pace_at_distance_s_per_km(9500.0);
         assert!(start > finish);

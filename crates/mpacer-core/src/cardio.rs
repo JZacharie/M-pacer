@@ -208,10 +208,7 @@ pub struct CardiacDrift {
 ///
 /// Un decouplage faible (< 5 %) signifie que la seance est restee aerobie ;
 /// au-dela, la fatigue ou la chaleur se sont fait sentir.
-pub fn cardiac_drift(
-    track: &[TrackPoint],
-    samples: &[HeartRateSample],
-) -> Option<CardiacDrift> {
+pub fn cardiac_drift(track: &[TrackPoint], samples: &[HeartRateSample]) -> Option<CardiacDrift> {
     let total_distance = track.last()?.dist_m;
     if total_distance <= 0.0 || samples.len() < 4 {
         return None;
@@ -312,12 +309,7 @@ mod tests {
     #[test]
     fn summary_times_each_zone_and_ignores_gaps() {
         // 10 s a 110 bpm (Z1 avec FC max 200), puis un trou de 60 s, puis 10 s a 185 (Z5).
-        let samples = samples(&[
-            (0, 110),
-            (10_000, 110),
-            (70_000, 185),
-            (80_000, 185),
-        ]);
+        let samples = samples(&[(0, 110), (10_000, 110), (70_000, 185), (80_000, 185)]);
         let summary = summarize(&samples, HeartRateZones::new(200)).unwrap();
         assert_eq!(summary.sample_count, 4);
         assert!((summary.zone_seconds[0] - 10.0).abs() < 1e-9);

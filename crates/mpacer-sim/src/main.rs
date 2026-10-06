@@ -73,12 +73,7 @@ impl Default for Options {
 
 /// Simule une frequence cardiaque realiste : montee en regime, derive
 /// progressive avec la distance, recuperation pendant les pauses.
-fn simulate_heart_rate(
-    current: &mut f64,
-    distance_km: f64,
-    paused: bool,
-    rng: &mut Rng,
-) -> u16 {
+fn simulate_heart_rate(current: &mut f64, distance_km: f64, paused: bool, rng: &mut Rng) -> u16 {
     let target = if paused {
         108.0
     } else {
@@ -185,7 +180,11 @@ impl Trace {
             cumul.push(precedent + pas);
         }
         let total = *cumul.last().unwrap_or(&0.0);
-        Self { points, cumul, total }
+        Self {
+            points,
+            cumul,
+            total,
+        }
     }
 
     /// Position a `distance_m` du depart ; le parcours recommence si on le depasse.
@@ -200,7 +199,11 @@ impl Trace {
         }
         let debut = self.cumul[index];
         let longueur = self.cumul[index + 1] - debut;
-        let ratio = if longueur > 0.0 { (d - debut) / longueur } else { 0.0 };
+        let ratio = if longueur > 0.0 {
+            (d - debut) / longueur
+        } else {
+            0.0
+        };
         let (lat1, lon1) = self.points[index];
         let (lat2, lon2) = self.points[index + 1];
         (lat1 + (lat2 - lat1) * ratio, lon1 + (lon2 - lon1) * ratio)
@@ -421,7 +424,8 @@ async fn main() {
         }
         // Bruit GPS : l'option --noise etait documentee mais inutilisee.
         let bruit_lat = rng.noise(options.noise_m) / 111_195.0;
-        let bruit_lon = rng.noise(options.noise_m) / (111_195.0 * lat.to_radians().cos().abs().max(0.2));
+        let bruit_lon =
+            rng.noise(options.noise_m) / (111_195.0 * lat.to_radians().cos().abs().max(0.2));
         let position = Position::new(lat + bruit_lat, lon + bruit_lon);
         let accuracy = 5.0 + rng.noise(1.5).abs();
         if options.heart_rate {
@@ -457,7 +461,10 @@ async fn main() {
     // Chrono : temps de course, temps ecoule et pauses.
     println!("\n--- Chrono ---");
     println!("Temps de course: {}", format_duration(summary.duration_s));
-    println!("Temps ecoule   : {}", format_duration(summary.total_elapsed_s()));
+    println!(
+        "Temps ecoule   : {}",
+        format_duration(summary.total_elapsed_s())
+    );
     println!(
         "Pauses         : {} pour {}",
         summary.pauses.len(),
@@ -496,7 +503,8 @@ async fn main() {
     }
 
     // Cardio : moyennes, zones et derive.
-    if let Some(heart) = cardio::summarize(&summary.heart_rate, HeartRateZones::new(options.hr_max)) {
+    if let Some(heart) = cardio::summarize(&summary.heart_rate, HeartRateZones::new(options.hr_max))
+    {
         println!("\n--- Cardio ---");
         println!("FC moyenne     : {:.0} bpm", heart.average_bpm);
         println!("FC max / min   : {} / {} bpm", heart.max_bpm, heart.min_bpm);

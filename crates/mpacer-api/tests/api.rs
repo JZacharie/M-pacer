@@ -1240,6 +1240,149 @@ async fn race_form_rejects_a_link_that_is_not_http() {
         .is_empty());
 }
 
+// ------------------------------------------------------------------ analyse de seance
+
+/// Seance complete : trace, cardio, pause et plan de course.
+fn analysed_workout() -> serde_json::Value {
+    let mut track = Vec::new();
+    let mut heart_rate = Vec::new();
+    for i in 0..=600 {
+        // Une pause de 60 s interrompt la trace apres 200 s : aucun point GPS
+        // n'est enregistre pendant l'arret, exactement comme sur la montre.
+        let t_ms = if i > 200 { i * 1000 + 60_000 } else { i * 1000 };
+        track.push(serde_json::json!({
+            "t_ms": t_ms,
+            "dist_m": i as f64 * 3.0,
+            "lat": 45.0 + i as f64 * 2.0e-5,
+            "lon": 3.0,
+            "elevation_m": 300.0 + i as f64 * 0.02,
+        }));
+        // Une mesure toutes les 10 s : c'est la cadence minimale pour que les
+        // zones et la derive cardiaque soient exploitables.
+        if i % 10 == 0 {
+            heart_rate.push(serde_json::json!({
+                "t_ms": t_ms,
+                "bpm": 140 + (i / 120) as u16,
+            }));
+        }
+    }
+    serde_json::json!({
+        "id": "1700000000123",
+        "started_at_ms": 1_700_000_000_000_i64,
+        "duration_s": 600.0,
+        "elapsed_s": 660.0,
+        "distance_m": 1800.0,
+        "average_pace_s_per_km": 333.33,
+        "laps": [
+            { "index": 1, "distance_m": 1000.0, "duration_s": 333.33, "pace_s_per_km": 333.33 }
+        ],
+        "best_efforts": [],
+        "track": track,
+        "unit_system": "Metric",
+        "heart_rate": heart_rate,
+        "pauses": [
+            { "at_s": 200.0, "at_distance_m": 600.0, "duration_s": 60.0, "automatic": false }
+        ],
+        "plan": {
+            "distance_m": 1800.0,
+            "target_time_s": 540.0,
+            "negative_split": { "enabled": true, "ratio": 0.03 }
+        }
+    })
+}
+
+#[tokio::test]
+async fn workout_page_shows_plan_cardio_pauses_and_acceleration() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (user, session) = dev_user_session(&state).await;
+
+    let upload: mpacer_api::models::WorkoutUpload =
+        serde_json::from_value(analysed_workout()).expect("seance analysee relue");
+    assert_eq!(upload.heart_rate.len(), 61);
+    assert_eq!(upload.pauses.len(), 1);
+    assert!(upload.plan.is_some());
+    let payload = serde_json::to_string(&upload).unwrap();
+    mpacer_api::db::upsert_workout(&state.pool, &user.id, &upload, &payload, state.now_ms())
+        .await
+        .unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/workouts/1700000000123", &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_text(response).await;
+    for expected in [
+        "Temps en mouvement",
+        "Temps ecoule",
+        "FC moyenne",
+        "Graphique",
+        "polyline class=\"trace pace\"",
+        "polyline class=\"trace cardio\"",
+        "Plan de course",
+        "Ecart au finish",
+        "Frequence cardiaque",
+        "Derive cardiaque",
+        "Temps de passage",
+        "Chronologie",
+        "Pause 1",
+        "Acceleration",
+        "Reprise",
+    ] {
+        assert!(
+            body.contains(expected),
+            "« {expected} » absent de la page : {body}"
+        );
+    }
+    // La pause est situee et qualifiee.
+    assert!(body.contains("manuelle"), "{body}");
+    // Le plan se compare au realise : cible 9:00 pour 1.8 km.
+    assert!(body.contains("9:00"), "{body}");
+
+    // L'API renvoie les memes donnees brutes.
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/api/v1/workouts/1700000000123", &session))
+        .await
+        .unwrap();
+    let detail: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert_eq!(
+        detail["summary"]["heart_rate"].as_array().unwrap().len(),
+        61
+    );
+    assert_eq!(detail["summary"]["pauses"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        detail["summary"]["plan"]["target_time_s"],
+        serde_json::json!(540.0)
+    );
+}
+
+#[tokio::test]
+async fn an_implausible_heart_rate_is_rejected() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (_user, session) = dev_user_session(&state).await;
+
+    let mut workout = analysed_workout();
+    workout["heart_rate"] = serde_json::json!([{ "t_ms": 0, "bpm": 400 }]);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/workouts")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::COOKIE, &session)
+                .body(Body::from(workout.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = body_text(response).await;
+    assert!(body.contains("frequence cardiaque"), "{body}");
+}
+
 #[tokio::test]
 async fn races_api_creates_reads_updates_and_deletes() {
     let (app, state) = app_or_skip!(test_app(true).await);

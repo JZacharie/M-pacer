@@ -215,6 +215,50 @@ plan.
 > ou avec `adb shell locksettings set-disabled true` (remettre `false` ensuite).
 > Attention : ces reglages vident la batterie, ils sont destines a une montre en charge.
 
+### Montre de developpement : allegements effectues
+
+La Galaxy Watch 6 de test a ete allegee (suppression pour l'utilisateur 0 : les paquets
+restent dans la partition systeme et se reinstalle en une commande). Mesures : ~101 Mo de
+swap liberes, memoire disponible passee de ~216 a ~280 Mo.
+
+**Surcouches Samsung** (aucun usage sur une montre de developpement) :
+
+| Paquet | Quoi |
+|---|---|
+| `com.samsung.android.samsungpay.gear` | Samsung Pay |
+| `com.samsung.android.oneconnect` | SmartThings |
+| `com.samsung.android.app.routines` | Routines |
+| `com.samsung.android.bixby.agent`, `com.samsung.android.bixby.wakeup` | Bixby |
+| `com.samsung.android.app.reminder` | Rappels |
+
+**Applications sans usage sur une montre** :
+
+| Paquet | Quoi |
+|---|---|
+| `com.microsoft.office.outlook` | Outlook |
+| `com.caisseepargne.android.mobilebanking` | Banque |
+| `ch.publisheria.bring` | Bring |
+| `com.cardiogram.v1` | Cardiogram |
+| `com.google.android.apps.fitness` | Google Fit |
+| `com.samsung.android.service.health`, `com.samsung.android.shealthmonitor` | Samsung Health |
+| `com.spotify.music` | Spotify |
+| `com.cronometer.android.gold` | Cronometer |
+| `com.whatsapp` | WhatsApp |
+| `com.acmeaom.android.myradar` | myRadar |
+
+**Conserves volontairement** : Strava, Gboard (clavier), Google Wallet, Agenda, Keep,
+gestionnaire de mots de passe, Stocard, les cadrans de developpement (`com.example.*`).
+
+Restaurer un paquet :
+
+```powershell
+adb shell cmd package install-existing com.whatsapp
+```
+
+> Le premier poste de consommation de la montre n'est pas l'application mais le **cadran**
+> (27 a 33 % du CPU contre 3 % pour M-pacer). Pendant les tests, laisser M-pacer au premier
+> plan evite ce rendu permanent ; le script `-KeepAwake` fait le reste.
+
 ### Contrainte de paquet et de signature
 
 Le Data Layer Wear OS **route les messages par nom de paquet** et n accepte que des

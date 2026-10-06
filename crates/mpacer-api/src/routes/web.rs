@@ -934,8 +934,9 @@ fn layout(title: &str, user: Option<&User>, content: Markup) -> Markup {
 
 /// Largeur du repere SVG (le CSS l'etire sur toute la page).
 const CHART_WIDTH: f64 = 1000.0;
-/// Hauteur du repere du graphique multi-courbes.
-const CHART_HEIGHT: f64 = 340.0;
+/// Fenetre de lissage de l'allure affichee (s) : assez large pour que la
+/// courbe reste lisible une fois sous-echantillonnee.
+const CHART_SMOOTHING_S: f64 = 30.0;
 /// Marge gauche, pour les libelles de valeurs.
 const CHART_LEFT: f64 = 64.0;
 /// Marge droite.
@@ -1011,18 +1012,13 @@ fn polyline_points(points: &[(f64, f64)]) -> String {
 
 /// Graphique multi-courbes : allure, frequence cardiaque et altitude, sur la
 /// meme axe de distance, chacun dans sa bande et sur sa propre echelle.
-fn performance_chart(
-    summary: &mpacer_core::history::WorkoutSummary,
-    units: UnitSystem,
-) -> Markup {
+fn performance_chart(summary: &mpacer_core::history::WorkoutSummary, units: UnitSystem) -> Markup {
     let plot_width = CHART_WIDTH - CHART_LEFT - CHART_RIGHT;
     let total_m = summary.distance_m.max(1.0);
     let pace_band = (16.0, 120.0);
-    let cardio_band = (152.0, 256.0);
-    let elevation_band = (278.0, 326.0);
 
     // Allure : courbe de vitesse lissee, replacee sur l'axe des distances.
-    let curve = mpacer_core::analysis::speed_curve(&summary.track, 10.0);
+    let curve = mpacer_core::analysis::speed_curve(&summary.track, CHART_SMOOTHING_S);
     let step = (curve.len() / 260).max(1);
     let mut pace_series: Vec<(f64, f64)> = Vec::new();
     for sample in curve.iter().step_by(step) {
@@ -1052,16 +1048,32 @@ fn performance_chart(
         .track
         .iter()
         .step_by(elevation_step)
-        .filter_map(|point| {
-            point
-                .elevation_m
-                .map(|elevation| (point.dist_m, elevation))
-        })
+        .filter_map(|point| point.elevation_m.map(|elevation| (point.dist_m, elevation)))
         .collect();
 
-    let pace_range = series_range(&pace_series.iter().map(|(_, pace)| *pace).collect::<Vec<_>>());
-    let cardio_range =
-        series_range(&cardio_series.iter().map(|(_, bpm)| *bpm).collect::<Vec<_>>());
+    // L'altitude n'est affichee que si la montre en a enregistre : sinon la
+    // bande resterait vide et volerait la place du cardio.
+    let has_elevation = !elevation_series.is_empty();
+    let height = if has_elevation { 340.0 } else { 302.0 };
+    let cardio_band = if has_elevation {
+        (152.0, 256.0)
+    } else {
+        (152.0, 288.0)
+    };
+    let elevation_band = (278.0, 326.0);
+
+    let pace_range = series_range(
+        &pace_series
+            .iter()
+            .map(|(_, pace)| *pace)
+            .collect::<Vec<_>>(),
+    );
+    let cardio_range = series_range(
+        &cardio_series
+            .iter()
+            .map(|(_, bpm)| *bpm)
+            .collect::<Vec<_>>(),
+    );
     let elevation_range = series_range(
         &elevation_series
             .iter()
@@ -1096,16 +1108,18 @@ fn performance_chart(
 
     html! {
         div class="chart-block" {
-            svg class="chart multi" viewBox=(format!("0 0 {CHART_WIDTH} {CHART_HEIGHT}")) preserveAspectRatio="none" {
+            svg class="chart multi" viewBox=(format!("0 0 {CHART_WIDTH} {height}")) preserveAspectRatio="none" {
                 rect class="band" x="0" y=(format!("{:.0}", pace_band.0 - 10.0))
                      width=(format!("{CHART_WIDTH:.0}")) height=(format!("{:.0}", pace_band.1 - pace_band.0 + 20.0)) {}
                 rect class="band" x="0" y=(format!("{:.0}", cardio_band.0 - 10.0))
                      width=(format!("{CHART_WIDTH:.0}")) height=(format!("{:.0}", cardio_band.1 - cardio_band.0 + 20.0)) {}
-                rect class="band" x="0" y=(format!("{:.0}", elevation_band.0 - 8.0))
-                     width=(format!("{CHART_WIDTH:.0}")) height=(format!("{:.0}", elevation_band.1 - elevation_band.0 + 16.0)) {}
+                @if has_elevation {
+                    rect class="band" x="0" y=(format!("{:.0}", elevation_band.0 - 8.0))
+                         width=(format!("{CHART_WIDTH:.0}")) height=(format!("{:.0}", elevation_band.1 - elevation_band.0 + 16.0)) {}
+                }
                 @for split in mpacer_core::analysis::splits(summary) {
                     @let x = CHART_LEFT + (split.cumulative_distance_m / total_m).clamp(0.0, 1.0) * plot_width;
-                    line class="grid" x1=(format!("{x:.1}")) y1="6" x2=(format!("{x:.1}")) y2=(format!("{:.0}", CHART_HEIGHT - 6.0)) {}
+                    line class="grid" x1=(format!("{x:.1}")) y1="6" x2=(format!("{x:.1}")) y2=(format!("{:.0}", height - 6.0)) {}
                 }
                 @if !pace_points.is_empty() {
                     polyline class="trace pace" points=(polyline_points(&pace_points)) {}
@@ -1113,7 +1127,7 @@ fn performance_chart(
                 @if !cardio_points.is_empty() {
                     polyline class="trace cardio" points=(polyline_points(&cardio_points)) {}
                 }
-                @if !elevation_points.is_empty() {
+                @if has_elevation {
                     polyline class="trace elevation" points=(polyline_points(&elevation_points)) {}
                 }
                 text class="chart-label" x="4" y=(format!("{:.0}", pace_band.0 + 10.0)) {
@@ -1126,12 +1140,12 @@ fn performance_chart(
                     text class="chart-label" x="4" y=(format!("{:.0}", cardio_band.0 + 10.0)) { (format!("{:.0} bpm", cardio_range.1)) }
                     text class="chart-label" x="4" y=(format!("{:.0}", cardio_band.1)) { (format!("{:.0}", cardio_range.0)) }
                 }
-                @if !elevation_series.is_empty() {
+                @if has_elevation {
                     text class="chart-label" x="4" y=(format!("{:.0}", elevation_band.0 + 10.0)) { (format!("{:.0} m", elevation_range.1)) }
                     text class="chart-label" x="4" y=(format!("{:.0}", elevation_band.1)) { (format!("{:.0}", elevation_range.0)) }
                 }
-                text class="chart-label" x=(format!("{CHART_LEFT:.0}")) y=(format!("{:.0}", CHART_HEIGHT - 2.0)) { "0" }
-                text class="chart-label" x=(format!("{:.0}", CHART_WIDTH - CHART_RIGHT)) y=(format!("{:.0}", CHART_HEIGHT - 2.0)) text-anchor="end" {
+                text class="chart-label" x=(format!("{CHART_LEFT:.0}")) y=(format!("{:.0}", height - 2.0)) { "0" }
+                text class="chart-label" x=(format!("{:.0}", CHART_WIDTH - CHART_RIGHT)) y=(format!("{:.0}", height - 2.0)) text-anchor="end" {
                     (format_distance(total_m, units))
                 }
             }
@@ -1140,7 +1154,7 @@ fn performance_chart(
                 @if !cardio_series.is_empty() {
                     span class="legend-item cardio" { "Frequence cardiaque" }
                 }
-                @if !elevation_series.is_empty() {
+                @if has_elevation {
                     span class="legend-item elevation" { "Altitude" }
                 }
             }

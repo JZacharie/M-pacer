@@ -3,6 +3,8 @@
 Objectif : **le calcul en Rust, la plateforme en Kotlin**. Ce document justifie ce
 choix, decrit l'architecture livree et liste ce qui reste a faire cote montre.
 
+![Vue d'ensemble de l'architecture M-pacer](images/architecture-mpacer.png)
+
 ---
 
 ## 1. Pourquoi Rust, et pourquoi pas du Rust partout

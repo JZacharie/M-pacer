@@ -14,6 +14,18 @@ Index des documents. Le point d'entrée reste le [README principal](../README.md
 | [07 - Musique, BPM et playlists de course](07-musique-bpm-et-playlists.md) | ajouter de la musique à la montre : playlists Spotify ou fichiers personnels, tempo cible, préparation avant une course, contrat d'interface du coeur, de l'API et des écrans |
 | [Guide de déploiement](../deploy/README.md) | déployer concrètement sur le cluster k3s **jo3** : image, secrets, Helm, ingress, TLS, sauvegardes, dépannage |
 
+## Illustrations
+
+| Image | Contenu |
+|---|---|
+| ![Vue d'ensemble de l'architecture M-pacer](images/architecture-mpacer.png) | Vue d'ensemble dessinée : montre Wear OS + cœur Rust embarqué, API Axum, cluster PostgreSQL, Ingress Traefik |
+| [Proposition de logo 1 — cible néon](images/logo-mpacer-cible-neon.jpg) | Logo alternatif : cible d'athlétisme et flèche d'allure, dégradé cyan/rose |
+| [Proposition de logo 2 — montre verte](images/logo-mpacer-montre-verte.jpg) | Logo alternatif : silhouette de montre et coureur sur courbe de progression, vert |
+| [Proposition de logo 3 — montre bleue](images/logo-mpacer-montre-bleue.jpg) | Logo alternatif : montre et flèche de progression, bleu/orange |
+
+La vue d'ensemble est également reprise en tête de
+[02 - Architecture Rust / Wear OS](02-architecture-rust-wearos.md).
+
 ## Parcours conseillés
 
 **Je veux juste essayer** → [README § 5](../README.md#5-démarrage-rapide) : `cargo test` puis `mpacer-sim`.

@@ -1,8 +1,9 @@
 # 07 - Musique, BPM et playlists de course
 
-> **Statut** : contrat d'interface **gele** (v1). Les trois chantiers
-> (coeur Rust, backend, montre/compagnon) s'implementent contre ce document.
-> Toute modification d'interface doit etre reportee ici **avant** le code.
+> **Statut** : contrat d'interface **gele** (v1), **implemente** (6 octobre 2026).
+> Les trois chantiers (coeur Rust, backend, montre/compagnon) ont ete developpes
+> contre ce document. Toute modification d'interface doit etre reportee ici
+> **avant** le code.
 
 ---
 
@@ -108,7 +109,7 @@ pub enum BpmSource { Spotify, Tag, Tap, Manual, Estimated }
 
 /// Reglages musique du moteur (miroir de l'ecran Reglages de la montre).
 pub struct MusicConfig {
-    pub enabled: bool,
+    pub enabled: bool,                  // defaut true (opt-out depuis Reglages)
     /// Reference de calibration : « BPM de reference a l'allure de reference ».
     pub reference_bpm: f64,             // defaut 170.0
     pub reference_pace_s_per_km: f64,   // defaut 300.0 (5:00/km)
@@ -263,6 +264,9 @@ pub fn bpm_from_tags(bytes: &[u8], filename: &str) -> Option<f64>;
   * `VoiceCue::MusicRelax` -> FR « Musique : on ralentit. », EN « Music: ease off. »
   * `VoiceCue::MusicTempo` -> FR « Rythme {bpm}. », EN « Tempo {bpm}. »
     (une seule fois au demarrage de la seance si la musique est active).
+  * `VoiceSnapshot` gagne un champ **additif** `music_bpm: Option<f64>` : le
+    contrat ne porte pas de charge utile dans `VoiceCue::MusicTempo`, le BPM
+    voyage donc dans l'instantane.
 
 ## 5. Contrat FFI (JNI JSON)
 
@@ -337,6 +341,7 @@ Index : `music_tracks(playlist_id, position)`,
 | GET | `/api/v1/music/playlists/{id}` | `{"id","name","source","target_bpm","tracks":[{"id","position","title","artist","album","duration_s","bpm","bpm_source","size_bytes","mime","spotify_uri","download_url"}]}` - `download_url` vaut `null` si la piste n'a pas de fichier |
 | GET | `/api/v1/music/tracks/{id}/file` | octets audio, `Content-Type`, `Accept-Ranges: bytes`, `206` si `Range` |
 | POST | `/api/v1/music/playlists/{id}/ack` | corps `{"track_ids":["..."]}` -> `{"playlist_id","downloaded"}` |
+| POST | `/api/v1/music/playlists` | téléversement **depuis l'application compagnon** : `multipart/form-data` avec `name` + `files` répétés -> `{"playlist_id","name","track_count","total_bytes","ready_track_count"}` ; mêmes erreurs que `/music/upload` (`400`, `413`, `415`) |
 | GET | `/api/v1/music/prepare` | `{"plan": null}` ou `{"plan":{"id","playlist_id","name","target_bpm","race_id","race_name","requested_at_ms","tracks":[...]}}` (dernier plan non acquitte) |
 | POST | `/api/v1/music/prepare/ack` | corps `{"plan_id":"..."}` -> `{"ok":true}` |
 
@@ -436,7 +441,13 @@ principe « la montre est la source de verite » deja applique aux seances.
   « Musique » des reglages ;
 * avant la course : « Preparer » liste les playlists du backend, telecharge la
   fiche (Spotify) et les fichiers (upload), affiche la progression et l'espace
-  utilise.
+  utilise ;
+* source **spotify** : M-pacer ne telecharge aucun octet audio ; il pilote la
+  session de l'application Spotify par `android.media.session.MediaController`
+  (Media3 1.5.x n'accepte pas le jeton d'une session tierce). L'acces aux
+  notifications est donc necessaire, et une session tierce n'expose que
+  lecture/pause/suivant/precedent : M-pacer ne peut pas choisir un morceau
+  arbitraire dans l'application Spotify, il enchaine les pistes.
 
 ### 7.3 Application compagnon
 
@@ -462,3 +473,30 @@ navigateur, avec le jeton de session du telephone).
 * lecture de l'audio Spotify par M-pacer (impossible sans contourner le DRM) ;
 * synchronisation du BPM avec la cadence mesuree par la montre (v2 : boucle
   fermee capteur de pas -> consigne de tempo).
+## 10. Etat d'implementation (6 octobre 2026)
+
+| Chantier | Livre | Preuve |
+|---|---|---|
+| Coeur | `crates/mpacer-core/src/music.rs`, integration `engine.rs`/`voice.rs`, 4 commandes FFI | `cargo test --workspace` : core 136 tests, ffi 8 tests ; `cargo clippy --workspace --all-targets -- -D warnings` propre |
+| Backend | migration `0003_music.sql`, `spotify.rs`, `bpm.rs`, `media.rs`, 7 routes API appareil, page `/music` et 12 routes web | `cargo test -p mpacer-api --test api` : **23 tests verts** contre un PostgreSQL reel ; page `/music` verifiee en service |
+| Montre | package `com.mpacer.watch.music`, ecran `MusicScreen`, pastille BPM, directives appliquees par `TrackingService` | `gradlew :app:assembleDebug :companion:assembleDebug` : BUILD SUCCESSFUL ; les trois `libmpacer_ffi.so` regeneres contiennent `set_music_playlist` et `on_cadence` |
+| Compagnon | onglet Musique, envoi du plan par Data Layer, televersement par l'endpoint appareil | idem (APK telephone produit) |
+| Simulateur | option `--music` : consigne de tempo et lecteur factice | `cargo run -p mpacer-sim -- --music` |
+| Deploiement | volume `/data/media` (PVC jo3 ou `emptyDir`), variables Spotify | `helm lint` + `helm template` (valeurs par defaut et jo3) |
+
+Ecarts au contrat, tous documentes et valides :
+
+* `download_url` est **relatif** (la montre joint le backend par une autre URL
+  que `public_url`) ;
+* `music_tracks.downloaded_at_ms` ajoutee pour que l'accuse de telechargement
+  de la montre ait un effet reel ;
+* `POST /api/v1/music/playlists` ajoute pour le compagnon, qui ne possede qu'un
+  jeton d'appareil (jamais de cookie de session) ;
+* `VoiceSnapshot.music_bpm` ajoute (champ additif) faute de charge utile dans
+  `VoiceCue::MusicTempo` ;
+* `MusicConfig::enabled` vaut **true** par defaut (opt-out depuis les Reglages
+  de la montre) et `target_cadence_spm` est bornee a 140..=210 : au-dela de
+  ~3:30/km la cadence sature, la vitesse vient de la foulee ;
+* Spotify : `audio-features` reste *best effort* (endpoint restreint depuis le
+  27/11/2024) ; le BPM vient sinon des balises du fichier, du tap-tempo ou de la
+  saisie manuelle.

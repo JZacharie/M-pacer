@@ -37,9 +37,16 @@ android/
       MpacerFormat.kt      formatage (existant)
       SyncClient.kt        NOUVEAU : device flow, envoi des seances, jeton chiffre
       WearSyncListener.kt  NOUVEAU : reception des seances envoyees par le telephone
-      MainActivity.kt      navigation course / reglages / synchronisation
+      MainActivity.kt      navigation course / reglages / synchronisation / musique
       ui/MainScreen.kt, ui/SettingsScreen.kt  ecrans ronds (existants)
       ui/SyncScreen.kt     NOUVEAU : code d appairage, etat, seances en attente
+      ui/MusicScreen.kt    NOUVEAU : bibliotheque, preparation avant course, lecture
+      music/MusicModels.kt, MusicDto.kt       modeles du contrat docs/07
+      music/MusicLibrary.kt                   fiche + fichiers telecharges (hors ligne)
+      music/MusicPlayer.kt, MusicPlaybackService.kt  Media3 ExoPlayer + MediaSessionService
+      music/SpotifyRemote.kt                  telecommande de l app Spotify (session tierce)
+      music/MediaSessionAccessService.kt      acces aux sessions medias (notifications)
+      music/MusicSession.kt                   pont vers le coeur (reglages, piste, cadence)
   companion/                                 module telephone
     build.gradle.kts                         Material 3, Compose, OkHttp, Wearable
     proguard-rules.pro
@@ -50,8 +57,8 @@ android/
       MpacerApi.kt         client HTTP du backend
       ApiModels.kt         modeles JSON (serde snake_case)
       TokenStore.kt        jeton dans EncryptedSharedPreferences
-      WearSync.kt          MessageClient / DataClient + installation montre
-      ui/                  Theme, Format, Login, WorkoutList, WorkoutDetail, Send
+      WearSync.kt          MessageClient / DataClient + installation montre + plan musique
+      ui/                  Theme, Format, Login, WorkoutList, WorkoutDetail, Send, Music
 ```
 
 ## Prerequis
@@ -185,6 +192,29 @@ curl -s -X POST http://<backend>/api/v1/device/token -H "Content-Type: applicati
   - `DataClient` + `Asset` au-dela (trace GPS complete).
   La montre declare la capacite `mpacer_sync` (`app/src/main/res/values/wear.xml`) et
   recoit les deux formes dans `WearSyncListener.kt`.
+
+## Musique (lecture et tempo)
+
+Le coeur Rust decide *quoi* ecouter et *a quel tempo* ; la montre ne fait que
+jouer et remonter l'etat. Contrat complet : [docs/07](../docs/07-musique-bpm-et-playlists.md).
+
+- **Source locale** (fichiers que vous possedez) : `MusicLibrary.kt` telecharge la
+  fiche et les fichiers depuis `GET /api/v1/music/playlists`, puis
+  `GET /api/v1/music/tracks/{id}/file` (avec `Range`, reprise sur `.part`). Tout
+  est stocke dans `filesDir/music/` : la montre joue sans telephone ni reseau.
+- **Source Spotify** : aucun octet audio n'est telecharge (DRM). `SpotifyRemote.kt`
+  pilote l'application Spotify installee sur la montre via la session media
+  exposee par le systeme ; l'acces aux notifications doit etre accorde (l'ecran
+  Musique propose le reglage). Une session tierce n'expose que
+  lecture/pause/suivant/precedent.
+- **Preparation avant une course** : onglet Musique de la montre, ou onglet Musique
+  de l'application compagnon. Le serveur met en file un *plan de telechargement*
+  (`GET /api/v1/music/prepare`) ; la montre le voit au prochain reveil et
+  telecharge ce qu'elle peut jouer.
+- **Pendant la seance**, `TrackingService` applique la directive du moteur
+  (`Play`, `Keep`, `Boost`, `Relax`, `SkipTo`, `Pause`, `Resume`) et remonte la
+  piste en cours (`music_now_playing`). Le BPM cible est affiche sous le panneau
+  d'assistant, avec une fleche quand le moteur accelere ou calme la musique.
 
 ### Montre de developpement : ecran toujours allume
 

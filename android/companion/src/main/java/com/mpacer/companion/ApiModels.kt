@@ -130,3 +130,46 @@ data class Stats(
 
 @Serializable
 data class UploadResponse(val id: String = "", val replaced: Boolean = false)
+
+// ---------------------------------------------------------------- musique
+
+/** Ligne de GET /api/v1/music/playlists (docs/07 section 6.3). */
+@Serializable
+data class MusicPlaylistRow(
+    val id: String,
+    val name: String,
+    val source: String = "upload",
+    @SerialName("target_bpm") val targetBpm: Double? = null,
+    @SerialName("track_count") val trackCount: Int = 0,
+    @SerialName("total_bytes") val totalBytes: Long = 0,
+    @SerialName("ready_track_count") val readyTrackCount: Int = 0,
+    @SerialName("updated_at_ms") val updatedAtMs: Long = 0,
+)
+
+@Serializable
+data class MusicPlaylistListResponse(
+    val playlists: List<MusicPlaylistRow> = emptyList(),
+)
+
+/** Corps envoye a la montre sur le chemin Data Layer /mpacer/music (docs/07 section 7.3). */
+@Serializable
+data class MusicPlanMessage(
+    val kind: String = "music_plan",
+    @SerialName("playlist_id") val playlistId: String,
+    val name: String = "",
+    @SerialName("target_bpm") val targetBpm: Double? = null,
+    @SerialName("requested_at_ms") val requestedAtMs: Long = 0,
+)
+
+/** Fichier audio choisi sur le telephone, pret a etre televerse. */
+class UploadFile(val name: String, val mime: String?, val bytes: ByteArray)
+
+/** Reponse de POST /api/v1/music/playlists (televersement, jeton d'appareil). */
+@Serializable
+data class MusicUploadResponse(
+    @SerialName("playlist_id") val playlistId: String = "",
+    val name: String = "",
+    @SerialName("track_count") val trackCount: Int = 0,
+    @SerialName("total_bytes") val totalBytes: Long = 0,
+    @SerialName("ready_track_count") val readyTrackCount: Int = 0,
+)

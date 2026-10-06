@@ -95,4 +95,67 @@
   document.querySelectorAll(".chart rect").forEach(function (barre, index) {
     barre.style.animationDelay = Math.min(index * 28, 400) + "ms";
   });
+
+  // ------------------------------------------------ tap-tempo (page /music)
+  // L'utilisateur tape en rythme : la mediane des intervalles donne le BPM.
+  // Le calcul est fait aussi cote serveur (mpacer_core::music::tap_tempo) quand
+  // les instants sont transmis, mais l'affichage immediat evite un aller-retour.
+  (function () {
+    "use strict";
+
+    function tempoMedian(instants) {
+      var intervalles = [];
+      for (var i = 1; i < instants.length; i++) {
+        var ecart = instants[i] - instants[i - 1];
+        // Un intervalle aberrant (hesitation, double clic) fausserait la mediane.
+        if (ecart >= 200 && ecart <= 2000) intervalles.push(ecart);
+      }
+      if (intervalles.length < 3) return null;
+      intervalles.sort(function (a, b) { return a - b; });
+      var milieu = Math.floor(intervalles.length / 2);
+      var mediane = intervalles.length % 2
+        ? intervalles[milieu]
+        : (intervalles[milieu - 1] + intervalles[milieu]) / 2;
+      if (mediane <= 0) return null;
+      return 60000 / mediane;
+    }
+
+    var formulaires = Array.prototype.slice.call(
+      document.querySelectorAll("form[data-bpm-track]")
+    );
+    formulaires.forEach(function (formulaire) {
+      var id = formulaire.getAttribute("data-bpm-track");
+      var champ = formulaire.querySelector('input[name="bpm"]');
+      var source = formulaire.querySelector('input[name="source"]');
+      var bouton = document.querySelector('button[data-tap="' + id + '"]');
+      if (!champ || !bouton) return;
+
+      var instants = [];
+      var minuterie = null;
+
+      bouton.addEventListener("click", function () {
+        var maintenant = Date.now();
+        // Une pause de plus de 3 s repart de zero : c'est une nouvelle mesure.
+        if (instants.length && maintenant - instants[instants.length - 1] > 3000) {
+          instants = [];
+        }
+        instants.push(maintenant);
+        if (instants.length > 12) instants.shift();
+
+        var bpm = tempoMedian(instants);
+        bouton.textContent = bpm ? "tapper " + Math.round(bpm) + " (" + instants.length + ")" : "tapper (" + instants.length + ")";
+        if (bpm) {
+          champ.value = String(Math.round(bpm));
+          if (source) source.value = "tap";
+          bouton.classList.add("ok");
+        }
+
+        if (minuterie) window.clearTimeout(minuterie);
+        minuterie = window.setTimeout(function () {
+          bouton.textContent = "tapper";
+          bouton.classList.remove("ok");
+        }, 4000);
+      });
+    });
+  })();
 })();

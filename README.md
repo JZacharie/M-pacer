@@ -12,17 +12,24 @@ synchronisation de vos séances.
 > d'origine n'est utilisé. Les fonctionnalités sont réimplémentées à partir de la
 > documentation publique.
 
+**Documentation illustrée** — la montre, le site web, l'architecture et le démarrage :
+<https://jzacharie.github.io/M-pacer/>. Source dans [`site/`](site/) (Markdown + une mise en
+page commune), publiée par [`.github/workflows/pages.yml`](.github/workflows/pages.yml) dès que
+GitHub Pages est activé sur le dépôt (Settings → Pages → Source : GitHub Actions).
+
 ---
 
 ## 1. Ce que fait le projet
 
 | Composant | Rôle | État |
 |---|---|---|
-| **Montre Wear OS** | Enregistre la séance (GPS 1 Hz), calcule l'allure, guide le coureur (voix, shadow runner) | Squelette Kotlin, non compilé ici (pas de SDK Android) |
-| **Cœur Rust** | Tous les algorithmes : allure lissée, tours, assistant, voix, GPX, historique, **analyse de séance** | **Fait, testé** (93 tests) |
-| **Backend Rust** | API de synchronisation, OAuth Google, interface web, PostgreSQL | **Fait, testé** (23 tests) |
+| **Montre Wear OS** | Enregistre la séance (GPS 1 Hz), calcule l'allure, guide le coureur (voix, shadow runner), archive localement et synchronise | **Compilée** (APK montre et téléphone produits le 6 octobre 2026) ; validation terrain à faire |
+| **Application téléphone** (`android/companion`) | Connexion au backend, liste et détail des séances, import d'un fichier de séance, envoi vers la montre | **Compilée** ; à valider sur appareils réels |
+| **Cœur Rust** | Tous les algorithmes : allure lissée, tours, assistant, voix, GPX, historique, **analyse de séance**, **musique et tempo** | **Fait, testé** (136 tests) |
+| **Backend Rust** | API de synchronisation, OAuth Google, interface web, PostgreSQL | **Fait, testé** (tests d'intégration exécutés contre PostgreSQL) |
 | **Analyse de séance** | Plan de course contre réalisé, fréquence cardiaque et zones, temps de pause, temps d'accélération | **Fait, testé** |
 | **Courses à venir** | Fiches de course, planning des échéances, suivi des éléments à préparer | **Fait, testé** |
+| **Musique et BPM** | Playlists Spotify ou fichiers personnels, préparation hors ligne avant une course, tempo cible déduit de l'allure, Boost/Relax selon le plan, écran Musique sur la montre | **Fait, testé** (cœur, API, tests d'intégration) ; compilation montre et téléphone validée |
 | **PostgreSQL** | Stockage des séances, géré par CloudNativePG dans le cluster | **Déployé sur jo3** (PostgreSQL 18.6) |
 | **Chart Helm** | Déploiement complet (app + base + ingress + TLS) | **Validé** (`helm lint` + `--dry-run=server` sur jo3) |
 
@@ -42,6 +49,25 @@ nutrition et ravitaillement, informations importantes, autres informations — u
 **planning** qui met bout à bout toutes les échéances à venir, et un **suivi**
 d'éléments à cocher (« dossard retiré », « hôtel réservé »…). Détail complet :
 [docs/05-courses-et-planning.md](docs/05-courses-et-planning.md).
+
+**La musique.** La montre lit la musique pendant la course, et le tempo (BPM)
+devient un outil de pacing : le moteur déduit un **BPM cible** de l'allure visée,
+choisit le morceau qui colle à ce tempo, **accélère la musique** quand le coureur
+est en retard sur son plan et la calme quand il est en avance ou que le cardio
+s'emballe. Les playlists se préparent depuis l'interface web (`/music`) :
+import d'une playlist **Spotify** (titres + BPM) ou téléversement de **fichiers
+personnels**, puis « Envoyer sur la montre » qui met en file un plan de
+téléchargement avant la course. Spotify ne prêtant pas son audio, M-pacer
+télécommande l'application Spotify de la montre et ne télécharge les octets que
+pour les fichiers que vous possédez. Détail, limites du DRM et contrat
+d'interface : [docs/07](docs/07-musique-bpm-et-playlists.md).
+
+**La montre.** Elle enregistre la séance sans le téléphone (GPS 1 Hz dans un service de
+premier plan), affiche l'allure lissée sur 2 minutes, le feu de statut GPS et un panneau
+d'assistant à quatre modes — allure seule, temps de finish estimé, shadow runner, course à
+distance — annonce les informations à la voix, conserve chaque séance dans son historique
+local et l'envoie au backend à la fin, automatiquement si elle est appairée. Détail :
+[`android/README.md`](android/README.md).
 
 ## 2. Architecture
 
@@ -66,6 +92,10 @@ d'éléments à cocher (« dossard retiré », « hôtel réservé »…). Déta
                │ Ingress traefik (entrypoint websecure) + cert-manager
         Navigateur / téléphone
 ```
+
+Un troisième module Android, l'application téléphone **compagnon**, partage le même cœur et
+le même backend : elle liste les séances, en importe une et peut la renvoyer vers la montre
+par le Data Layer Wear OS (message sous 90 Ko, sinon `DataClient` + `Asset`).
 
 **Trois principes structurants**
 
@@ -93,7 +123,8 @@ d'éléments à cocher (« dossard retiré », « hôtel réservé »…). Déta
 | `workout.rs` | Machine à états de séance : démarrage suspendu, pause, auto-pause, reprise |
 | `race_plan.rs` | Negative split et **shadow runner** (plan exact à l'arrivée) |
 | `assistant.rs` | Les 4 modes : allure, temps estimé, plan de course, course à distance |
-| `voice.rs` | Annonces vocales (planification + rédaction FR/EN) |
+| `voice.rs` | Annonces vocales (planification + rédaction FR/EN), annonces musique (Boost/Relax/Tempo) |
+| `music.rs` | Musique de course : **calibration tempo/allure**, directeur d'orchestre (Keep/Boost/Relax/SkipTo), tap-tempo, lecture des balises BPM (ID3v2, Vorbis, MP4) |
 | `best_distances.rs` | Meilleurs 1/5/10 km et 1/5 mi dans une séance |
 | `history.rs` | Format d'échange `.pac` version 2 (tours, cardio, pauses, plan, trace) |
 | `gpx.rs` | Export GPX 1.1 |
@@ -114,19 +145,24 @@ d'éléments à cocher (« dossard retiré », « hôtel réservé »…). Déta
 | `src/auth/mod.rs` | Sessions (JWT en cookie), extraction de l'utilisateur, hachage des jetons |
 | `src/auth/google.rs` | OAuth 2.0 + PKCE, vérification de l'`id_token` via JWKS |
 | `src/auth/device.rs` | Appairage montre ↔ navigateur (device authorization grant) |
-| `src/routes/api.rs` | API `/api/v1/*` : ingestion, listes, stats, export GPX |
-| `src/routes/web.rs` | Pages web (maud) : tableau de bord, détail, appairage, jetons, **fiches de course et planning** |
+| `src/avatar.rs` | Photo de profil Google : `GET /avatar` (proxy avec cache mémoire, hôtes `*.googleusercontent.com` uniquement) et pastille SVG d'initiales en repli |
+| `src/routes/api.rs` | API `/api/v1/*` : appairage (`device/code`, `device/token`), `me`, ingestion et lecture des séances, export GPX, courses, statistiques, export `.pac`, **musique** (playlists, fiche, fichier audio avec `Range`, accusé, plan de préparation), version |
+| `src/spotify.rs` | OAuth 2.0 + PKCE Spotify et API Web : playlists de l'utilisateur, recherche, import ; `audio-features` en *best effort* (endpoint restreint par Spotify depuis le 27/11/2024) |
+| `src/bpm.rs` | BPM d'une piste : balises du fichier (délégué au cœur) et tap-tempo |
+| `src/media.rs` | Réception `multipart` (navigateur et application téléphone), écriture sur disque, nettoyage en cas d'échec |
+| `src/routes/web.rs` | Pages web (maud) : accueil, tableau de bord, **analyse de séance**, statistiques, appairage, jetons, **fiches de course, planning et suivi**, **page `/music`** (playlists, import Spotify, téléversement, tap-tempo, envoi vers la montre), connexion OAuth Google et Spotify, **pastille de compte** (photo Google) dans l'en-tête |
 | `src/routes/mod.rs` | Routeur global, sondes `/healthz` et `/readyz` |
 | `src/assets.rs` + `static/` | CSS et JS embarqués dans le binaire |
-| `migrations/0001_init.sql` | Schéma PostgreSQL initial (idempotent, rejoué au démarrage) |
+| `migrations/0001_init.sql` | Schéma initial : utilisateurs, jetons d'appareil, codes d'appairage, séances, états OAuth (idempotent, rejoué au démarrage) |
 | `migrations/0002_races.sql` | Courses à venir et suivi de préparation (idempotent aussi) |
-| `tests/api.rs` | 16 tests d'intégration (flux complet, schéma dédié par test) |
+| `migrations/0003_music.sql` | Musique : playlists, pistes (BPM, origine, fichier), plans de téléchargement vers la montre, comptes Spotify liés (idempotent aussi) |
+| `tests/api.rs` | **24 tests d'intégration** (flux complet, musique, Spotify optionnel, avatar, schéma dédié par test) ; sans `MPACER_TEST_DATABASE_URL`, ils affichent un message et s'arrêtent. Un test supplémentaire, ignoré par défaut (accès réseau à `googleusercontent.com`), vérifie le proxy de la photo Google : `cargo test -p mpacer-api --test api -- --ignored` |
 
 ### 3.3 Les autres crates
 
 | Dossier | Contenu |
 |---|---|
-| `crates/mpacer-client/` | Client de synchronisation (appairage, envoi) utilisé par le simulateur et la montre |
+| `crates/mpacer-client/` | Client de synchronisation (appairage, envoi) utilisé par le simulateur ; la montre embarque son propre client Kotlin (`SyncClient.kt`) |
 | `crates/mpacer-ffi/` | Pont C ABI JSON exposé au shell Android (aucun panic ne traverse la frontière) |
 | `crates/mpacer-sim/` | Simulateur : rejoue une course synthétique, écrit un GPX, synchronise vers le backend |
 
@@ -139,14 +175,16 @@ d'éléments à cocher (« dossard retiré », « hôtel réservé »…). Déta
 | `charts/mpacer/values-jo3.yaml` | **Valeurs du cluster jo3** (traefik, regcred, CNPG, amd64) |
 | `charts/mpacer/templates/postgresql.yaml` | `Cluster` CloudNativePG + sauvegardes planifiées (option) |
 | `charts/mpacer/templates/deployment.yaml` | Application (uid 10001, rootfs read-only, sondes, env DB) |
-| `charts/mpacer/templates/secret.yaml` | Secret de session généré et conservé entre upgrades + identifiants Google |
-| `charts/mpacer/templates/configmap.yaml` | Configuration non sensible |
+| `charts/mpacer/templates/secret.yaml` | Secret de session généré et conservé entre upgrades + identifiants Google (et Spotify si activé) |
+| `charts/mpacer/templates/configmap.yaml` | Configuration non sensible, dont `MPACER_MEDIA_DIR` et l'URI de redirection Spotify |
 | `charts/mpacer/templates/ingress.yaml` | Ingress traefik (`websecure`) |
 | `charts/mpacer/templates/ingress-cloudflare.yaml` | Ingress public via Cloudflare Tunnel (option) |
 | `charts/mpacer/templates/certificate.yaml` | Certificat TLS cert-manager (DNS-01 Cloudflare) |
-| `charts/mpacer/templates/pvc.yaml` | Volume applicatif (désactivé : PostgreSQL gère le stockage) |
+| `charts/mpacer/templates/pvc.yaml` | Volume applicatif : **fichiers audio téléversés** (`/data/media`) ; sans PVC, un `emptyDir` est monté à la place |
 | `charts/mpacer/templates/service.yaml` | Service ClusterIP |
 | `charts/mpacer/templates/serviceaccount.yaml` | Compte de service sans jeton monté |
+| `charts/mpacer/templates/externalsecret.yaml` | ExternalSecret (option) : secret applicatif fourni par un `ClusterSecretStore` (Vault) au lieu d'être créé par le chart |
+| `charts/mpacer/templates/NOTES.txt` | Instructions affichées après `helm install` (sondes, OAuth, appairage, simulateur) |
 | `charts/mpacer/templates/_helpers.tpl` | Noms, labels, secret applicatif PostgreSQL |
 | `deploy/Dockerfile` | Image multi-étapes (binaire seul, utilisateur non privilégié) |
 | `deploy/build-image.ps1` | Construction/publication (podman, mono-arch ou multi-arch) |
@@ -157,16 +195,29 @@ d'éléments à cocher (« dossard retiré », « hôtel réservé »…). Déta
 
 | Fichier | Contenu |
 |---|---|
-| `android/app/build.gradle.kts` | Module Wear OS, cargo-ndk, ABIs |
-| `android/app/src/main/AndroidManifest.xml` | Permissions, service de premier plan `location|health` |
+| `local-ci.ps1` | Diagnostic de l'environnement (JDK, SDK, NDK, cargo-ndk), compilation du cœur pour les trois ABI, assemblage Gradle, installation, veille de la montre de test |
+| `android/app/build.gradle.kts` | Module Wear OS, cargo-ndk, ABIs, `DEFAULT_API_URL` |
+| `android/app/src/main/AndroidManifest.xml` | Permissions, services de premier plan `location|health` et `mediaPlayback`, listener Data Layer |
 | `android/.../MpacerCore.kt` | Pont JNI, commandes JSON, lecture de `EngineOutput` |
-| `android/.../TrackingService.kt` | Service de premier plan, boucle GPS 1 Hz, notification |
+| `android/.../MainActivity.kt` | Navigation entre course, réglages et synchronisation, demande de permissions |
+| `android/.../TrackingService.kt` | Service de premier plan, boucle GPS 1 Hz (3 s en pause), notification, archivage et envoi en fin de séance |
 | `android/.../VoiceCoach.kt` | Synthèse vocale + focus audio (duck / pause / ignorer) |
-| `android/.../WorkoutArchive.kt` | Historique local des séances |
-| `android/.../ui/MainScreen.kt` | Écran rond : allure, distance, temps, feu GPS, panneau assistant |
-| `android/.../ui/SettingsScreen.kt` | Mode d'assistant, unités, voix |
-| `android/app/src/main/cpp/mpacer_jni.c` | Shim JNI (40 lignes) vers la C ABI Rust |
-| `android/README.md` | Prérequis et compilation |
+| `android/.../music/MusicLibrary.kt` | Bibliothèque hors ligne : fiche et fichiers téléchargés depuis le backend, index local, progression |
+| `android/.../music/MusicPlayer.kt` + `MusicPlaybackService.kt` | Lecture locale Media3/ExoPlayer dans un service de premier plan `mediaPlayback` |
+| `android/.../music/SpotifyRemote.kt` | Télécommande de l'application Spotify de la montre (session média tierce) : aucun octet audio téléchargé |
+| `android/.../music/MusicSession.kt` | Pont vers le cœur : réglages, playlist, piste en cours, cadence |
+| `android/.../ui/MusicScreen.kt` | Écran rond Musique : bibliothèque, préparation avant course, lecture (titre, BPM, tempo cible) |
+| `android/.../WorkoutArchive.kt` | Historique local des séances (stockage privé de l'application) |
+| `android/.../SyncClient.kt` | Appairage par code, envoi des séances, jeton chiffré, identifiants déjà envoyés |
+| `android/.../WearSyncListener.kt` | Réception des séances envoyées par le téléphone (Data Layer) |
+| `android/.../MpacerFormat.kt` | Formatage local (allure, durée, distance) ; aucun calcul de course |
+| `android/.../ui/MainScreen.kt` | Écran rond : allure, distance, temps, feu GPS, panneau assistant, pastille musique (BPM cible, Boost/Relax), commandes |
+| `android/.../ui/SettingsScreen.kt` | Mode d'assistant, unités, voix, musique (activation, annonces, BPM de référence) |
+| `android/.../ui/SyncScreen.kt` | Appairage, état de connexion, séances en attente |
+| `android/.../ui/Theme.kt` | Palette et voyant de statut GPS |
+| `android/app/src/main/cpp/mpacer_jni.c` | Shim JNI (une quarantaine de lignes) vers la C ABI Rust |
+| `android/companion/...` | Application téléphone : `AppViewModel`, `MpacerApi`, `TokenStore`, `WearSync`, écrans Compose (connexion, liste, détail, envoi) |
+| `android/README.md` | Prérequis, commandes de compilation, appairage et dépannage |
 
 ### 3.6 Documentation
 
@@ -177,8 +228,11 @@ d'éléments à cocher (« dossard retiré », « hôtel réservé »…). Déta
 | `docs/03-plan-action.md` | Plan de développement de l'application montre |
 | `docs/04-backend-web-et-deploiement.md` | Backend, auth, API, modèle de données, exploitation |
 | `docs/05-courses-et-planning.md` | Courses à venir : fiches, planning, suivi, API et modèle de données |
+| `docs/05-plan-action-jo3.md` | Plan d'action GitOps et déploiement sur le cluster jo3 (lots, ordre d'exécution, points bloquants) |
 | `docs/06-analyse-seance.md` | Analyse d'une séance : veille concurrente (Strava, Garmin, Polar…), écrans, formules des zones FC, du découplage et de l'accélération |
+| `docs/07-musique-bpm-et-playlists.md` | Musique et BPM : playlists Spotify ou fichiers personnels, calibration tempo / allure, directeur d'orchestre, contrat FFI, API et écrans — **implémenté** |
 | `docs/README.md` | Index des documents |
+| [`site/`](site/) | **Documentation en ligne** (GitHub Pages) : présentation illustrée de la montre et du site web, architecture, démarrage |
 
 ## 4. Plan d'action complet
 
@@ -223,15 +277,17 @@ d'éléments à cocher (« dossard retiré », « hôtel réservé »…). Déta
 | **`helm upgrade --install`** | ⏳ *à faire* | Pod prêt, certificat émis, `/readyz` = ready |
 | Activation de l'accès public (montre hors domicile) | ⏳ *option* | `cloudflareIngress.enabled=true` |
 
-### Phase 4 — Application montre 🔲 *à faire*
+### Phase 4 — Application montre 🔶 *en cours*
 
 | Tâche | Statut | Critère d'acceptation |
 |---|---|---|
-| Chaîne Android (JDK, SDK, NDK, cargo-ndk) | 🔲 | `mpacer_version()` affiché sur la montre |
+| Chaîne Android (JDK, SDK, NDK, cargo-ndk) | ✅ | `pwsh ./local-ci.ps1 -Target all` : APK montre (36,4 Mo) et téléphone (11,5 Mo) produits, aucune erreur Kotlin |
+| Écran principal + service GPS | ✅ | Écran rond, service de premier plan `location|health`, GPS 1 Hz ; 10 km sans le téléphone à valider |
+| Voix | ✅ | Annonces rédigées par le cœur, prononcées par le TTS, focus audio (duck / pause / ignorer) |
+| Synchronisation depuis la montre | ✅ | Appairage par code, archive locale, envoi automatique en fin de séance, idempotent |
+| Application téléphone (compagnon) | ✅ | Liste et détail des séances, import, envoi vers la montre par le Data Layer |
 | Capteur de fréquence cardiaque | 🔲 | la montre alimente le moteur (`on_heart_rate`) : zones, dérive et graphique cardio exploitables |
-| Écran principal + service GPS | 🔲 | 10 km enregistrés sans le téléphone |
-| Voix, boutons du casque, mode ambiant | 🔲 | Séance guidée sans regarder l'écran |
-| Synchronisation depuis la montre | 🔲 | Séance visible dans l'interface web |
+| Boutons du casque, mode ambiant | 🔲 | Séance guidée sans regarder l'écran : les commandes existent dans le cœur, aucun `MediaSession` ne les déclenche encore |
 | Validation terrain | 🔲 | Écart < 3 % avec une montre de référence, batterie < 25 %/h |
 
 ### Phase 5 — Exploitation et durcissement 🔲 *à faire*
@@ -239,7 +295,7 @@ d'éléments à cocher (« dossard retiré », « hôtel réservé »…). Déta
 | Tâche | Statut | Critère d'acceptation |
 |---|---|---|
 | Sauvegardes planifiées (`ScheduledBackup`) | 🔲 | Restauration testée |
-| Supervision (métriques, alertes) | 🔲 | Alerte si `/readyz` échoue |
+| Supervision (métriques, alertes) | 🔲 | Alerte sur l'état rapporté par `/readyz` (le corps JSON porte `database: true|false` ; le code HTTP reste 200) |
 | Limitation de débit sur l'API | 🔲 | 429 au-delà du seuil |
 | CI : publication d'image + déploiement | 🔲 | Pipeline vert de bout en bout |
 
@@ -257,6 +313,9 @@ avec backend temps réel.
 cargo test --workspace
 
 cargo run -p mpacer-sim -- --mode plan --distance 10000 --time 3000 --split 0.03 --gpx trace.gpx
+
+# Avec la musique : le moteur choisit le tempo, la simulation joue les pistes
+cargo run -p mpacer-sim -- --mode plan --distance 10000 --time 3000 --music
 ```
 
 ```text
@@ -267,6 +326,16 @@ cargo run -p mpacer-sim -- --mode plan --distance 10000 --time 3000 --split 0.03
   tour  3 : 1.00 km en 4:53
 ```
 
+Le mode `--music` ajoute la consigne de tempo à chaque ligne et fait jouer les
+pistes par la simulation, exactement comme la montre le fera :
+
+```text
+    >> lecture : Rythme 170 (170 bpm)
+[VERT ] t=  2:00 dist=0.51 km allure= 3:51 | ecart plan +114 m | musique 164 bpm cad=203 stable (en avance sur le plan) - Rythme 170
+    >> lecture : Tempo 176 (176 bpm)
+[VERT ] t=  4:20 dist=1.14 km allure= 5:30 | ecart plan +278 m | musique 176 bpm cad=164 stable (allure trop lente) - Tempo 176
+```
+
 ### 5.2 Backend en local
 
 ```bash
@@ -274,7 +343,8 @@ cargo run -p mpacer-sim -- --mode plan --distance 10000 --time 3000 --split 0.03
 export MPACER_DATABASE_URL="postgresql://mpacer:mpacer@127.0.0.1:5432/mpacer?sslmode=disable"
 export MPACER_DEV_AUTH=1 MPACER_PUBLIC_URL=http://localhost:8080
 cargo run -p mpacer-api
-# http://localhost:8080 → « Connexion développeur »
+# http://localhost:8080 → « Continuer avec Google » ; avec MPACER_DEV_AUTH=1,
+# POST /auth/dev-login ouvre une session de test (aucun bouton sur /login)
 ```
 
 ### 5.3 Synchroniser une séance depuis le simulateur
@@ -330,9 +400,9 @@ Détail complet, dépannage et sauvegardes : [deploy/README.md](deploy/README.md
 
 | Vérification | Résultat |
 |---|---|
-| `cargo test --workspace` | **123 tests** : 93 cœur, 6 FFI, 23 backend (dont 18 d'intégration exécutés contre PostgreSQL), 1 test de documentation |
+| `cargo test --workspace` | **123 tests** : 93 cœur, 6 FFI, 23 backend (dont 18 d'intégration exécutés contre PostgreSQL) et 1 test de documentation |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 avertissement |
-| `cargo fmt --all --check` | conforme |
+| `cargo fmt --all --check` | conforme sur l'état commité ; l'arbre de travail en cours peut présenter des écarts |
 | `helm lint` / `helm template` | 0 échec |
 | `helm install --dry-run=server` sur jo3 | accepté (CRD cert-manager et CNPG validées) |
 | Image conteneur | construite, conteneur démarré, `/healthz` et `/readyz` OK |
@@ -348,8 +418,9 @@ Détail complet, dépannage et sauvegardes : [deploy/README.md](deploy/README.md
   si le besoin apparaît.
 - **Un seul secret de session partagé** : l'application est sans état, donc
   `RollingUpdate` sans coupure et montée en répliques possible.
-- **Le shell Wear OS n'est pas compilé** dans cet environnement (ni JDK ni SDK/NDK) :
-  il est livré comme squelette documenté.
+- **Les applications Android compilent** (JDK 17, SDK 35, NDK r27, cargo-ndk, via
+  `local-ci.ps1`), mais n'ont pas encore d'usage terrain documenté : l'écart avec une
+  montre de référence et la consommation réelle restent à mesurer.
 - **TLS vers PostgreSQL désactivé** par défaut (réseau interne du cluster) ;
   `sslmode` est configurable pour un serveur externe.
 - Les versions de Wear OS, permissions de santé et règles Play Store évoluent :
@@ -361,7 +432,41 @@ Détail complet, dépannage et sauvegardes : [deploy/README.md](deploy/README.md
   `https://` sont acceptés, pour qu'un lien stocké ne puisse pas devenir un script
   exécutable dans la page.
 
-## 10. Prochaines actions
+## 10. Points ouverts (revue de code du 6 octobre 2026)
+
+Revue de l'arbre de travail, du plus grave au plus anodin. Chaque point donne le fichier
+concerné ; aucun n'a été corrigé dans cette passe de documentation.
+
+1. **Permission de localisation incomplète** — `android/.../MainActivity.kt` ne demande que
+   `ACCESS_FINE_LOCATION`. Depuis Android 12, une demande de position précise non accompagnée
+   de `ACCESS_COARSE_LOCATION` (pourtant déclarée au manifeste) est ignorée par le système :
+   le service de suivi reçoit une `SecurityException` et arrête la séance.
+2. **Réglages sans effet** — `android/.../ui/SettingsScreen.kt` modifie un état local que
+   `MainActivity.kt` ne pousse jamais au moteur : `MpacerCore.setAssistant` et `setVoice`
+   ne sont appelés nulle part, pas plus que `VoiceCoach.configure`. Mode d'assistant, unités
+   et voix sont décoratifs en l'état.
+3. **Champs perdus à l'envoi** — `android/.../SyncClient.kt` décode le résumé du cœur dans un
+   modèle Kotlin partiel, puis le ré-encode : `elapsed_s`, `pauses`, `heart_rate` et `plan`
+   n'arrivent pas au backend. L'analyse cardio et la chronologie des pauses sont donc vides
+   pour les séances venues de la montre.
+4. **`/readyz` répond toujours 200** — `crates/mpacer-api/src/routes/mod.rs` place l'état de la
+   base dans le corps JSON mais ne renvoie jamais un code d'échec : une sonde ne peut pas
+   alerter sur une base injoignable.
+5. **Détail des erreurs exposé** — `crates/mpacer-api/src/error.rs` met `self.to_string()` dans
+   le champ `message` de la réponse, donc le texte brut des erreurs SQL et internes.
+6. **Pas de jeton anti-CSRF** — `crates/mpacer-api/src/routes/web.rs` : les formulaires POST
+   (déconnexion, appairage, révocation, suppression, suivi) ne sont protégés que par le cookie
+   `SameSite=Lax`.
+7. **État du moteur** — `crates/mpacer-core/src/engine.rs` : `reset()` ne vide pas les tours
+   (des tours périmés restent exposés jusqu'au prochain `start()`) ; `crates/mpacer-core/src/gps.rs` :
+   un échantillon rejeté pour précision insuffisante ne fait pas retomber le voyant.
+8. **Deux versions de `.pac`** — le cœur écrit la version 2
+   (`crates/mpacer-core/src/history.rs`) alors que l'export de l'archive Android annonce encore
+   `version: 1` (`android/.../WorkoutArchive.kt`).
+9. **Formatage** — `cargo fmt --all --check` signale des écarts dans plusieurs fichiers de
+   l'arbre de travail ; `cargo clippy --workspace --all-targets -- -D warnings` passe.
+
+## 11. Prochaines actions
 
 1. Publier l'image : `pwsh deploy/build-image.ps1 -Push` (jeton GitHub).
 2. Créer le client OAuth Google (redirect `https://mpacer.p.zacharie.org/auth/google/callback`).
@@ -370,6 +475,6 @@ Détail complet, dépannage et sauvegardes : [deploy/README.md](deploy/README.md
 5. Activer la sauvegarde CNPG (`postgresql.backup.enabled=true`) et l'accès public
    si la montre doit synchroniser hors du domicile.
 
-## 11. Licence
+## 12. Licence
 
 MIT ou Apache-2.0, au choix (voir `Cargo.toml`).

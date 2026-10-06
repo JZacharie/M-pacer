@@ -14,7 +14,7 @@ use crate::models::{
 };
 use crate::state::AppState;
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::header;
 use axum::response::Response;
 use axum::routing::{get, post};
@@ -43,7 +43,14 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/version", get(version))
         // Musique : la montre recupere la fiche des playlists preparees puis les
         // fichiers audio (meme jeton d'appareil que les seances).
-        .route("/api/v1/music/playlists", get(list_music_playlists))
+        // Le compagnon n'a qu'un jeton d'appareil : il televerse ses fichiers
+        // audio par la meme route que la montre lit les playlists.
+        .route(
+            "/api/v1/music/playlists",
+            get(list_music_playlists)
+                .post(upload_music_playlist)
+                .layer(DefaultBodyLimit::max(crate::models::MAX_UPLOAD_BYTES as usize)),
+        )
         .route("/api/v1/music/playlists/{id}", get(get_music_playlist))
         .route(
             "/api/v1/music/playlists/{id}/ack",
@@ -351,6 +358,35 @@ async fn list_music_playlists(
 ) -> AppResult<Json<MusicPlaylistListResponse>> {
     let playlists = crate::db::list_music_playlist_summaries(&state.pool, &user.id).await?;
     Ok(Json(MusicPlaylistListResponse { playlists }))
+}
+
+/// Televersement de fichiers audio par un appareil (montre ou compagnon).
+///
+/// Corps `multipart/form-data` : champ `name` (nom de playlist) et champs
+/// `files` repetes. Les octets restent sur le serveur, prets pour
+/// `GET /api/v1/music/tracks/{id}/file`.
+async fn upload_music_playlist(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    multipart: Multipart,
+) -> AppResult<Json<serde_json::Value>> {
+    let form = crate::media::collect_upload(multipart, "name").await?;
+    let (playlist_id, track_count, total_bytes) =
+        crate::media::import_uploaded_files(&state, &user.id, &form.name, &form.files).await?;
+    tracing::info!(
+        user = %user.email,
+        playlist = %playlist_id,
+        titres = track_count,
+        octets = total_bytes,
+        "playlist televersee par un appareil"
+    );
+    Ok(Json(serde_json::json!({
+        "playlist_id": playlist_id,
+        "name": form.name,
+        "track_count": track_count,
+        "total_bytes": total_bytes,
+        "ready_track_count": track_count,
+    })))
 }
 
 /// Fiche d'une playlist : ce que la montre telecharge pour une playlist Spotify.

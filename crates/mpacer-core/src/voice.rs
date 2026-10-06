@@ -6,6 +6,7 @@
 //! la logique de course.
 
 use crate::lap::Lap;
+use crate::music::{MusicDirective, MusicState};
 use crate::race_plan::ShadowRunnerComparison;
 use crate::units::{format_duration, format_pace, UnitSystem};
 use crate::workout::WorkoutEvent;
@@ -106,6 +107,12 @@ pub enum VoiceCue {
     ManualStatus,
     /// Decompte avant le depart (course a distance).
     Countdown(u8),
+    /// Musique : passage en tempo accelere (retard sur le plan).
+    MusicBoost,
+    /// Musique : passage en tempo calme (avance, ou cardio trop haut).
+    MusicRelax,
+    /// Musique : consigne de tempo annoncee au demarrage de la seance.
+    MusicTempo,
 }
 
 /// Donnees disponibles au moment de l'annonce.
@@ -123,6 +130,8 @@ pub struct VoiceSnapshot<'a> {
     /// Course a distance : pseudo de l'adversaire et ecart de distance.
     pub opponent: Option<&'a str>,
     pub opponent_delta_m: Option<f64>,
+    /// BPM cible de la consigne musique (cue MusicTempo).
+    pub music_bpm: Option<f64>,
 }
 
 /// Annonce prete a etre envoyee au TTS.
@@ -147,6 +156,8 @@ pub fn render(cue: VoiceCue, snapshot: &VoiceSnapshot, config: &VoiceConfig) -> 
     let pace = format_pace(snapshot.current_pace);
     let distance = units.format_distance(snapshot.distance_m);
     let time = format_duration(snapshot.elapsed_s);
+    // Le tempo est annonce a l'entier (le coureur n'a pas besoin des decimales).
+    let music_bpm = snapshot.music_bpm.unwrap_or(0.0).round() as i64;
 
     let position = |shadow: &ShadowRunnerComparison, fr: bool| -> String {
         let delta = format_duration(shadow.time_delta_s.abs());
@@ -180,6 +191,9 @@ pub fn render(cue: VoiceCue, snapshot: &VoiceSnapshot, config: &VoiceConfig) -> 
             VoiceCue::AutoResumed => "Reprise automatique.".into(),
             VoiceCue::Stopped => format!("Seance terminee. {distance} en {time}."),
             VoiceCue::Countdown(seconds) => format!("Depart dans {seconds}."),
+            VoiceCue::MusicBoost => "Musique : on accelere.".into(),
+            VoiceCue::MusicRelax => "Musique : on ralentit.".into(),
+            VoiceCue::MusicTempo => format!("Rythme {music_bpm}."),
             VoiceCue::Periodic | VoiceCue::ManualStatus | VoiceCue::LapCompleted => {
                 let mut message = if config.short_forms {
                     format!("{pace} par {unit_name}. {distance}. {time}.")
@@ -226,6 +240,9 @@ pub fn render(cue: VoiceCue, snapshot: &VoiceSnapshot, config: &VoiceConfig) -> 
             VoiceCue::AutoResumed => "Auto resume.".into(),
             VoiceCue::Stopped => format!("Workout finished. {distance} in {time}."),
             VoiceCue::Countdown(seconds) => format!("Starting in {seconds}."),
+            VoiceCue::MusicBoost => "Music: pick it up.".into(),
+            VoiceCue::MusicRelax => "Music: ease off.".into(),
+            VoiceCue::MusicTempo => format!("Tempo {music_bpm}."),
             VoiceCue::Periodic | VoiceCue::ManualStatus | VoiceCue::LapCompleted => {
                 let mut message = if config.short_forms {
                     format!("{pace} per {unit_name}. {distance}. {time}.")
@@ -257,6 +274,10 @@ pub struct VoiceCoach {
     config: VoiceConfig,
     last_periodic_ms: Option<i64>,
     announced_laps: u32,
+    /// Derniere directive musique vue (annonce sur transition).
+    last_music_directive: Option<MusicDirective>,
+    /// Vrai une fois le tempo annonce pour la seance en cours.
+    announced_tempo: bool,
 }
 
 impl Default for VoiceCoach {
@@ -271,6 +292,8 @@ impl VoiceCoach {
             config,
             last_periodic_ms: None,
             announced_laps: 0,
+            last_music_directive: None,
+            announced_tempo: false,
         }
     }
 
@@ -285,6 +308,8 @@ impl VoiceCoach {
     pub fn reset(&mut self) {
         self.last_periodic_ms = None;
         self.announced_laps = 0;
+        self.last_music_directive = None;
+        self.announced_tempo = false;
     }
 
     fn enabled(&self) -> bool {
@@ -337,6 +362,45 @@ impl VoiceCoach {
             });
         }
         None
+    }
+
+    /// Annonce musique : uniquement si `announce` est actif et sur transition
+    /// de directive. Le tempo de la seance est annonce une seule fois, des que
+    /// la musique devient reellement active.
+    pub fn on_music(
+        &mut self,
+        state: &MusicState,
+        announce: bool,
+        snapshot: &VoiceSnapshot,
+    ) -> Option<VoiceMessage> {
+        let previous = self.last_music_directive.replace(state.directive);
+        if !announce || !self.config.enabled {
+            return None;
+        }
+        let music_active = matches!(
+            state.directive,
+            MusicDirective::Play
+                | MusicDirective::Keep
+                | MusicDirective::Boost
+                | MusicDirective::Relax
+                | MusicDirective::SkipTo
+        );
+        if !self.announced_tempo && music_active && state.target_bpm.is_some() {
+            self.announced_tempo = true;
+            return Some(VoiceMessage {
+                cue: VoiceCue::MusicTempo,
+                text: render(VoiceCue::MusicTempo, snapshot, &self.config),
+            });
+        }
+        let cue = match state.directive {
+            MusicDirective::Boost if previous != Some(MusicDirective::Boost) => VoiceCue::MusicBoost,
+            MusicDirective::Relax if previous != Some(MusicDirective::Relax) => VoiceCue::MusicRelax,
+            _ => return None,
+        };
+        Some(VoiceMessage {
+            cue,
+            text: render(cue, snapshot, &self.config),
+        })
     }
 
     /// Annonce de fin de tour (frequence "chaque tour" ou info etendue active).
@@ -481,5 +545,107 @@ mod tests {
             ..Default::default()
         });
         assert!(coach.manual_status(&snapshot()).is_none());
+    }
+
+    fn music_state(directive: MusicDirective, target_bpm: Option<f64>) -> MusicState {
+        MusicState {
+            enabled: true,
+            target_bpm,
+            directive,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn music_cues_are_rendered_in_both_languages() {
+        let mut snapshot = snapshot();
+        snapshot.music_bpm = Some(176.0);
+        let fr = VoiceConfig::default();
+        assert_eq!(
+            render(VoiceCue::MusicTempo, &snapshot, &fr),
+            "Rythme 176."
+        );
+        assert_eq!(
+            render(VoiceCue::MusicBoost, &snapshot, &fr),
+            "Musique : on accelere."
+        );
+        assert_eq!(
+            render(VoiceCue::MusicRelax, &snapshot, &fr),
+            "Musique : on ralentit."
+        );
+        let en = VoiceConfig {
+            language: Language::En,
+            ..Default::default()
+        };
+        assert_eq!(render(VoiceCue::MusicTempo, &snapshot, &en), "Tempo 176.");
+        assert_eq!(
+            render(VoiceCue::MusicBoost, &snapshot, &en),
+            "Music: pick it up."
+        );
+        assert_eq!(
+            render(VoiceCue::MusicRelax, &snapshot, &en),
+            "Music: ease off."
+        );
+    }
+
+    #[test]
+    fn music_announcements_fire_on_transition_only() {
+        let mut coach = VoiceCoach::default();
+        let snapshot = snapshot();
+        let keep = music_state(MusicDirective::Keep, Some(170.0));
+        // Premiere consigne active : le tempo est annonce une seule fois.
+        assert_eq!(
+            coach.on_music(&keep, true, &snapshot).unwrap().cue,
+            VoiceCue::MusicTempo
+        );
+        assert!(coach.on_music(&keep, true, &snapshot).is_none());
+
+        let boost = music_state(MusicDirective::Boost, Some(176.0));
+        assert_eq!(
+            coach.on_music(&boost, true, &snapshot).unwrap().cue,
+            VoiceCue::MusicBoost
+        );
+        assert!(coach.on_music(&boost, true, &snapshot).is_none());
+
+        assert!(coach.on_music(&keep, true, &snapshot).is_none());
+        let relax = music_state(MusicDirective::Relax, Some(164.0));
+        assert_eq!(
+            coach.on_music(&relax, true, &snapshot).unwrap().cue,
+            VoiceCue::MusicRelax
+        );
+    }
+
+    #[test]
+    fn music_announcements_are_silent_when_disabled_or_off() {
+        let mut coach = VoiceCoach::default();
+        let snapshot = snapshot();
+        let keep = music_state(MusicDirective::Keep, Some(170.0));
+        assert_eq!(
+            coach.on_music(&keep, true, &snapshot).unwrap().cue,
+            VoiceCue::MusicTempo
+        );
+        let boost = music_state(MusicDirective::Boost, Some(176.0));
+        assert!(coach.on_music(&boost, false, &snapshot).is_none());
+        assert!(coach.on_music(&boost, false, &snapshot).is_none());
+
+        let mut silent = VoiceCoach::new(VoiceConfig {
+            enabled: false,
+            ..Default::default()
+        });
+        assert!(silent.on_music(&boost, true, &snapshot).is_none());
+    }
+
+    #[test]
+    fn reset_rearms_the_tempo_announcement() {
+        let mut coach = VoiceCoach::default();
+        let snapshot = snapshot();
+        let keep = music_state(MusicDirective::Keep, Some(170.0));
+        assert!(coach.on_music(&keep, true, &snapshot).is_some());
+        assert!(coach.on_music(&keep, true, &snapshot).is_none());
+        coach.reset();
+        assert_eq!(
+            coach.on_music(&keep, true, &snapshot).unwrap().cue,
+            VoiceCue::MusicTempo
+        );
     }
 }

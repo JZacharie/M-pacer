@@ -30,6 +30,11 @@ pub fn router(state: AppState) -> Router {
         tracing::info!(chemin = %callback_path, "callback OAuth servi a un chemin personnalise");
         app = app.route(&callback_path, get(web::google_callback));
     }
+    let spotify_path = state.config.spotify_redirect_path();
+    if spotify_path != "/auth/spotify/callback" && spotify_path != "/" {
+        tracing::info!(chemin = %spotify_path, "callback Spotify servi a un chemin personnalise");
+        app = app.route(&spotify_path, get(web::spotify_callback));
+    }
 
     app.with_state(state)
 }
@@ -50,6 +55,27 @@ pub async fn gpx_response(state: &AppState, user_id: &str, id: &str) -> AppResul
         )
         .body(Body::from(gpx))
         .map_err(|error| AppError::internal(error.to_string()))
+}
+
+/// Resout un chemin de media relatif sous la racine autorisee.
+///
+/// Renvoie `None` des qu'une composante sort de la racine (`..`, chemin absolu,
+/// prefixe Windows) : un fichier audio ne doit jamais pouvoir etre lu ou
+/// supprime hors de `MPACER_MEDIA_DIR`, meme si la base etait corrompue.
+pub fn media_path(root: &std::path::Path, relative: &str) -> Option<std::path::PathBuf> {
+    let relative = std::path::Path::new(relative);
+    if relative.is_absolute() {
+        return None;
+    }
+    let mut path = std::path::PathBuf::from(root);
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(part) => path.push(part),
+            // CurDir, ParentDir, RootDir et Prefix sont refuses.
+            _ => return None,
+        }
+    }
+    Some(path)
 }
 
 /// Vivacite : le processus repond.

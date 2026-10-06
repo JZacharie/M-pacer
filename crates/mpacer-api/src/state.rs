@@ -1,6 +1,7 @@
 //! Etat partage du service.
 
 use crate::auth::google::{GoogleOidc, OidcProvider, UnconfiguredOidc};
+use crate::avatar::AvatarCache;
 use crate::config::Config;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -13,6 +14,8 @@ pub struct AppState {
     pub http: reqwest::Client,
     /// Fournisseur d'identite (Google en production, faux fournisseur en test).
     pub oidc: Arc<dyn OidcProvider>,
+    /// Photos de profil Google mises en cache (proxy de `GET /avatar`).
+    pub avatars: Arc<AvatarCache>,
 }
 
 impl AppState {
@@ -34,6 +37,7 @@ impl AppState {
             config,
             http,
             oidc,
+            avatars: Arc::new(AvatarCache::new()),
         }
     }
 
@@ -44,6 +48,7 @@ impl AppState {
             config,
             http: http_client(),
             oidc,
+            avatars: Arc::new(AvatarCache::new()),
         }
     }
 

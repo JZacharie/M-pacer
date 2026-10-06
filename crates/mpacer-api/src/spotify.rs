@@ -308,8 +308,7 @@ pub async fn get_playlist(
         next = page.next.clone();
     }
     let mut pages = 0;
-    loop {
-        let Some(page_url) = next.take() else { break };
+    while let Some(page_url) = next.take() {
         if pages >= MAX_PAGES {
             tracing::warn!(playlist = %id, "playlist Spotify tronquee a la pagination maximale");
             break;

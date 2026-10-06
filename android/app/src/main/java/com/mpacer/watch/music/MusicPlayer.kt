@@ -122,8 +122,13 @@ object MusicPlayer {
         withController { it.pause() }
     }
 
+    /**
+     * Coupe la lecture si elle est en cours. N'empile aucune commande : appelee a
+     * chaque tick quand la musique est coupee, elle ne doit pas remplir la file.
+     */
     fun pauseIfPlaying() {
-        withController { if (it.isPlaying) it.pause() }
+        val mediaController = controller ?: return
+        if (mediaController.isPlaying) mediaController.pause()
     }
 
     fun toggle() {

@@ -14,10 +14,12 @@ import org.json.JSONObject
 
 /**
  * Reglages musique du moteur (miroir de `mpacer_core::music::MusicConfig`).
- * Les valeurs par defaut sont celles du contrat (docs/07 section 4.1).
+ * Les valeurs par defaut sont celles du contrat (docs/07 section 4.1), avec la
+ * musique ACTIVE par defaut (le coeur fait de meme) : l'utilisateur la coupe
+ * depuis l'ecran Reglages s'il n'en veut pas.
  */
 data class MusicConfig(
-    val enabled: Boolean = false,
+    val enabled: Boolean = true,
     val referenceBpm: Double = 170.0,
     val referencePaceSPerKm: Double = 300.0,
     val paceElasticity: Double = 0.35,
@@ -134,7 +136,8 @@ enum class MusicDirective(val wire: String) {
 /** Bloc `music` de EngineOutput (docs/07 section 5). */
 class MusicState(private val json: JSONObject) {
 
-    val enabled: Boolean get() = json.optBoolean("enabled", false)
+    /** La musique est active par defaut (meme defaut que MusicConfig). */
+    val enabled: Boolean get() = json.optBoolean("enabled", true)
 
     val playlistId: String? get() = json.stringOrNull("playlist_id")
     val playlistName: String? get() = json.stringOrNull("playlist_name")

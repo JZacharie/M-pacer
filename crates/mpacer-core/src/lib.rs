@@ -29,6 +29,7 @@ pub mod gps;
 pub mod gpx;
 pub mod history;
 pub mod lap;
+pub mod music;
 pub mod pace;
 pub mod race_plan;
 pub mod remote_race;
@@ -41,6 +42,11 @@ pub use assistant::{Assistant, AssistantMode, AssistantPanel};
 pub use cardio::{HeartRateSample, HeartRateSummary, HeartRateZones, ZoneMethod};
 pub use engine::{EngineConfig, EngineOutput, PacerEngine};
 pub use gps::{GpsMonitor, GpsSample, GpsStatus, StatusLight};
+pub use music::{
+    bpm_from_tags, cadence_from_speed, tap_tempo, target_bpm_for_pace, target_cadence_spm,
+    BpmSource, DirectiveReason, MusicConfig, MusicDirector, MusicDirective, MusicInput, MusicState,
+    NowPlaying, Playlist, Track,
+};
 pub use pace::PaceEngine;
 pub use race_plan::{NegativeSplit, RacePlan, ShadowRunnerComparison};
 pub use units::UnitSystem;

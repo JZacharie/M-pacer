@@ -29,6 +29,7 @@ use mpacer_core::engine::{EngineConfig, EngineOutput, PacerEngine};
 use mpacer_core::geo::Position;
 use mpacer_core::gps::GpsSample;
 use mpacer_core::history::WorkoutSummary;
+use mpacer_core::music::{MusicConfig, NowPlaying, Playlist};
 use mpacer_core::race_plan::NegativeSplit;
 use mpacer_core::voice::VoiceConfig;
 use serde::{Deserialize, Serialize};
@@ -52,6 +53,23 @@ pub enum Command {
     /// Reglages du retour vocal.
     SetVoice {
         config: VoiceConfig,
+    },
+    /// Reglages musique (BPM de reference, seuils, annonces).
+    SetMusic {
+        config: MusicConfig,
+    },
+    /// Playlist preparee sur la montre (`null` = aucune).
+    SetMusicPlaylist {
+        playlist: Option<Playlist>,
+    },
+    /// Instantane de la piste en cours (`null` = lecture arretee).
+    MusicNowPlaying {
+        now: Option<NowPlaying>,
+    },
+    /// Cadence mesuree par un capteur de pas.
+    OnCadence {
+        t_ms: i64,
+        spm: f64,
     },
     /// Nouvelle position GPS (1 Hz en general).
     Gps {
@@ -157,6 +175,22 @@ impl Handle {
             Command::SetVoice { config } => {
                 self.engine.set_voice_config(config);
                 Response::Output(Box::new(self.engine.tick(0)))
+            }
+            Command::SetMusic { config } => {
+                self.engine.set_music_config(config);
+                Response::Output(Box::new(self.engine.tick(0)))
+            }
+            Command::SetMusicPlaylist { playlist } => {
+                self.engine.set_music_playlist(playlist);
+                Response::Output(Box::new(self.engine.tick(0)))
+            }
+            Command::MusicNowPlaying { now } => {
+                self.engine.on_now_playing(now);
+                Response::Output(Box::new(self.engine.tick(0)))
+            }
+            Command::OnCadence { t_ms, spm } => {
+                self.engine.on_cadence(spm);
+                Response::Output(Box::new(self.engine.tick(t_ms)))
             }
             Command::Gps {
                 t_ms,
@@ -384,6 +418,56 @@ mod tests {
             assert!(!CStr::from_ptr(version).to_str().unwrap().is_empty());
             mpacer_string_free(version);
         }
+    }
+
+    #[test]
+    fn music_commands_round_trip() {
+        let mut handle = Handle::new();
+        let configured = run(
+            &mut handle,
+            r#"{"cmd":"set_music","config":{"enabled":true,"reference_bpm":170.0,"reference_pace_s_per_km":300.0,"pace_elasticity":0.35,"min_bpm":100.0,"max_bpm":200.0,"switch_threshold_bpm":8.0,"boost_bpm":6.0,"relax_bpm":6.0,"announce":true,"avoid_last":3}}"#,
+        );
+        assert!(configured["music"]["enabled"].as_bool().unwrap());
+
+        let empty = run(&mut handle, r#"{"cmd":"set_music_playlist","playlist":null}"#);
+        assert_eq!(empty["music"]["directive"], "None");
+        assert_eq!(empty["music"]["reason"], "NoPlaylist");
+
+        let playlist = run(
+            &mut handle,
+            r#"{"cmd":"set_music_playlist","playlist":{"id":"p1","name":"Run 170","target_bpm":170.0,"tracks":[{"id":"t1","title":"Wake me up","artist":"Avicii","duration_s":215.0,"bpm":172.0,"position":0},{"id":"t2","title":"Autre","artist":null,"duration_s":200.0,"bpm":168.0,"position":1}]}}"#,
+        );
+        assert_eq!(playlist["music"]["playlist_id"], "p1");
+        assert_eq!(playlist["music"]["playlist_name"], "Run 170");
+        assert_eq!(playlist["music"]["directive"], "Play");
+        assert_eq!(playlist["music"]["next_track_id"], "t1");
+
+        let playing = run(
+            &mut handle,
+            r#"{"cmd":"music_now_playing","now":{"track_id":"t1","title":"Wake me up","artist":"Avicii","bpm":172.0,"position_s":42.5}}"#,
+        );
+        assert_eq!(playing["music"]["directive"], "Keep");
+        assert_eq!(playing["music"]["current"]["position_s"], 42.5);
+
+        let cadence = run(&mut handle, r#"{"cmd":"on_cadence","t_ms":1700000000000,"spm":174.0}"#);
+        assert_eq!(cadence["music"]["cadence_spm"], 174.0);
+
+        let cleared = run(&mut handle, r#"{"cmd":"music_now_playing","now":null}"#);
+        assert!(cleared["music"]["current"].is_null());
+    }
+
+    #[test]
+    fn an_old_configure_payload_without_music_still_parses() {
+        let mut handle = Handle::new();
+        let output = run(
+            &mut handle,
+            r#"{"cmd":"configure","config":{"units":"Metric","distance_display":{"preferred":"Metric","respect_race_units":false,"race_units":"Metric"},"pace":{"window_s":120.0,"probe_s":20.0,"min_probe_distance_m":25.0,"change_threshold":0.15,"max_pace_s_per_km":1800.0},"detect_pace_change":false,"gps":{"good_accuracy_m":10.0,"poor_accuracy_m":25.0,"good_samples_required":3,"max_speed_mps":12.0},"workout":{"auto_pause":false,"stop_speed_mps":0.7,"auto_pause_delay_s":10.0,"resume_speed_mps":1.4,"auto_resume_delay_s":3.0},"voice":{"enabled":true,"frequency":"Every2Minutes","language":"Fr","extended_lap_info":false,"short_forms":false,"music_policy":"Duck"},"heart_rate":{"max_bpm":190}}}"#,
+        );
+        assert!(output["music"].is_object());
+        // Le champ absent retombe sur MusicConfig::default() : musique active,
+        // mais aucune playlist donc aucune consigne.
+        assert!(output["music"]["enabled"].as_bool().unwrap());
+        assert_eq!(output["music"]["reason"], "NoPlaylist");
     }
 
     #[test]

@@ -180,6 +180,59 @@ header.site nav a.active { color: var(--text); background: var(--surface-2); bor
   white-space: nowrap;
 }
 
+/* Pastille de compte : la photo Google (ou les initiales), toujours accessible. */
+.user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  padding: 3px 12px 3px 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  transition: border-color .18s var(--ease);
+}
+
+.user-chip:hover { border-color: var(--orange-line); }
+
+/* Au-dela de 860px, la navigation occupe deja la marge automatique. */
+@media (min-width: 860px) {
+  .user-chip { margin-left: 0; }
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  object-fit: cover;
+  background: var(--surface-3);
+  flex: none;
+}
+
+/* Le nom du compte n'a pas sa place dans l'en-tete d'un telephone. */
+@media (max-width: 859px) {
+  .who { display: none; }
+}
+
+/* Fiche de compte (reglages) : la photo telle qu'elle est utilisee partout. */
+.card.profile {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.card.profile .avatar-large {
+  width: 64px;
+  height: 64px;
+}
+
+.profile-identite {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 main {
   max-width: 980px;
   margin: 0 auto;
@@ -651,3 +704,91 @@ hr { border: none; border-top: 1px solid var(--border); margin: 22px 0; }
   .cards { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); }
   .card strong, .card .value { font-size: 23px; }
 }
+
+/* --------------------------------------------------------------- musique */
+
+.music-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: var(--gap);
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0 14px;
+}
+
+.field { min-width: 0; }
+
+.music-search { display: flex; gap: 10px; align-items: flex-start; }
+.music-search input { margin-bottom: 0; }
+
+.music-results {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.music-results li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.music-result { display: flex; flex-direction: column; min-width: 0; }
+.music-result strong { font-size: 14.5px; }
+.music-import { display: flex; gap: 8px; align-items: center; }
+.music-import input { margin-bottom: 0; min-width: 130px; }
+
+.inline-form { display: flex; gap: 8px; align-items: center; }
+.inline-form input[type="text"] {
+  margin-bottom: 0;
+  min-width: 110px;
+  padding: 9px 11px;
+  font-size: 14px;
+}
+.inline-number { max-width: 130px; text-align: center; }
+
+.bpm-form { display: inline-flex; margin-right: 6px; }
+.tap.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+
+.mini-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--gap);
+  margin: 14px 0;
+}
+
+.mini-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 11px 13px;
+}
+.mini-card .card-label { margin-bottom: 4px; }
+.mini-card strong { font-size: 19px; font-weight: 700; }
+
+input[type="file"] {
+  width: 100%;
+  padding: 11px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-strong);
+  background: var(--surface-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  margin-bottom: 14px;
+}
+
+.icon-music { --i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='6.5' cy='18' r='2.6'/%3E%3Ccircle cx='16.5' cy='16' r='2.6'/%3E%3Cpath d='M9.1 18V5.6l10-2V16'/%3E%3C/svg%3E"); }
+

@@ -25,6 +25,9 @@ import androidx.wear.compose.material.Text
 import com.mpacer.watch.EngineOutput
 import com.mpacer.watch.MpacerFormat
 import com.mpacer.watch.WatchState
+import com.mpacer.watch.music.MusicDirective
+import com.mpacer.watch.music.MusicState
+import kotlin.math.roundToInt
 
 /**
  * Ecran principal, pense pour un ecran rond :
@@ -42,6 +45,7 @@ fun MainScreen(
     onStop: () -> Unit,
     onSettings: () -> Unit,
     onSync: () -> Unit,
+    onMusic: () -> Unit,
 ) {
     val output = state.output
     Box(
@@ -67,7 +71,8 @@ fun MainScreen(
                 Text(MpacerFormat.duration(output?.elapsedS ?: 0.0), color = Palette.muted)
             }
             AssistantPanel(output)
-            Controls(output, onStart, onPause, onResume, onStop, onSettings, onSync)
+            MusicPill(output?.music)
+            Controls(output, onStart, onPause, onResume, onStop, onSettings, onSync, onMusic)
         }
     }
 }
@@ -104,6 +109,31 @@ private fun AssistantPanel(output: EngineOutput?) {
     }
 }
 
+/**
+ * Pastille musique (docs/07 section 7.2) : BPM consigne par le moteur, avec la
+ * fleche de la directive en cours. Rien n'est affiche si la musique est coupee.
+ */
+@Composable
+private fun MusicPill(music: MusicState?) {
+    val target = music?.targetBpm ?: return
+    if (!music.enabled) return
+    val fleche = when (music.directive) {
+        MusicDirective.BOOST -> "  ^"
+        MusicDirective.RELAX -> "  v"
+        MusicDirective.SKIP_TO -> "  >>"
+        else -> ""
+    }
+    Text(
+        text = target.roundToInt().toString() + " BPM" + fleche,
+        color = when (music.directive) {
+            MusicDirective.BOOST -> Palette.orange
+            MusicDirective.RELAX -> Palette.ok
+            else -> Palette.muted
+        },
+        fontSize = 13.sp,
+    )
+}
+
 @Composable
 private fun Controls(
     output: EngineOutput?,
@@ -113,6 +143,7 @@ private fun Controls(
     onStop: () -> Unit,
     onSettings: () -> Unit,
     onSync: () -> Unit,
+    onMusic: () -> Unit,
 ) {
     val state = output?.state ?: "Idle"
     // Un seul bouton porte l'accent orange : l'action principale de l'ecran.
@@ -129,18 +160,21 @@ private fun Controls(
         contentColor = Palette.danger,
     )
     // Les libelles sont raccourcis et reduits : sur un ecran rond de 450 px,
-    // trois boutons ne laissent pas la place a un mot long.
+    // quatre boutons ne laissent pas la place a un mot long.
     Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         when (state) {
             "Idle", "Finished" -> {
                 Button(onClick = onStart, colors = principal) {
                     Text("Demarrer", fontSize = 12.sp, maxLines = 1)
                 }
+                Button(onClick = onMusic, colors = secondaire) {
+                    Text("Musique", fontSize = 10.sp, maxLines = 1)
+                }
                 Button(onClick = onSync, colors = secondaire) {
-                    Text("Sync", fontSize = 13.sp, maxLines = 1)
+                    Text("Sync", fontSize = 12.sp, maxLines = 1)
                 }
                 Button(onClick = onSettings, colors = secondaire) {
-                    Text("Reglages", fontSize = 10.sp, maxLines = 1)
+                    Text("Reglages", fontSize = 9.sp, maxLines = 1)
                 }
             }
             "Running" -> {

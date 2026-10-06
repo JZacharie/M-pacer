@@ -1,5 +1,6 @@
 package com.mpacer.watch.music
 
+import android.util.Log
 import com.mpacer.watch.MpacerCore
 
 /**
@@ -10,9 +11,15 @@ import com.mpacer.watch.MpacerCore
  * utilise avant la course : les reglages et la playlist sont conserves ici et
  * reappliques au demarrage de la seance (voir TrackingService.start).
  *
+ * Robustesse : une commande musique refusee par le moteur (version du coeur plus
+ * ancienne que le contrat, playlist invalide) ne doit jamais interrompre la seance
+ * en cours. Chaque envoi est donc isole ; l'erreur est journalisee.
+ *
  * Aucun calcul n'est fait ici : on ne fait que transporter le contrat FFI.
  */
 object MusicSession {
+
+    private const val TAG = "MusicSession"
 
     private var core: MpacerCore? = null
 
@@ -37,27 +44,39 @@ object MusicSession {
 
     /** Reapplique la configuration et la playlist au moteur (debut de seance). */
     fun apply(core: MpacerCore) {
-        core.setMusic(config)
-        core.setMusicPlaylist(playlist)
+        envoyer("set_music") { core.setMusic(config) }
+        envoyer("set_music_playlist") { core.setMusicPlaylist(playlist) }
     }
 
     fun setConfig(config: MusicConfig) {
         this.config = config
-        core?.setMusic(config)
+        val engine = core ?: return
+        envoyer("set_music") { engine.setMusic(config) }
     }
 
     fun setPlaylist(local: LocalPlaylist?) {
         this.local = local
-        core?.setMusicPlaylist(playlist)
+        val engine = core ?: return
+        envoyer("set_music_playlist") { engine.setMusicPlaylist(playlist) }
     }
 
     /** Instantane de la piste jouee (position en secondes). */
     fun nowPlaying(now: NowPlaying?) {
-        core?.musicNowPlaying(now)
+        val engine = core ?: return
+        envoyer("music_now_playing") { engine.musicNowPlaying(now) }
     }
 
     /** Cadence de pas mesuree (aucun capteur en v1 : le tick du moteur estime). */
     fun cadence(tMs: Long, spm: Double) {
-        core?.onCadence(tMs, spm)
+        val engine = core ?: return
+        envoyer("on_cadence") { engine.onCadence(tMs, spm) }
+    }
+
+    private inline fun envoyer(commande: String, action: () -> Unit) {
+        try {
+            action()
+        } catch (error: Exception) {
+            Log.w(TAG, commande + " ignoree : " + (error.message ?: error.javaClass.simpleName))
+        }
     }
 }

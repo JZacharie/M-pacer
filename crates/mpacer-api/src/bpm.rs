@@ -42,11 +42,15 @@ mod tests {
 
     /// Balise ID3v2.3 minimale portant un cadre `TBPM` (le format produit par la
     /// plupart des encodeurs MP3).
+    ///
+    /// Le corps d'une trame texte commence par l'octet d'encodage (0x00 =
+    /// ISO-8859-1), puis le texte termine par un NUL.
     fn id3v2_tbpm(bpm: &str) -> Vec<u8> {
         let mut frame = Vec::new();
         frame.extend_from_slice(b"TBPM");
-        frame.extend_from_slice(&(bpm.len() as u32 + 1).to_be_bytes());
+        frame.extend_from_slice(&(bpm.len() as u32 + 2).to_be_bytes());
         frame.extend_from_slice(&[0, 0]); // drapeaux
+        frame.push(0); // encodage ISO-8859-1
         frame.extend_from_slice(bpm.as_bytes());
         frame.push(0);
 

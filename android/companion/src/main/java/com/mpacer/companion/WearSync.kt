@@ -27,6 +27,8 @@ object WearSync {
     /** Chemin Data Layer partage avec com.mpacer.watch.WearSyncListener. */
     const val PATH_WORKOUT = "/mpacer/workout"
     const val KEY_ASSET = "workout"
+    /** Plans de preparation musicale (docs/07 section 7.3). */
+    const val PATH_MUSIC = "/mpacer/music"
 
     private const val MESSAGE_LIMIT_BYTES = 90 * 1024
     private const val WEAR_COMPANION = "com.google.android.apps.wear.companion"
@@ -48,7 +50,15 @@ object WearSync {
     }
 
     /** Envoie un JSON de seance a toutes les montres joignables. */
-    fun sendPayload(context: Context, payload: ByteArray): Outcome {
+    fun sendPayload(context: Context, payload: ByteArray): Outcome = send(context, PATH_WORKOUT, payload)
+
+    /**
+     * Envoie un plan de preparation musicale a la montre (docs/07 section 7.3).
+     * Le message reveille le service de la montre, qui met le plan en file.
+     */
+    fun sendMusicPlan(context: Context, payload: ByteArray): Outcome = send(context, PATH_MUSIC, payload)
+
+    private fun send(context: Context, path: String, payload: ByteArray): Outcome {
         val nodes = try {
             reachableNodeIds(context)
         } catch (error: Exception) {
@@ -58,10 +68,10 @@ object WearSync {
         return try {
             if (payload.size <= MESSAGE_LIMIT_BYTES) {
                 for (node in nodes) {
-                    Tasks.await(Wearable.getMessageClient(context).sendMessage(node, PATH_WORKOUT, payload))
+                    Tasks.await(Wearable.getMessageClient(context).sendMessage(node, path, payload))
                 }
             } else {
-                val request = PutDataRequest.create(PATH_WORKOUT)
+                val request = PutDataRequest.create(path)
                 val dataMap = DataMap().apply {
                     putAsset(KEY_ASSET, Asset.createFromBytes(payload))
                 }

@@ -5,6 +5,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -87,6 +89,46 @@ class MpacerApi(private val baseUrl: String) {
 
     suspend fun stats(token: String, days: Int = 30): Stats =
         get("/api/v1/stats?days=" + days, token, Stats.serializer())
+
+    // ---------------------------------------------------------------- musique
+
+    /** Playlists preparees cote serveur (docs/07 section 6.3). */
+    suspend fun listMusicPlaylists(token: String): MusicPlaylistListResponse =
+        get("/api/v1/music/playlists", token, MusicPlaylistListResponse.serializer())
+
+    /**
+     * Televerse des fichiers audio (endpoint appareil).
+     *
+     * `POST /api/v1/music/playlists` : multipart avec le champ `name` et un champ
+     * `files` repete par fichier, jeton d'appareil en Bearer, memes gardes que
+     * /api/v1/workouts. Reponse :
+     * {playlist_id, name, track_count, total_bytes, ready_track_count}.
+     */
+    suspend fun uploadMusic(token: String, playlistName: String, files: List<UploadFile>): MusicUploadResponse =
+        withContext(Dispatchers.IO) {
+            val body = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("name", playlistName)
+            files.forEach { file ->
+                body.addFormDataPart(
+                    "files",
+                    file.name,
+                    file.bytes.toRequestBody(file.mime?.toMediaTypeOrNull()),
+                )
+            }
+            val request = Request.Builder()
+                .url(url("/api/v1/music/playlists"))
+                .header("Authorization", "Bearer " + token)
+                .post(body.build())
+                .build()
+            http.newCall(request).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    throw ApiException(response.code, errorCode(text), "televersement refuse")
+                }
+                codec.decodeFromString(MusicUploadResponse.serializer(), text)
+            }
+        }
 
     // ------------------------------------------------------------------ outils
 

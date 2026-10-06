@@ -7,6 +7,8 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.mpacer.watch.music.MusicLibrary
+import com.mpacer.watch.music.PreparePlan
 import com.google.android.gms.wearable.Asset
 import com.google.android.gms.wearable.DataEvent
 import com.google.android.gms.wearable.DataEventBuffer
@@ -26,12 +28,17 @@ import org.json.JSONObject
  * Deux canaux coexistent cote telephone :
  *  - MessageClient pour les charges utiles de moins de 100 Ko ;
  *  - DataClient + Asset pour les fichiers plus gros (trace GPS complete).
+ *
+ * Le chemin /mpacer/music porte les plans de preparation musicale (docs/07
+ * section 7.3) : la montre les met en file et telecharge au prochain reveil.
  */
 class WearSyncListener : WearableListenerService() {
 
     override fun onMessageReceived(event: MessageEvent) {
-        if (event.path != PATH_WORKOUT) return
-        importPayload(String(event.data, Charsets.UTF_8))
+        when (event.path) {
+            PATH_WORKOUT -> importPayload(String(event.data, Charsets.UTF_8))
+            PATH_MUSIC -> importMusicPlan(String(event.data, Charsets.UTF_8))
+        }
     }
 
     override fun onDataChanged(events: DataEventBuffer) {
@@ -75,6 +82,29 @@ class WearSyncListener : WearableListenerService() {
         if (imported > 0) notifyImport(imported)
     }
 
+    /** Plan de preparation musicale envoye par le telephone : mis en file localement. */
+    private fun importMusicPlan(text: String) {
+        val plan = MusicLibrary.onPlanMessage(this, text) ?: return
+        notifyMusicPlan(plan)
+    }
+
+    private fun notifyMusicPlan(plan: PreparePlan) {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            manager.createNotificationChannel(
+                NotificationChannel(CHANNEL_MUSIC, "Musique", NotificationManager.IMPORTANCE_DEFAULT)
+            )
+        }
+        val notification = NotificationCompat.Builder(this, CHANNEL_MUSIC)
+            .setContentTitle("Musique a preparer")
+            .setContentText(plan.name.ifBlank { plan.playlistId } + " : ouvrez Musique sur la montre")
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setAutoCancel(true)
+            .build()
+        runCatching { manager.notify(NOTIFICATION_ID_MUSIC, notification) }
+            .onFailure { Log.w(TAG, "notification musique impossible", it) }
+    }
+
     private fun notifyImport(count: Int) {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -96,8 +126,12 @@ class WearSyncListener : WearableListenerService() {
         /** Chemin Data Layer partage avec le module :companion. */
         const val PATH_WORKOUT = "/mpacer/workout"
         const val KEY_ASSET = "workout"
+        /** Plans de preparation musicale (docs/07 section 7.3). */
+        const val PATH_MUSIC = "/mpacer/music"
         private const val CHANNEL_ID = "mpacer.sync"
+        private const val CHANNEL_MUSIC = "mpacer.music"
         private const val NOTIFICATION_ID = 43
+        private const val NOTIFICATION_ID_MUSIC = 44
         private const val TAG = "WearSyncListener"
     }
 }

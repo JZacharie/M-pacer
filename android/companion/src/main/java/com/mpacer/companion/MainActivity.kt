@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mpacer.companion.ui.LoginScreen
 import com.mpacer.companion.ui.MpacerTheme
+import com.mpacer.companion.ui.MusicScreen
 import com.mpacer.companion.ui.SendScreen
 import com.mpacer.companion.ui.WorkoutDetailScreen
 import com.mpacer.companion.ui.WorkoutListScreen
@@ -41,7 +42,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Dest { Login, List, Detail, Send }
+private enum class Dest { Login, List, Detail, Send, Music }
 
 @Composable
 fun MpacerApp(viewModel: AppViewModel) {
@@ -73,6 +74,19 @@ fun MpacerApp(viewModel: AppViewModel) {
                 onImport = { dest = Dest.Send },
                 onInstallWatch = { WearSync.openWatchStore(context) },
                 onDisconnect = viewModel::disconnect,
+                onOpenMusic = {
+                    viewModel.refreshMusic()
+                    dest = Dest.Music
+                },
+            )
+
+            Dest.Music -> MusicScreen(
+                state = state,
+                onRefresh = viewModel::refreshMusic,
+                onSendPlan = viewModel::sendMusicPlan,
+                onUpload = viewModel::uploadMusic,
+                onOpenPage = { WearSync.openUrl(context, state.baseUrl + "/music") },
+                onOpenWorkouts = { dest = Dest.List },
             )
 
             Dest.Detail -> WorkoutDetailScreen(

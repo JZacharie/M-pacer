@@ -39,6 +39,7 @@ fun WorkoutListScreen(
     onImport: () -> Unit,
     onInstallWatch: () -> Unit,
     onDisconnect: () -> Unit,
+    onOpenMusic: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -46,6 +47,8 @@ fun WorkoutListScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        Tabs(actif = Onglet.Seances, onOpenWorkouts = {}, onOpenMusic = onOpenMusic)
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,

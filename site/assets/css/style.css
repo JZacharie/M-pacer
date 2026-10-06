@@ -149,7 +149,10 @@ blockquote {
 .brand-text { display: flex; flex-direction: column; font-size: 16px; line-height: 1.1; }
 .brand-text small { font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
 
-.nav { margin-left: auto; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.nav {
+  margin-left: auto; display: flex; align-items: center; gap: 4px;
+  flex-wrap: wrap; min-width: 0; justify-content: flex-end;
+}
 .nav a {
   color: var(--muted); font-size: 14.5px; padding: 7px 11px; border-radius: 999px;
   transition: color .15s var(--ease), background .15s var(--ease);
@@ -281,6 +284,13 @@ tbody tr:hover { background: var(--surface-2); }
   color: var(--muted); font-size: 14px;
 }
 .footer p { margin: 0 0 6px; }
+
+@media (max-width: 719px) {
+  /* L'en-tete passe sur deux lignes : le titre de page garde toute la largeur. */
+  .topbar-in { padding-top: 8px; padding-bottom: 8px; gap: 4px; }
+  .nav { margin-left: 0; width: 100%; justify-content: flex-start; }
+  main { padding-top: 28px; }
+}
 
 @media (min-width: 720px) {
   h1 { font-size: 40px; }

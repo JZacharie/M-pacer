@@ -6,9 +6,11 @@
 use crate::auth::device;
 use crate::auth::{AuthUser, OptionalUser, SESSION_COOKIE};
 use crate::error::{AppError, AppResult};
-use crate::models::{Race, RaceInput, RaceTask, User};
+use crate::models::{
+    MusicPlaylistInput, MusicTrackInput, Race, RaceInput, RaceTask, SpotifyAccount, User,
+};
 use crate::state::AppState;
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -30,6 +32,7 @@ pub fn router() -> Router<AppState> {
         .route("/auth/dev-login", post(dev_login))
         .route("/logout", post(logout))
         .route("/link", get(link_page).post(link_submit))
+        .route("/avatar", get(avatar))
         .route("/settings", get(settings_page))
         .route("/settings/tokens/{id}/revoke", post(revoke_token))
         .route("/workouts/{id}", get(workout_page))
@@ -50,6 +53,25 @@ pub fn router() -> Router<AppState> {
             "/courses/{id}/suivi/{task}/supprimer",
             post(race_task_delete),
         )
+        // Musique : page unique a quatre blocs (docs/07 section 7.1).
+        .route("/music", get(music_page))
+        .route("/music/search", get(music_search))
+        .route("/auth/spotify", get(spotify_start))
+        .route("/auth/spotify/callback", get(spotify_callback))
+        .route("/music/spotify/disconnect", post(spotify_disconnect))
+        .route("/music/import", post(music_import))
+        // Le corps multipart peut depasser la limite par defaut (2 Mo) : la
+        // route fixe elle-meme son plafond, sans elargir le reste du service.
+        .route(
+            "/music/upload",
+            post(music_upload)
+                .layer(DefaultBodyLimit::max(crate::models::MAX_UPLOAD_BYTES as usize)),
+        )
+        .route("/music/playlists/{id}/track-bpm", post(music_track_bpm))
+        .route("/music/playlists/{id}/target", post(music_target))
+        .route("/music/playlists/{id}/delete", post(music_delete))
+        .route("/music/prepare", post(music_prepare_create))
+        .route("/music/prepare/cancel", post(music_prepare_cancel))
         .route("/static/app.css", get(stylesheet))
         .route("/static/app.js", get(script))
 }
@@ -575,6 +597,20 @@ async fn settings_page(
             h1 { "Jetons d'appareil" }
             p class="muted" { "Chaque montre appairee possede son propre jeton. Revoquez-le si vous perdez l'appareil." }
         }
+        section class="card profile" {
+            img class="avatar avatar-large" src="/avatar" alt="" width="64" height="64" decoding="async";
+            div class="profile-identite" {
+                strong { (user.name.clone().unwrap_or_else(|| user.email.clone())) }
+                span class="muted" { (user.email.clone()) }
+                span class="tiny muted" {
+                    @if user.picture_url.is_some() {
+                        "Photo fournie par votre compte Google."
+                    } @else {
+                        "Aucune photo Google : pastille d'initiales."
+                    }
+                }
+            }
+        }
         section {
             div class="table-wrap" {
             table {
@@ -912,6 +948,48 @@ async fn workout_gpx(
     super::gpx_response(&state, &user.id, &id).await
 }
 
+// ------------------------------------------------------------------ avatar
+
+/// Photo de profil du compte connecte.
+///
+/// Le service telecharge la photo Google (et la garde en memoire) avant de la
+/// servir lui-meme : le navigateur ne contacte jamais Google. Sans photo, ou si
+/// Google ne repond pas, une pastille aux initiales du compte prend le relais.
+async fn avatar(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+
+    if let Some(url) = user.picture_url.as_deref() {
+        if let Some(image) = state.avatars.picture(&state.http, url).await {
+            return Ok(avatar_response(&image.bytes, &image.content_type));
+        }
+    }
+
+    Ok(avatar_response(
+        crate::avatar::monogram_svg(&user).as_bytes(),
+        "image/svg+xml; charset=utf-8",
+    ))
+}
+
+/// Reponse image d'un avatar, jamais conservee par un cache partage.
+fn avatar_response(bytes: &[u8], content_type: &str) -> Response {
+    let content_type = HeaderValue::from_str(content_type)
+        .unwrap_or_else(|_| HeaderValue::from_static("image/png"));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, "private, max-age=3600")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .body(axum::body::Body::from(bytes.to_vec()))
+        .unwrap_or_else(|error| {
+            AppError::internal(format!("reponse avatar : {error}")).into_response()
+        })
+}
+
 // ------------------------------------------------------------------ rendu
 
 fn page(markup: Markup) -> Response {
@@ -919,11 +997,12 @@ fn page(markup: Markup) -> Response {
 }
 
 /// Sections de navigation : cle interne, libelle, icone, chemin.
-const NAV: [(&str, &str, &str, &str); 6] = [
+const NAV: [(&str, &str, &str, &str); 7] = [
     ("seances", "Seances", "icon-activity", "/"),
     ("courses", "Courses", "icon-route", "/courses"),
     ("planning", "Planning", "icon-clock", "/courses/planning"),
     ("stats", "Statistiques", "icon-stats", "/stats"),
+    ("music", "Musique", "icon-music", "/music"),
     ("link", "Appairer", "icon-watch", "/link"),
     ("settings", "Jetons", "icon-key", "/settings"),
 ];
@@ -951,7 +1030,7 @@ fn layout(title: &str, active: &str, user: Option<&User>, content: Markup) -> Ma
                 header class="site" {
                     a class="brand" href="/" { "M-pacer" }
                     nav {
-                        @if let Some(user) = user {
+                        @if user.is_some() {
                             @for (cle, libelle, icone, chemin) in NAV {
                                 a href=(chemin) class=(if cle == active { "active" } else { "" }) {
                                     span class={ "icon " (icone) } {}
@@ -964,9 +1043,16 @@ fn layout(title: &str, active: &str, user: Option<&User>, content: Markup) -> Ma
                                     "Deconnexion"
                                 }
                             }
-                            span class="who" { (user.name.clone().unwrap_or_else(|| user.email.clone())) }
                         } @else {
                             a href="/login" { "Connexion" }
+                        }
+                    }
+                    @if let Some(user) = user {
+                        // Photo de profil Google (pastille d'initiales a defaut) :
+                        // le lien reste visible sur mobile, ou la navigation est masquee.
+                        a class="user-chip" href="/settings" title="Votre compte Google" {
+                            img class="avatar" src="/avatar" alt="" width="32" height="32" decoding="async";
+                            span class="who" { (user.name.clone().unwrap_or_else(|| user.email.clone())) }
                         }
                     }
                 }
@@ -2508,4 +2594,927 @@ async fn race_task_delete(
         return Err(AppError::NotFound);
     }
     Ok(Redirect::to(&format!("/courses/{id}")).into_response())
+}
+
+// ------------------------------------------------------------------ musique
+//
+// La page /music reprend les quatre blocs de docs/07 section 7.1 :
+//   1. source de musique (Spotify et fichiers personnels) ;
+//   2. playlists preparees (source, titres, taille, BPM cible) ;
+//   3. titres de la playlist selectionnee (tap-tempo ou saisie manuelle) ;
+//   4. preparation de la prochaine course (« Envoyer sur la montre »).
+//
+// « Envoyer sur la montre » ne pousse aucun octet depuis le navigateur : cela
+// cree un plan de telechargement que la montre recupere au prochain reveil,
+// exactement comme la montre est la source de verite pour les seances.
+
+/// Parametres de la page musique.
+#[derive(Debug, Deserialize)]
+struct MusicQuery {
+    /// Playlist affichee dans le bloc 3.
+    #[serde(default)]
+    playlist: Option<String>,
+    /// Terme de recherche Spotify.
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    erreur: Option<String>,
+    #[serde(default)]
+    ok: Option<String>,
+}
+
+/// Traduit un code d'erreur de la page musique en message lisible.
+fn music_error_message(code: &str) -> String {
+    match code {
+        "spotify_non_configure" => "Spotify n'est pas configure sur ce service : renseignez MPACER_SPOTIFY_CLIENT_ID et MPACER_SPOTIFY_CLIENT_SECRET. Les fichiers personnels restent utilisables.".to_string(),
+        "spotify_refuse" => "Spotify a refuse la demande (identifiants invalides, redirection non autorisee ou endpoint restreint).".to_string(),
+        "spotify_ref_invalide" => "La reference de playlist Spotify est illisible : collez un lien open.spotify.com ou un identifiant.".to_string(),
+        "spotify_non_connecte" => "Connectez votre compte Spotify avant d'importer une playlist.".to_string(),
+        "playlist_inconnue" => "Cette playlist n'existe plus.".to_string(),
+        "upload_refuse" => "Le televersement a ete refuse : aucun fichier, format non reconnu ou ecriture impossible.".to_string(),
+        "bpm_invalide" => "Le BPM doit etre un nombre entre 30 et 300.".to_string(),
+        "course_inconnue" => "La course choisie n'existe pas.".to_string(),
+        other => format!("Operation impossible ({other})."),
+    }
+}
+
+/// Traduit un code de succes de la page musique en message lisible.
+fn music_ok_message(code: &str) -> String {
+    match code {
+        "spotify_connecte" => "Compte Spotify connecte.".to_string(),
+        "spotify_deconnecte" => "Compte Spotify deconnecte.".to_string(),
+        "playlist_importee" => "Playlist Spotify importee.".to_string(),
+        "fichiers_importes" => "Fichiers ajoutes a la playlist.".to_string(),
+        "bpm_enregistre" => "BPM enregistre.".to_string(),
+        "plan_envoye" => "Plan envoye : la montre le recuperera au prochain reveil.".to_string(),
+        "plan_annule" => "Plan de telechargement annule.".to_string(),
+        "playlist_supprimee" => "Playlist et fichiers supprimes.".to_string(),
+        other => format!("Operation effectuee ({other})."),
+    }
+}
+
+/// Taille lisible ("86 Mo", "1.2 Go").
+fn format_bytes(bytes: i64) -> String {
+    const MO: f64 = 1024.0 * 1024.0;
+    let mo = bytes.max(0) as f64 / MO;
+    if mo >= 1024.0 {
+        let go = mo / 1024.0;
+        format!("{go:.1} Go")
+    } else if mo >= 10.0 || bytes <= 0 {
+        format!("{mo:.0} Mo")
+    } else {
+        format!("{mo:.1} Mo")
+    }
+}
+
+/// Jeton d'acces Spotify valide, rafraichi si necessaire.
+///
+/// Un rafraichissement refuse n'est pas une erreur fatale : la page invite
+/// simplement a reconnecter le compte.
+async fn spotify_access_token(state: &AppState, user_id: &str) -> AppResult<Option<String>> {
+    let Some(account) = crate::db::get_spotify_account(&state.pool, user_id).await? else {
+        return Ok(None);
+    };
+    // 60 s de marge : une requete partie juste avant l'expiration ne doit pas
+    // echouer sur un jeton perime.
+    if account.expires_at_ms > state.now_ms() + 60_000 {
+        return Ok(Some(account.access_token));
+    }
+    let Some(refresh) = account.refresh_token.as_deref() else {
+        tracing::warn!(utilisateur = %user_id, "jeton Spotify expire sans refresh_token");
+        return Ok(None);
+    };
+    match crate::spotify::refresh_token(&state.http, &state.config, refresh).await {
+        Ok(token) => {
+            let expires_at_ms = state.now_ms() + token.expires_in.unwrap_or(3600) * 1000;
+            crate::db::update_spotify_access_token(
+                &state.pool,
+                user_id,
+                &token.access_token,
+                expires_at_ms,
+            )
+            .await?;
+            Ok(Some(token.access_token))
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "rafraichissement du jeton Spotify refuse");
+            Ok(None)
+        }
+    }
+}
+
+// L'ecriture des fichiers audio et le nettoyage vivent dans `crate::media` :
+// le navigateur (cookie) et l'application compagnon (jeton d'appareil)
+// televersent exactement par le meme chemin de code.
+
+/// Page /music : source, playlists, titres et preparation de la course.
+async fn music_page(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Query(query): Query<MusicQuery>,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let now = state.now_ms();
+    let spotify_ready = state.config.spotify_configured();
+    let account = crate::db::get_spotify_account(&state.pool, &user.id).await?;
+    let playlists = crate::db::list_music_playlist_summaries(&state.pool, &user.id).await?;
+
+    // Playlist affichee : celle demandee, sinon la plus recemment modifiee.
+    let selected_id = query
+        .playlist
+        .clone()
+        .filter(|id| playlists.iter().any(|playlist| &playlist.id == id))
+        .or_else(|| playlists.first().map(|playlist| playlist.id.clone()));
+    let selected_playlist = match &selected_id {
+        Some(id) => crate::db::get_music_playlist(&state.pool, &user.id, id).await?,
+        None => None,
+    };
+    let tracks = match &selected_id {
+        Some(id) => crate::db::list_music_tracks(&state.pool, &user.id, id).await?,
+        None => Vec::new(),
+    };
+    let selected_summary = selected_id
+        .as_ref()
+        .and_then(|id| playlists.iter().find(|playlist| &playlist.id == id));
+
+    let races = crate::db::list_upcoming_races(&state.pool, &user.id, now).await?;
+    let plan = crate::db::pending_music_plan(&state.pool, &user.id).await?;
+    let plan_playlist_name = plan.as_ref().and_then(|plan| {
+        playlists
+            .iter()
+            .find(|playlist| playlist.id == plan.playlist_id)
+            .map(|playlist| playlist.name.clone())
+    });
+    let plan_race_name = match plan.as_ref().and_then(|plan| plan.race_id.as_deref()) {
+        Some(race_id) => crate::db::get_race(&state.pool, &user.id, race_id)
+            .await?
+            .map(|race| race.name),
+        None => None,
+    };
+
+    // Recherche Spotify : aucun appel reseau quand le service n'est pas configure.
+    let mut search_results: Vec<crate::spotify::PlaylistRef> = Vec::new();
+    let mut search_error: Option<String> = None;
+    if let Some(term) = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+    {
+        if !spotify_ready {
+            search_error = Some("Spotify n'est pas configure sur ce service.".to_string());
+        } else if account.is_none() {
+            search_error = Some("Connectez votre compte Spotify pour rechercher.".to_string());
+        } else {
+            match spotify_access_token(&state, &user.id).await? {
+                Some(token) => {
+                    match crate::spotify::search_playlists(&state.http, &token, term).await {
+                        Ok(results) => search_results = results,
+                        Err(error) => {
+                            tracing::warn!(error = %error, "recherche Spotify refusee");
+                            search_error = Some("La recherche Spotify a echoue.".to_string());
+                        }
+                    }
+                }
+                None => {
+                    search_error = Some("Session Spotify expiree : reconnectez le compte.".to_string());
+                }
+            }
+        }
+    }
+
+    let target_label = selected_summary
+        .and_then(|playlist| playlist.target_bpm)
+        .map(|bpm| format!("{bpm:.0}"))
+        .unwrap_or_else(|| "auto".to_string());
+    let size_label = format_bytes(selected_summary.map_or(0, |playlist| playlist.total_bytes));
+    let state_label = if plan.is_some() {
+        "en attente de la montre"
+    } else {
+        "aucun plan en attente"
+    };
+
+    let content = html! {
+        section class="hero" {
+            h1 { "Musique" }
+            p class="muted" { "Playlists de course, tempo (BPM) et preparation hors ligne sur la montre." }
+        }
+        @if let Some(erreur) = query.erreur.as_deref() {
+            p class="alert" {
+                span class="icon icon-alert" {}
+                span { (music_error_message(erreur)) }
+            }
+        }
+        @if let Some(ok) = query.ok.as_deref() {
+            p class="alert ok" {
+                span class="icon icon-check" {}
+                span { (music_ok_message(ok)) }
+            }
+        }
+
+        // ------------------------------------------------ 1. source de musique
+        div class="section-head" { h2 { "1. Source de musique" } }
+        div class="music-grid" {
+            div class="panel" {
+                h3 { "Spotify" }
+                @if let Some(error) = &search_error {
+                    p class="alert" {
+                        span class="icon icon-alert" {}
+                        span { (error) }
+                    }
+                }
+                @if !spotify_ready {
+                    p class="muted" {
+                        "Spotify n'est pas configure sur ce service : renseignez "
+                        "MPACER_SPOTIFY_CLIENT_ID et MPACER_SPOTIFY_CLIENT_SECRET pour "
+                        "importer des playlists. Les fichiers personnels restent utilisables."
+                    }
+                } @else if let Some(account) = &account {
+                    p class="split" {
+                        span class="pill on" { "Connecte" }
+                        @if let Some(nom) = account.display_name.as_deref().or(account.spotify_user_id.as_deref()) {
+                            span class="muted" { (nom) }
+                        }
+                    }
+                    form method="get" action="/music/search" class="music-search" {
+                        input type="text" name="q" value=(query.q.clone().unwrap_or_default()) placeholder="running";
+                        button type="submit" { "Rechercher" }
+                    }
+                    @if !search_results.is_empty() {
+                        ul class="music-results" {
+                            @for result in &search_results {
+                                li {
+                                    div class="music-result" {
+                                        strong { (result.name) }
+                                        span class="muted" { (result.track_count) " titres" }
+                                    }
+                                    form method="post" action="/music/import" class="music-import" {
+                                        input type="hidden" name="spotify_ref" value=(result.id);
+                                        input type="text" name="target_bpm" inputmode="numeric" placeholder="BPM cible (auto)";
+                                        button class="small" type="submit" { "Importer" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    form method="post" action="/music/spotify/disconnect" {
+                        button class="ghost" type="submit" { "Deconnecter" }
+                    }
+                } @else {
+                    p class="muted" {
+                        "Importez une playlist Spotify : seules les fiches (titres, durees, BPM) "
+                        "sont stockees ici, la musique reste dans l'application Spotify de la montre."
+                    }
+                    div class="actions" {
+                        a class="button" href="/auth/spotify" { "Connecter Spotify" }
+                    }
+                }
+            }
+            div class="panel" {
+                h3 { "Fichiers personnels" }
+                p class="muted" { "MP3, OGG, M4A : televerses sur le serveur puis telecharges par la montre." }
+                form method="post" action="/music/upload" enctype="multipart/form-data" {
+                    label for="playlist_name" { "Nom de playlist" }
+                    input type="text" id="playlist_name" name="playlist_name" placeholder="Ma course 10 km" required maxlength="200";
+                    label for="music_files" { "Choisir des fichiers MP3/OGG/M4A" }
+                    input type="file" id="music_files" name="files" multiple required
+                          accept=".mp3,.ogg,.oga,.opus,.m4a,.mp4,.flac,.wav,audio/*";
+                    button type="submit" { "Importer sur le serveur" }
+                }
+            }
+        }
+
+        // ------------------------------------------------ 2. playlists preparees
+        div class="section-head" { h2 { "2. Playlists preparees" } }
+        @if playlists.is_empty() {
+            div class="empty" {
+                span class="icon icon-music" {}
+                p { "Aucune playlist pour l'instant." }
+                p class="tiny" { "Importez une playlist Spotify ou televersez vos fichiers." }
+            }
+        } @else {
+            div class="table-wrap" {
+                table {
+                    thead {
+                        tr {
+                            th { "Playlist" }
+                            th { "Source" }
+                            th { "Titres" }
+                            th { "Taille" }
+                            th { "BPM cible" }
+                            th {}
+                        }
+                    }
+                    tbody {
+                        @for playlist in &playlists {
+                            tr {
+                                td { a href={ "/music?playlist=" (playlist.id) } { (playlist.name) } }
+                                td { span class="pill" { (playlist.source) } }
+                                td { (playlist.track_count) }
+                                td { (format_bytes(playlist.total_bytes)) }
+                                td {
+                                    form class="inline-form" method="post"
+                                         action={ "/music/playlists/" (playlist.id) "/target" } {
+                                        input type="text" name="target_bpm" inputmode="numeric" placeholder="auto"
+                                              value=(playlist.target_bpm.map(|bpm| format!("{bpm:.0}")).unwrap_or_default());
+                                        button class="small ghost" type="submit" { "Valider" }
+                                    }
+                                }
+                                td {
+                                    div class="actions" {
+                                        a class="button small" href={ "/music?playlist=" (playlist.id) } { "Preparer" }
+                                        form method="post" action={ "/music/playlists/" (playlist.id) "/delete" }
+                                             data-confirm="Supprimer cette playlist et ses fichiers ?" {
+                                            button class="ghost danger small" type="submit" { "Supprimer" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------ 3. titres
+        div class="section-head" { h2 { "3. Titres (playlist selectionnee)" } }
+        @if let Some(playlist) = &selected_playlist {
+            p class="muted" { (playlist.name) " - " (tracks.len()) " titres" }
+            @if tracks.is_empty() {
+                p class="muted" { "Cette playlist ne contient aucun titre." }
+            } @else {
+                div class="table-wrap" {
+                    table {
+                        thead {
+                            tr {
+                                th { "#" }
+                                th { "Titre" }
+                                th { "Artiste" }
+                                th { "Duree" }
+                                th { "BPM" }
+                                th {}
+                            }
+                        }
+                        tbody {
+                            @for (index, track) in tracks.iter().enumerate() {
+                                tr {
+                                    td { (index + 1) }
+                                    td { (track.title) }
+                                    td { (track.artist.clone().unwrap_or_else(|| "-".to_string())) }
+                                    td { (track.duration_s.map(format_duration).unwrap_or_else(|| "-".to_string())) }
+                                    td {
+                                        @match track.bpm {
+                                            Some(bpm) => {
+                                                (format!("{bpm:.0}"))
+                                                @if let Some(source) = &track.bpm_source {
+                                                    span class="tiny muted" { " " (source) }
+                                                }
+                                            }
+                                            None => { span class="muted" { "inconnu" } }
+                                        }
+                                    }
+                                    td {
+                                        form class="inline-form bpm-form" method="post"
+                                             action={ "/music/playlists/" (playlist.id) "/track-bpm" }
+                                             data-bpm-track=(track.id) {
+                                            input type="hidden" name="track_id" value=(track.id);
+                                            input type="hidden" name="source" value="manual" class="bpm-source";
+                                            input type="text" name="bpm" inputmode="numeric" placeholder="BPM"
+                                                  value=(track.bpm.map(|bpm| format!("{bpm:.0}")).unwrap_or_default());
+                                            button class="small" type="submit" { "saisir" }
+                                        }
+                                        button class="small ghost tap" type="button" data-tap=(track.id) { "tapper" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } @else {
+            p class="muted" { "Selectionnez une playlist dans le bloc 2 pour saisir les BPM." }
+        }
+
+        // ------------------------------------------------ 4. preparation de la course
+        div class="section-head" { h2 { "4. Preparation de la prochaine course" } }
+        div class="panel" {
+            form method="post" action="/music/prepare" class="music-plan" {
+                div class="grid-2" {
+                    div class="field" {
+                        label for="race_id" { "Course :" }
+                        select id="race_id" name="race_id" {
+                            option value="" { "Aucune course" }
+                            @for race in &races {
+                                option value=(race.id)
+                                    selected[plan.as_ref().and_then(|plan| plan.race_id.as_deref()) == Some(race.id.as_str())] {
+                                    (race.name)
+                                }
+                            }
+                        }
+                    }
+                    div class="field" {
+                        label for="plan_playlist" { "Playlist :" }
+                        select id="plan_playlist" name="playlist_id" {
+                            @for playlist in &playlists {
+                                option value=(playlist.id) selected[Some(&playlist.id) == selected_id.as_ref()] {
+                                    (playlist.name)
+                                }
+                            }
+                        }
+                    }
+                }
+                div class="mini-cards" {
+                    (mini_card("BPM cible", &target_label))
+                    (mini_card("Taille", &size_label))
+                    (mini_card("Etat", state_label))
+                }
+                @if let Some(plan) = &plan {
+                    p class="muted" {
+                        "Plan demande le " (format_date(plan.requested_at_ms))
+                        @if let Some(name) = &plan_playlist_name { " pour " (name) }
+                        @if let Some(name) = &plan_race_name { " - course " (name) }
+                    }
+                }
+                div class="actions" {
+                    button type="submit" { "Envoyer sur la montre" }
+                }
+            }
+            @if plan.is_some() {
+                form method="post" action="/music/prepare/cancel" {
+                    button class="ghost danger" type="submit" { "Annuler le plan" }
+                }
+            }
+        }
+    };
+
+    Ok(page(layout("Musique", "music", Some(&user), content)))
+}
+
+/// Alias de /music : la recherche renvoie ses resultats dans la meme page.
+async fn music_search(
+    state: State<AppState>,
+    user: OptionalUser,
+    query: Query<MusicQuery>,
+) -> AppResult<Response> {
+    music_page(state, user, query).await
+}
+
+// ---------------------------------------------------------------- Spotify (web)
+
+/// Demarre l'OAuth Spotify (code + PKCE S256).
+async fn spotify_start(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+) -> AppResult<Response> {
+    if !state.config.spotify_configured() {
+        return Ok(Redirect::to("/music?erreur=spotify_non_configure").into_response());
+    }
+    let verifier = crate::auth::random_urlsafe(32);
+    let challenge = crate::auth::pkce_challenge(&verifier);
+    let oauth_state = crate::auth::random_urlsafe(24);
+    let now = state.now_ms();
+    // Meme table que Google : un etat OAuth est a usage unique, quelle que soit
+    // la provenance du callback.
+    sqlx::query(
+        "INSERT INTO oauth_states (state, pkce_verifier, redirect_to, created_at_ms, expires_at_ms)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(&oauth_state)
+    .bind(&verifier)
+    .bind("/music")
+    .bind(now)
+    .bind(now + 600_000)
+    .execute(&state.pool)
+    .await?;
+
+    let url = crate::spotify::authorize_url(&state.config, &oauth_state, &challenge)?;
+    Ok(Redirect::to(&url).into_response())
+}
+
+/// Echange le code Spotify, enregistre le compte lie et revient sur /music.
+pub(crate) async fn spotify_callback(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Query(query): Query<CallbackQuery>,
+) -> AppResult<Response> {
+    if let Some(error) = query.error {
+        return Ok(Redirect::to(&format!("/music?erreur={error}")).into_response());
+    }
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let (Some(code), Some(oauth_state)) = (query.code, query.state) else {
+        return Err(AppError::bad_request("parametres OAuth manquants"));
+    };
+
+    let now = state.now_ms();
+    let row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT pkce_verifier, redirect_to FROM oauth_states WHERE state = $1 AND expires_at_ms > $2",
+    )
+    .bind(&oauth_state)
+    .bind(now)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((verifier, _redirect_to)) = row else {
+        return Err(AppError::bad_request("etat OAuth inconnu ou expire"));
+    };
+    sqlx::query("DELETE FROM oauth_states WHERE state = $1")
+        .bind(&oauth_state)
+        .execute(&state.pool)
+        .await?;
+
+    let token = match crate::spotify::exchange_code(&state.http, &state.config, &code, &verifier).await
+    {
+        Ok(token) => token,
+        Err(error) => {
+            tracing::warn!(error = %error, "echange de jeton Spotify refuse");
+            return Ok(Redirect::to("/music?erreur=spotify_refuse").into_response());
+        }
+    };
+    // Le profil n'est qu'un confort d'affichage : un echec ne remet pas en
+    // cause la liaison, qui a bien recu ses jetons.
+    let profile = crate::spotify::current_user(&state.http, &token.access_token)
+        .await
+        .unwrap_or(crate::spotify::Profile {
+            id: None,
+            display_name: None,
+        });
+
+    let account = SpotifyAccount {
+        user_id: user.id.clone(),
+        spotify_user_id: profile.id,
+        display_name: profile.display_name,
+        access_token: token.access_token,
+        refresh_token: token.refresh_token,
+        expires_at_ms: now + token.expires_in.unwrap_or(3600) * 1000,
+        scope: token
+            .scope
+            .or_else(|| Some(crate::spotify::SCOPES.to_string())),
+        connected_at_ms: now,
+    };
+    crate::db::upsert_spotify_account(&state.pool, &account).await?;
+    tracing::info!(user = %user.email, "compte Spotify connecte");
+    Ok(Redirect::to("/music?ok=spotify_connecte").into_response())
+}
+
+/// Supprime la liaison Spotify (les jetons sont oublies).
+async fn spotify_disconnect(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Response> {
+    crate::db::delete_spotify_account(&state.pool, &user.id).await?;
+    tracing::info!(user = %user.email, "compte Spotify deconnecte");
+    Ok(Redirect::to("/music?ok=spotify_deconnecte").into_response())
+}
+
+// ---------------------------------------------------------------- actions musique
+
+#[derive(Debug, Deserialize)]
+struct MusicImportForm {
+    #[serde(default)]
+    spotify_ref: String,
+    #[serde(default)]
+    target_bpm: String,
+}
+
+/// Importe une playlist Spotify (fiche + tempo quand l'API l'autorise encore).
+async fn music_import(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Form(form): Form<MusicImportForm>,
+) -> AppResult<Response> {
+    if !state.config.spotify_configured() {
+        return Ok(Redirect::to("/music?erreur=spotify_non_configure").into_response());
+    }
+    let Some(spotify_id) = crate::spotify::playlist_id_from_ref(&form.spotify_ref) else {
+        return Ok(Redirect::to("/music?erreur=spotify_ref_invalide").into_response());
+    };
+    let Some(token) = spotify_access_token(&state, &user.id).await? else {
+        return Ok(Redirect::to("/music?erreur=spotify_non_connecte").into_response());
+    };
+    let detail = match crate::spotify::get_playlist(&state.http, &token, &spotify_id).await {
+        Ok(detail) => detail,
+        Err(error) => {
+            tracing::warn!(error = %error, "import Spotify refuse");
+            return Ok(Redirect::to("/music?erreur=spotify_refuse").into_response());
+        }
+    };
+
+    // Le tempo vient d'audio-features quand le compte y a encore acces ; un
+    // refus laisse simplement le BPM inconnu (balise, tap ou saisie manuelle).
+    let ids: Vec<String> = detail
+        .tracks
+        .iter()
+        .filter_map(|track| track.spotify_id.clone())
+        .collect();
+    let tempos = match crate::spotify::audio_features(&state.http, &token, &ids).await {
+        Ok(features) => features,
+        Err(error) => {
+            tracing::warn!(error = %error, "audio-features indisponible : BPM inconnu");
+            None
+        }
+    };
+    let tempo_for = |track_id: &str| -> Option<f64> {
+        tempos
+            .as_ref()
+            .and_then(|features| {
+                features
+                    .iter()
+                    .find(|feature| feature.id == track_id)
+                    .map(|feature| feature.tempo)
+            })
+            .and_then(|tempo| crate::models::clean_bpm(Some(tempo)))
+    };
+
+    // Un reimport remplace la playlist existante : aucune fiche en double.
+    if let Some(existing) =
+        crate::db::find_music_playlist_by_spotify(&state.pool, &user.id, &spotify_id).await?
+    {
+        if let Some(paths) =
+            crate::db::delete_music_playlist(&state.pool, &user.id, &existing.id).await?
+        {
+            crate::media::remove_files(&state, &paths).await;
+        }
+    }
+
+    let target_bpm = match parse_number(&form.target_bpm, "le BPM cible") {
+        Ok(value) => crate::models::clean_bpm(value),
+        Err(_) => return Ok(Redirect::to("/music?erreur=bpm_invalide").into_response()),
+    };
+    let playlist = crate::db::insert_music_playlist(
+        &state.pool,
+        &user.id,
+        &MusicPlaylistInput {
+            name: detail.name.chars().take(200).collect(),
+            source: "spotify".to_string(),
+            spotify_id: Some(spotify_id.clone()),
+            cover_url: detail.cover_url.clone(),
+            target_bpm,
+        },
+        state.now_ms(),
+    )
+    .await?;
+
+    for (position, track) in detail.tracks.iter().enumerate() {
+        let bpm = track.spotify_id.as_deref().and_then(tempo_for);
+        crate::db::insert_music_track(
+            &state.pool,
+            &user.id,
+            &playlist.id,
+            &MusicTrackInput {
+                position: position as i32,
+                title: track.title.clone(),
+                artist: track.artist.clone(),
+                album: track.album.clone(),
+                duration_s: track.duration_s,
+                bpm,
+                bpm_source: bpm.map(|_| "spotify".to_string()),
+                spotify_uri: track.spotify_uri.clone(),
+                mime: None,
+                size_bytes: None,
+                storage_path: None,
+            },
+            state.now_ms(),
+        )
+        .await?;
+    }
+
+    tracing::info!(
+        user = %user.email,
+        playlist = %playlist.id,
+        titres = detail.tracks.len(),
+        "playlist Spotify importee"
+    );
+    Ok(
+        Redirect::to(&format!("/music?playlist={}&ok=playlist_importee", playlist.id))
+            .into_response(),
+    )
+}
+
+/// Televersement de fichiers audio depuis le navigateur (multipart/form-data).
+///
+/// Aucun octet n'est conserve en base : seuls le chemin, le type MIME et la
+/// taille le sont, le fichier restant sous `MPACER_MEDIA_DIR`.
+async fn music_upload(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    multipart: Multipart,
+) -> AppResult<Response> {
+    let form = crate::media::collect_upload(multipart, "playlist_name").await?;
+    match crate::media::import_uploaded_files(&state, &user.id, &form.name, &form.files).await {
+        Ok((playlist_id, track_count, _total_bytes)) => {
+            tracing::info!(
+                user = %user.email,
+                playlist = %playlist_id,
+                titres = track_count,
+                "fichiers audio televerses"
+            );
+            Ok(
+                Redirect::to(&format!("/music?playlist={playlist_id}&ok=fichiers_importes"))
+                    .into_response(),
+            )
+        }
+        Err(error) => {
+            // Le detail est journalise ; la page affiche un message court et
+            // l'utilisateur peut reessayer avec d'autres fichiers.
+            tracing::warn!(error = %error, "televersement refuse");
+            Ok(Redirect::to("/music?erreur=upload_refuse").into_response())
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct MusicTargetForm {
+    #[serde(default)]
+    target_bpm: String,
+}
+
+/// Consigne de tempo d'une playlist (vide = tempo automatique).
+async fn music_target(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Form(form): Form<MusicTargetForm>,
+) -> AppResult<Response> {
+    let requested = match parse_number(&form.target_bpm, "le BPM cible") {
+        Ok(value) => value,
+        Err(_) => return Ok(Redirect::to("/music?erreur=bpm_invalide").into_response()),
+    };
+    if requested.is_some() && crate::models::clean_bpm(requested).is_none() {
+        return Ok(Redirect::to("/music?erreur=bpm_invalide").into_response());
+    }
+    let updated = crate::db::set_music_playlist_target(
+        &state.pool,
+        &user.id,
+        &id,
+        crate::models::clean_bpm(requested),
+        state.now_ms(),
+    )
+    .await?;
+    if !updated {
+        return Ok(Redirect::to("/music?erreur=playlist_inconnue").into_response());
+    }
+    Ok(Redirect::to(&format!("/music?playlist={id}")).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct MusicTrackBpmForm {
+    #[serde(default)]
+    track_id: String,
+    #[serde(default)]
+    bpm: String,
+    /// Instants de tap (ms) separes par des virgules : le serveur calcule le
+    /// tempo median avec la meme fonction que la montre.
+    #[serde(default)]
+    taps: String,
+    #[serde(default)]
+    source: String,
+}
+
+/// Enregistre le BPM d'un titre (tap-tempo ou saisie manuelle).
+async fn music_track_bpm(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Form(form): Form<MusicTrackBpmForm>,
+) -> AppResult<Response> {
+    let (bpm, source) = if !form.taps.trim().is_empty() {
+        let measured = crate::bpm::bpm_from_taps(&crate::bpm::parse_taps(&form.taps));
+        if measured.is_none() {
+            return Ok(Redirect::to("/music?erreur=bpm_invalide").into_response());
+        }
+        (measured, "tap")
+    } else {
+        let requested = match parse_number(&form.bpm, "le BPM") {
+            Ok(value) => value,
+            Err(_) => return Ok(Redirect::to("/music?erreur=bpm_invalide").into_response()),
+        };
+        if requested.is_some() && crate::models::clean_bpm(requested).is_none() {
+            return Ok(Redirect::to("/music?erreur=bpm_invalide").into_response());
+        }
+        let source = if form.source.trim().eq_ignore_ascii_case("tap") {
+            "tap"
+        } else {
+            "manual"
+        };
+        (crate::models::clean_bpm(requested), source)
+    };
+
+    let updated = crate::db::set_music_track_bpm(
+        &state.pool,
+        &user.id,
+        &id,
+        &form.track_id,
+        bpm,
+        Some(source),
+        state.now_ms(),
+    )
+    .await?;
+    if !updated {
+        return Ok(Redirect::to("/music?erreur=playlist_inconnue").into_response());
+    }
+    Ok(Redirect::to(&format!("/music?playlist={id}&ok=bpm_enregistre")).into_response())
+}
+
+/// Supprime une playlist et les fichiers audio qu'elle possedait.
+async fn music_delete(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let Some(paths) = crate::db::delete_music_playlist(&state.pool, &user.id, &id).await? else {
+        return Err(AppError::NotFound);
+    };
+    crate::media::remove_files(&state, &paths).await;
+    tracing::info!(user = %user.email, playlist = %id, "playlist musique supprimee");
+    Ok(Redirect::to("/music?ok=playlist_supprimee").into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct MusicPlanForm {
+    #[serde(default)]
+    playlist_id: String,
+    #[serde(default)]
+    race_id: String,
+    #[serde(default)]
+    target_bpm: String,
+}
+
+/// Cree le plan de telechargement que la montre recuperera au prochain reveil.
+async fn music_prepare_create(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Form(form): Form<MusicPlanForm>,
+) -> AppResult<Response> {
+    let Some(playlist) = crate::db::get_music_playlist(&state.pool, &user.id, &form.playlist_id)
+        .await?
+    else {
+        return Ok(Redirect::to("/music?erreur=playlist_inconnue").into_response());
+    };
+    let race_id = some(&form.race_id);
+    if let Some(race_id) = race_id.as_deref() {
+        if !crate::db::race_belongs_to(&state.pool, &user.id, race_id).await? {
+            return Ok(Redirect::to("/music?erreur=course_inconnue").into_response());
+        }
+    }
+    let requested = match parse_number(&form.target_bpm, "le BPM cible") {
+        Ok(value) => value,
+        Err(_) => return Ok(Redirect::to("/music?erreur=bpm_invalide").into_response()),
+    };
+    let target_bpm = crate::models::clean_bpm(requested).or(playlist.target_bpm);
+
+    // Un nouveau plan remplace le precedent : la montre ne doit pas preparer
+    // deux playlists a la fois.
+    crate::db::cancel_pending_music_plans(&state.pool, &user.id).await?;
+    let plan = crate::db::insert_music_plan(
+        &state.pool,
+        &user.id,
+        &playlist.id,
+        race_id.as_deref(),
+        target_bpm,
+        state.now_ms(),
+    )
+    .await?;
+    tracing::info!(
+        user = %user.email,
+        plan = %plan.id,
+        playlist = %playlist.id,
+        "plan de telechargement musique cree"
+    );
+    Ok(Redirect::to(&format!("/music?playlist={}&ok=plan_envoye", playlist.id)).into_response())
+}
+
+/// Annule le plan en attente.
+async fn music_prepare_cancel(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Response> {
+    let cancelled = crate::db::cancel_pending_music_plans(&state.pool, &user.id).await?;
+    tracing::info!(user = %user.email, plans = cancelled, "plans musique annules");
+    Ok(Redirect::to("/music?ok=plan_annule").into_response())
+}
+
+#[cfg(test)]
+mod music_web_tests {
+    use super::*;
+
+    #[test]
+    fn byte_sizes_are_readable() {
+        assert_eq!(format_bytes(0), "0 Mo");
+        assert_eq!(format_bytes(86 * 1024 * 1024), "86 Mo");
+        assert_eq!(format_bytes(3 * 1024 * 1024), "3.0 Mo");
+        assert_eq!(format_bytes(2 * 1024 * 1024 * 1024), "2.0 Go");
+    }
+
+    #[test]
+    fn music_messages_are_explicit() {
+        assert!(music_error_message("spotify_non_configure").contains("MPACER_SPOTIFY_CLIENT_ID"));
+        assert!(music_error_message("upload_refuse").contains("refuse"));
+        assert!(music_ok_message("plan_envoye").contains("montre"));
+        // Un code inconnu reste lisible plutot que vide.
+        assert!(music_error_message("inconnu").contains("inconnu"));
+        assert!(music_ok_message("inconnu").contains("inconnu"));
+    }
 }

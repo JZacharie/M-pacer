@@ -18,6 +18,12 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import com.mpacer.watch.music.MusicDirective
+import com.mpacer.watch.music.MusicPlayer
+import com.mpacer.watch.music.MusicSession
+import com.mpacer.watch.music.MusicState
+import com.mpacer.watch.music.NowPlaying
+import com.mpacer.watch.music.SpotifyRemote
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -44,6 +50,11 @@ class TrackingService : Service() {
     override fun onCreate() {
         super.onCreate()
         core = MpacerCore()
+        // Le moteur n'existe que pendant la seance : l'ecran Musique lui transmet
+        // ses reglages par ce pont (voir MusicSession).
+        MusicSession.attach(core)
+        // Prepare le MediaController de la montre (lecture des fichiers locaux).
+        MusicPlayer.ensure(this)
         locations = LocationServices.getFusedLocationProviderClient(this)
         createChannel()
     }
@@ -71,6 +82,9 @@ class TrackingService : Service() {
         startedAtMs = System.currentTimeMillis()
         derniereNotification = "Preparation GPS..."
         derniereNotificationMs = System.currentTimeMillis()
+        // Reglages et playlist choisis avant la course : le moteur les recoit
+        // avant le premier tick pour publier une consigne des le depart.
+        MusicSession.apply(core)
         startForeground(NOTIFICATION_ID, notification("Preparation GPS..."))
         publish(if (armed) core.arm(now()) else core.start(now()))
         requestLocations()
@@ -118,7 +132,71 @@ class TrackingService : Service() {
         // Les annonces vocales sont deja redigees par le moteur : le service ne
         // fait que les transmettre.
         output.messages.forEach(VoiceCoach::speak)
+        // Le coeur decide (directive), la montre execute (lecteur ou Spotify).
+        applyMusic(output.music)
+        pushNowPlaying()
         updateNotification(output)
+    }
+
+    /**
+     * Applique la directive du directeur d'orchestre (docs/07 section 4.3).
+     * Une playlist Spotify n'est jamais telechargee : on telecommande l'app Spotify.
+     */
+    private fun applyMusic(music: MusicState?) {
+        if (music == null) return
+        val playlist = MusicSession.local
+        if (!music.enabled || playlist == null) {
+            MusicPlayer.pauseIfPlaying()
+            return
+        }
+        if (playlist.source == "spotify") {
+            when (music.directive) {
+                MusicDirective.PLAY, MusicDirective.RESUME -> SpotifyRemote.play(this)
+                MusicDirective.SKIP_TO -> SpotifyRemote.next(this)
+                MusicDirective.PAUSE -> SpotifyRemote.pause(this)
+                else -> Unit
+            }
+            return
+        }
+        when (music.directive) {
+            MusicDirective.PLAY -> {
+                val courante = MusicPlayer.state.value.track
+                val demandee = music.nextTrackId
+                when {
+                    courante == null -> MusicPlayer.play(playlist, demandee)
+                    demandee != null && demandee != courante.id -> MusicPlayer.skipTo(demandee)
+                }
+            }
+            MusicDirective.SKIP_TO -> music.nextTrackId?.let(MusicPlayer::skipTo)
+            MusicDirective.PAUSE -> MusicPlayer.pause()
+            MusicDirective.RESUME -> MusicPlayer.resume()
+            else -> Unit
+        }
+    }
+
+    /**
+     * Remonte la piste en cours au moteur (commande `music_now_playing`, docs/07
+     * section 5). Le resultat n'est pas republie : le tick suivant le porte.
+     */
+    private fun pushNowPlaying() {
+        val track = MusicPlayer.state.value.track
+        if (track == null) {
+            if (dernierePistePoussee != null) {
+                MusicSession.nowPlaying(null)
+                dernierePistePoussee = null
+            }
+            return
+        }
+        MusicSession.nowPlaying(
+            NowPlaying(
+                trackId = track.id,
+                title = track.title,
+                artist = track.artist,
+                bpm = track.bpm,
+                positionS = MusicPlayer.currentPositionS(),
+            )
+        )
+        dernierePistePoussee = track.id
     }
 
     private fun stopWorkout() {
@@ -137,6 +215,7 @@ class TrackingService : Service() {
 
     override fun onDestroy() {
         locations.removeLocationUpdates(locationCallback)
+        MusicSession.detach(core)
         core.close()
         super.onDestroy()
     }
@@ -146,6 +225,9 @@ class TrackingService : Service() {
     /** Dernier texte de notification publie, pour eviter les republications inutiles. */
     private var derniereNotification: String? = null
     private var derniereNotificationMs = 0L
+
+    /** Derniere piste remontee au moteur (evite d'envoyer un `null` a chaque tick). */
+    private var dernierePistePoussee: String? = null
 
     private fun now(): Long = System.currentTimeMillis()
 

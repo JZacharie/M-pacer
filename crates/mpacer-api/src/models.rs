@@ -376,7 +376,8 @@ pub const BPM_SOURCES: [&str; 4] = ["spotify", "tag", "tap", "manual"];
 pub const AUDIO_EXTENSIONS: [&str; 8] = ["mp3", "ogg", "oga", "opus", "m4a", "mp4", "flac", "wav"];
 
 /// Taille maximale d'un televersement (multipart complet), en octets.
-pub const MAX_UPLOAD_BYTES: i64 = 512 * 1024 * 1024;
+/// Au-dela, le serveur repond `413 payload_too_large`.
+pub const MAX_UPLOAD_BYTES: i64 = 200 * 1024 * 1024;
 
 /// Borne de plausibilite d'un BPM (identique au coeur Rust).
 pub const BPM_MIN: f64 = 30.0;

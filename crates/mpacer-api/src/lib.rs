@@ -19,10 +19,12 @@
 
 pub mod assets;
 pub mod auth;
+pub mod avatar;
 pub mod bpm;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod media;
 pub mod models;
 pub mod routes;
 pub mod spotify;

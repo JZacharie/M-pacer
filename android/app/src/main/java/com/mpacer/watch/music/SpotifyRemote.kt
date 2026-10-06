@@ -3,14 +3,12 @@ package com.mpacer.watch.music
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.media.MediaMetadata
+import android.media.session.MediaController
 import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
 import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
-import androidx.media3.common.Player
-import androidx.media3.session.MediaController
-import androidx.media3.session.SessionToken
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,13 +18,12 @@ import kotlinx.coroutines.flow.update
  * Telecommande de l'application Spotify installee sur la montre (docs/07 section 2).
  *
  * M-pacer ne lit jamais l'audio Spotify (chiffre Widevine) : il pilote la session
- * medias de l'application Spotify par MediaController. Le choix du morceau reste
- * donc limite a ce qu'expose une session medias : lecture, pause, suivant,
- * precedent. L'application Spotify garde la main sur sa file.
+ * medias de l'application Spotify. Une session appartenant a une autre application
+ * n'est visible qu'avec l'acces aux notifications : [MediaSessionAccessService] le
+ * declare, l'utilisateur l'autorise depuis l'ecran Musique.
  *
- * Pour voir une session appartenant a une autre application, Android exige un
- * acces aux notifications : [MediaSessionAccessService] le declare, l'utilisateur
- * l'autorise depuis l'ecran Musique.
+ * Limite assumee : une session medias n'expose que lecture, pause, suivant et
+ * precedent. Le choix precis du morceau reste fait dans l'application Spotify.
  */
 object SpotifyRemote {
 
@@ -36,7 +33,15 @@ object SpotifyRemote {
     val state: StateFlow<SpotifyRemoteState> = _state.asStateFlow()
 
     private var controller: MediaController? = null
-    private var connecting = false
+    private val callback = object : MediaController.Callback() {
+        override fun onPlaybackStateChanged(state: PlaybackState?) {
+            controller?.let(::refresh)
+        }
+
+        override fun onMetadataChanged(metadata: MediaMetadata?) {
+            controller?.let(::refresh)
+        }
+    }
 
     /** L'acces aux notifications (donc aux sessions des autres applications) est-il accorde ? */
     fun accessGranted(context: Context): Boolean =
@@ -47,13 +52,13 @@ object SpotifyRemote {
         val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         runCatching { context.startActivity(intent) }
-            .onFailure { _state.update { state -> state.copy(message = "Reglages indisponibles") } }
+            .onFailure { _state.update { current -> current.copy(message = "Reglages indisponibles") } }
     }
 
-    /** Cherche la session medias de Spotify et ouvre une telecommande. */
+    /** Cherche la session medias de Spotify et s'y connecte (une fois). */
     fun connect(context: Context) {
         _state.update { it.copy(granted = accessGranted(context)) }
-        if (controller != null || connecting) return
+        if (controller != null) return
         if (!accessGranted(context)) {
             _state.update {
                 it.copy(available = false, message = "Autorisez l acces aux notifications pour piloter Spotify")
@@ -73,57 +78,44 @@ object SpotifyRemote {
             _state.update { it.copy(available = false, message = "Spotify ne joue pas sur la montre") }
             return
         }
-        connecting = true
-        val token = SessionToken(context, spotify.sessionToken)
-        val future = MediaController.Builder(context, token).buildAsync()
-        future.addListener({
-            connecting = false
-            runCatching { future.get() }
-                .onSuccess { mediaController ->
-                    controller = mediaController
-                    mediaController.addListener(object : Player.Listener {
-                        override fun onIsPlayingChanged(isPlaying: Boolean) {
-                            refresh(mediaController)
-                        }
-
-                        override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
-                            refresh(mediaController)
-                        }
-
-                        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                            refresh(mediaController)
-                        }
-                    })
-                    _state.update { it.copy(available = true, message = null) }
-                    refresh(mediaController)
-                }
-                .onFailure { error ->
-                    _state.update {
-                        it.copy(available = false, message = "Spotify injoignable : " + (error.message ?: error.javaClass.simpleName))
-                    }
-                }
-        }, context.mainExecutor)
+        controller = try {
+            MediaController(context, spotify.sessionToken).also { active ->
+                active.registerCallback(callback)
+                refresh(active)
+            }
+        } catch (error: Exception) {
+            _state.update {
+                it.copy(available = false, message = "Spotify injoignable : " + (error.message ?: error.javaClass.simpleName))
+            }
+            null
+        }
     }
 
     fun play(context: Context) {
-        withController(context) { it.play() }
+        withController(context) { it.transportControls.play() }
     }
 
     fun pause(context: Context) {
-        withController(context) { it.pause() }
+        withController(context) { it.transportControls.pause() }
     }
 
     fun toggle(context: Context) {
-        withController(context) { if (it.isPlaying) it.pause() else it.play() }
+        withController(context) { active ->
+            if (active.playbackState?.state == PlaybackState.STATE_PLAYING) {
+                active.transportControls.pause()
+            } else {
+                active.transportControls.play()
+            }
+        }
     }
 
     /** Passe au morceau suivant (l'application Spotify choisit lequel). */
     fun next(context: Context) {
-        withController(context) { it.seekToNextMediaItem() }
+        withController(context) { it.transportControls.skipToNext() }
     }
 
     fun previous(context: Context) {
-        withController(context) { it.seekToPreviousMediaItem() }
+        withController(context) { it.transportControls.skipToPrevious() }
     }
 
     private fun withController(context: Context, action: (MediaController) -> Unit) {
@@ -131,14 +123,14 @@ object SpotifyRemote {
         controller?.let(action)
     }
 
-    private fun refresh(mediaController: MediaController) {
-        val metadata = mediaController.mediaMetadata
+    private fun refresh(active: MediaController) {
+        val metadata = active.metadata
         _state.update {
             it.copy(
                 available = true,
-                playing = mediaController.isPlaying,
-                title = metadata.title?.toString(),
-                artist = metadata.artist?.toString(),
+                playing = active.playbackState?.state == PlaybackState.STATE_PLAYING,
+                title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE),
+                artist = metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST),
             )
         }
     }

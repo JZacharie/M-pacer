@@ -115,8 +115,18 @@ Rendue côté serveur en Rust (**maud**), sans chaîne JavaScript ni dépendance
 | `/courses/{id}` | **fiche de course** : dossard, horaires, lieux, live, hébergement, nutrition, informations importantes, suivi à cocher |
 | `/courses/nouvelle`, `/courses/{id}/modifier` | création et modification d'une fiche de course |
 | `/link` | saisie du code affiché par la montre |
-| `/settings` | jetons d'appareil : création, dernier envoi, révocation |
+| `/settings` | fiche du compte (photo Google, nom, adresse) et jetons d'appareil : création, dernier envoi, révocation |
 | `/login` | bouton « Continuer avec Google » |
+
+**Photo de profil.** À la connexion, Google fournit une photo (claim `picture` de
+l'`id_token`), conservée dans `users.picture_url`. La route `GET /avatar` la sert :
+le service la télécharge lui-même (hôtes `*.googleusercontent.com` uniquement), la
+garde six heures en mémoire, puis la renvoie avec `Cache-Control: private`. Le
+navigateur ne contacte donc jamais Google, et l'avatar reste affiché même si le poste
+ne peut pas joindre `lh3.googleusercontent.com`. Sans photo — ou si Google ne répond
+pas — une pastille SVG aux initiales du compte (teinte stable dérivée de son
+identifiant) prend le relais. La photo apparaît dans l'en-tête à côté du nom, et en
+grand sur `/settings`.
 
 Ce choix (SSR plutôt qu'une SPA WebAssembly) est délibéré : une seule image à
 déployer, aucun jeton exposé au JavaScript, fonctionne sans build front. Si une

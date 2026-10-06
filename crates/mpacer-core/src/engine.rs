@@ -12,6 +12,7 @@ use crate::cardio::{HeartRateSample, HeartRateZones};
 use crate::gps::{GpsMonitor, GpsSample, GpsStatus, GpsThresholds, StatusLight};
 use crate::history::WorkoutSummary;
 use crate::lap::{Lap, LapTracker};
+use crate::music::{MusicConfig, MusicDirector, MusicInput, MusicState, NowPlaying, Playlist};
 use crate::pace::{PaceConfig, PaceEngine};
 use crate::units::{DistanceDisplay, UnitSystem};
 use crate::voice::{VoiceCoach, VoiceConfig, VoiceMessage, VoiceSnapshot};
@@ -29,6 +30,9 @@ pub struct EngineConfig {
     pub gps: GpsThresholds,
     pub workout: WorkoutConfig,
     pub voice: VoiceConfig,
+    /// Reglages musique (BPM de reference, playlist, annonces de tempo).
+    #[serde(default)]
+    pub music: MusicConfig,
     /// Reference des zones de frequence cardiaque (FC max, FC de repos).
     pub heart_rate: HeartRateZones,
 }
@@ -43,6 +47,7 @@ impl Default for EngineConfig {
             gps: GpsThresholds::default(),
             workout: WorkoutConfig::default(),
             voice: VoiceConfig::default(),
+            music: MusicConfig::default(),
             heart_rate: HeartRateZones::default(),
         }
     }
@@ -73,6 +78,9 @@ pub struct EngineOutput {
     pub heart_rate_bpm: Option<u16>,
     /// Zone de la derniere frequence (1 a 5), absente sous la zone 1.
     pub heart_rate_zone: Option<u8>,
+    /// Etat musique du tick (toujours present, jamais null).
+    #[serde(default)]
+    pub music: MusicState,
 }
 
 impl Default for EngineOutput {
@@ -94,6 +102,7 @@ impl Default for EngineOutput {
             messages: Vec::new(),
             heart_rate_bpm: None,
             heart_rate_zone: None,
+            music: MusicState::default(),
         }
     }
 }
@@ -120,6 +129,10 @@ pub struct PacerEngine {
     started_t_ms: Option<TimestampMs>,
     /// Dernier instant vu par le moteur (borne du temps ecoule).
     last_t_ms: TimestampMs,
+    /// Directeur d'orchestre musique.
+    music: MusicDirector,
+    /// Dernier etat musique publie (sorties sans nouveau tick comprises).
+    last_music: MusicState,
 }
 
 impl Default for PacerEngine {
@@ -147,6 +160,8 @@ impl PacerEngine {
             open_pause: None,
             started_t_ms: None,
             last_t_ms: 0,
+            music: MusicDirector::new(config.music),
+            last_music: MusicState::default(),
         }
     }
 
@@ -163,6 +178,7 @@ impl PacerEngine {
         self.laps.set_units(config.units);
         self.workout.set_config(config.workout);
         self.voice.set_config(config.voice);
+        self.music.set_config(config.music);
         let mut pace = PaceEngine::new(config.pace);
         pace.set_detect_pace_change(config.detect_pace_change);
         self.pace = pace;
@@ -189,6 +205,27 @@ impl PacerEngine {
     pub fn set_voice_config(&mut self, voice: VoiceConfig) {
         self.config.voice = voice;
         self.voice.set_config(voice);
+    }
+
+    /// Reglages musique (BPM de reference, seuils, annonces).
+    pub fn set_music_config(&mut self, music: MusicConfig) {
+        self.config.music = music;
+        self.music.set_config(music);
+    }
+
+    /// Playlist preparee sur la montre (`None` = aucune).
+    pub fn set_music_playlist(&mut self, playlist: Option<Playlist>) {
+        self.music.set_playlist(playlist);
+    }
+
+    /// Instantane de la piste en cours, pousse par le lecteur de la montre.
+    pub fn on_now_playing(&mut self, now: Option<NowPlaying>) {
+        self.music.on_now_playing(now);
+    }
+
+    /// Cadence mesuree par un capteur de pas (pas/minute).
+    pub fn on_cadence(&mut self, spm: f64) {
+        self.music.on_cadence(spm);
     }
 
     /// Informe le moteur du pseudo de l'adversaire (course a distance).
@@ -283,6 +320,8 @@ impl PacerEngine {
         self.open_pause = None;
         self.started_t_ms = None;
         self.last_t_ms = 0;
+        self.music.reset();
+        self.last_music = MusicState::default();
     }
 
     // ------------------------------------------------------------- alimentation
@@ -351,10 +390,16 @@ impl PacerEngine {
         }
 
         let panel = self.current_panel();
+        // Le directeur d'orchestre est evalue avant la voix : l'annonce de
+        // tempo dispose ainsi de la consigne du tick.
+        let music = self.music.evaluate(self.music_input(t_ms, &panel));
+        self.last_music = music.clone();
+
         // Le pseudo adverse est clone : l'instantane ne doit pas emprunter self,
         // qui est mute juste apres par le coach vocal.
         let opponent = self.opponent_name.clone();
-        let snapshot = self.voice_snapshot(lap_completed, opponent.as_deref());
+        let mut snapshot = self.voice_snapshot(lap_completed, opponent.as_deref());
+        snapshot.music_bpm = music.target_bpm;
 
         let mut messages = Vec::new();
         for event in &events {
@@ -371,6 +416,12 @@ impl PacerEngine {
             if let Some(message) = self.voice.on_tick(t_ms, &snapshot) {
                 messages.push(message);
             }
+        }
+        if let Some(message) = self
+            .voice
+            .on_music(&music, self.config.music.announce, &snapshot)
+        {
+            messages.push(message);
         }
 
         self.output(events, messages, lap_completed, panel, t_ms)
@@ -424,6 +475,28 @@ impl PacerEngine {
         )
     }
 
+    /// Contexte musique du tick : plan, allure, cardio et vitesse.
+    fn music_input(&self, t_ms: TimestampMs, panel: &AssistantPanel) -> MusicInput {
+        MusicInput {
+            t_ms,
+            state: self.workout.state(),
+            target_pace_s_per_km: self
+                .assistant
+                .plan()
+                .filter(|plan| plan.is_valid())
+                .map(|plan| plan.pace_at_distance_s_per_km(self.workout.distance_m())),
+            current_pace_s_per_km: self.pace.current_pace(UnitSystem::Metric),
+            shadow_delta_m: panel.shadow.map(|shadow| shadow.distance_delta_m),
+            shadow_on_plan: panel.shadow.map(|shadow| shadow.on_plan).unwrap_or(false),
+            heart_rate_zone: self
+                .heart_rate
+                .last()
+                .map(|sample| self.config.heart_rate.zone_of(sample.bpm as f64))
+                .filter(|zone| *zone > 0),
+            speed_mps: self.pace.current_speed_mps(),
+        }
+    }
+
     fn voice_snapshot<'a>(&self, lap: Option<Lap>, opponent: Option<&'a str>) -> VoiceSnapshot<'a> {
         VoiceSnapshot {
             units: self.config.units,
@@ -442,6 +515,9 @@ impl PacerEngine {
                 .shadow,
             opponent,
             opponent_delta_m: None,
+            // Rempli par le tick depuis la consigne musique ; absent sur une
+            // annonce a la demande.
+            music_bpm: None,
         }
     }
 
@@ -480,6 +556,7 @@ impl PacerEngine {
                 .last()
                 .map(|sample| self.config.heart_rate.zone_of(sample.bpm as f64))
                 .filter(|zone| *zone > 0),
+            music: self.last_music.clone(),
         }
     }
 
@@ -569,8 +646,9 @@ mod tests {
     use super::*;
     use crate::assistant::AssistantMode;
     use crate::geo::Position;
+    use crate::music::{MusicDirective, DirectiveReason, Playlist, Track};
     use crate::race_plan::NegativeSplit;
-    use crate::voice::VoiceFrequency;
+    use crate::voice::{VoiceCue, VoiceFrequency};
 
     /// Genere un parcours en ligne droite a la vitesse demandee.
     ///
@@ -815,5 +893,126 @@ mod tests {
             (imperial / metric - 1.609344).abs() < 0.01,
             "metric = {metric}, imperial = {imperial}"
         );
+    }
+
+    // ---------------------------------------------------------------- musique
+
+    fn music_config() -> MusicConfig {
+        MusicConfig {
+            enabled: true,
+            ..Default::default()
+        }
+    }
+
+    fn music_track(id: &str, bpm: f64, position: u32) -> Track {
+        Track {
+            id: id.to_string(),
+            title: format!("Titre {id}"),
+            artist: Some("Artiste".to_string()),
+            duration_s: 215.0,
+            bpm: Some(bpm),
+            position,
+        }
+    }
+
+    fn music_playlist() -> Playlist {
+        Playlist {
+            id: "p1".to_string(),
+            name: "Run 170".to_string(),
+            target_bpm: Some(170.0),
+            tracks: vec![music_track("t1", 170.0, 0), music_track("t2", 180.0, 1)],
+        }
+    }
+
+    fn music_engine() -> PacerEngine {
+        let mut engine = ready_engine();
+        engine.set_music_config(music_config());
+        engine.set_music_playlist(Some(music_playlist()));
+        engine
+    }
+
+    #[test]
+    fn music_state_is_published_in_every_output() {
+        let mut engine = PacerEngine::default();
+        let output = engine.tick(0);
+        // Musique active par defaut, mais aucune playlist : rien a jouer.
+        assert!(output.music.enabled);
+        assert_eq!(output.music.directive, MusicDirective::None);
+        assert_eq!(output.music.reason, DirectiveReason::NoPlaylist);
+        assert_eq!(output.music.playlist_id, None);
+    }
+
+    #[test]
+    fn a_playlist_drives_the_output_and_announces_the_tempo_once() {
+        let mut engine = music_engine();
+        let started = engine.start(10_000);
+        assert_eq!(started.music.directive, MusicDirective::Play);
+        assert_eq!(started.music.next_track_id.as_deref(), Some("t1"));
+        assert_eq!(started.music.target_bpm, Some(170.0));
+        assert_eq!(started.music.playlist_name.as_deref(), Some("Run 170"));
+        assert!(started
+            .messages
+            .iter()
+            .any(|message| message.cue == VoiceCue::MusicTempo));
+
+        let output = run(&mut engine, 11_000, 30, 1000.0 / 300.0);
+        // Le tempo n'est annonce qu'au demarrage de la seance.
+        assert!(!output
+            .messages
+            .iter()
+            .any(|message| message.cue == VoiceCue::MusicTempo));
+        assert!(output.music.cadence_spm.unwrap() > 160.0);
+    }
+
+    #[test]
+    fn a_sensor_cadence_reaches_the_music_state() {
+        let mut engine = music_engine();
+        engine.start(10_000);
+        engine.on_cadence(174.0);
+        let output = engine.tick(11_000);
+        assert_eq!(output.music.cadence_spm, Some(174.0));
+    }
+
+    #[test]
+    fn cadence_is_estimated_without_a_sensor() {
+        let mut engine = music_engine();
+        engine.start(10_000);
+        let output = run(&mut engine, 11_000, 20, 1000.0 / 300.0);
+        let cadence = output.music.cadence_spm.unwrap();
+        assert!((cadence - 173.9).abs() < 1.0, "cadence = {cadence}");
+    }
+
+    #[test]
+    fn music_pause_and_resume_follow_the_workout() {
+        let mut engine = music_engine();
+        engine.start(10_000);
+        run(&mut engine, 11_000, 10, 3.0);
+
+        let paused = engine.pause(25_000);
+        assert_eq!(paused.music.directive, MusicDirective::Pause);
+        assert_eq!(paused.music.reason, DirectiveReason::Paused);
+        let still_paused = engine.tick(26_000);
+        assert_eq!(still_paused.music.directive, MusicDirective::None);
+        assert_eq!(still_paused.music.reason, DirectiveReason::Paused);
+
+        let resumed = engine.resume(27_000);
+        assert_eq!(resumed.music.directive, MusicDirective::Resume);
+        assert_eq!(resumed.music.reason, DirectiveReason::Resumed);
+    }
+
+    #[test]
+    fn being_behind_the_plan_boosts_the_music_target() {
+        let mut engine = music_engine();
+        engine.set_assistant_config(AssistantConfig {
+            mode: AssistantMode::AchievePlannedTime,
+            race_distance_m: Some(10_000.0),
+            planned_time_s: Some(3000.0),
+            negative_split: NegativeSplit::even_pace(),
+        });
+        engine.start(10_000);
+        // 6:00/km au lieu de 5:00/km : une minute de retard sur le plan.
+        let output = run(&mut engine, 11_000, 300, 1000.0 / 360.0);
+        assert_eq!(output.music.reason, DirectiveReason::BehindPlan);
+        assert_eq!(output.music.target_bpm, Some(176.0));
     }
 }

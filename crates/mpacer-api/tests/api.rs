@@ -91,6 +91,18 @@ fn current_test_schema() -> String {
 /// Aucun droit particulier n'est requis (le role applicatif n'a pas `CREATEDB`) :
 /// le schema est cree, utilise via `search_path`, puis recree a chaque execution.
 async fn test_app(dev_auth: bool) -> Option<(Router, AppState)> {
+    test_app_with(dev_auth, false).await
+}
+
+/// Application de test avec un client Spotify configure.
+///
+/// Aucun appel reseau ne part tant qu'aucun compte n'est lie : la page propose
+/// seulement la connexion et l'OAuth s'arrete a l'URL d'autorisation.
+async fn test_app_spotify(dev_auth: bool) -> Option<(Router, AppState)> {
+    test_app_with(dev_auth, true).await
+}
+
+async fn test_app_with(dev_auth: bool, spotify: bool) -> Option<(Router, AppState)> {
     let url = std::env::var("MPACER_TEST_DATABASE_URL")
         .ok()
         .filter(|value| !value.trim().is_empty())?;
@@ -121,6 +133,12 @@ async fn test_app(dev_auth: bool) -> Option<(Router, AppState)> {
 
     let mut config = Config::for_tests("http://localhost:8080", &url);
     config.dev_auth = dev_auth;
+    // Les fichiers audio sont de vrais fichiers : chaque test a son dossier.
+    config.media_dir = media_test_dir(&schema);
+    if spotify {
+        config.spotify_client_id = Some("client-de-test".to_string());
+        config.spotify_client_secret = Some("secret-de-test".to_string());
+    }
     let state = AppState::with_oidc(pool, Arc::new(config), Arc::new(FakeOidc));
     Some((routes::router(state.clone()), state))
 }
@@ -607,6 +625,140 @@ async fn landing_page_and_login_are_public() {
     let response = app.oneshot(get("/link")).await.unwrap();
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert_eq!(response.headers()[header::LOCATION], "/login");
+}
+
+#[tokio::test]
+async fn the_account_picture_is_served_by_the_service() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+
+    // Connexion de developpement : le compte n'a aucune photo Google.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/dev-login")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let session = response.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+
+    // L'interface affiche la pastille de compte, y compris sur la page de reglages.
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/", &session))
+        .await
+        .unwrap();
+    let body = body_text(response).await;
+    assert!(body.contains("class=\"user-chip\""), "{body}");
+    assert!(body.contains("src=\"/avatar\""), "{body}");
+
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/settings", &session))
+        .await
+        .unwrap();
+    let body = body_text(response).await;
+    assert!(body.contains("class=\"card profile\""), "{body}");
+    assert!(body.contains("Aucune photo Google"), "{body}");
+
+    // Sans photo, le service sert une pastille aux initiales du compte.
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/avatar", &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "image/svg+xml; charset=utf-8"
+    );
+    assert!(response.headers()[header::CACHE_CONTROL]
+        .to_str()
+        .unwrap()
+        .contains("private"));
+    let body = body_text(response).await;
+    assert!(body.starts_with("<svg"), "{body}");
+    assert!(body.contains(">D</text>"), "{body}");
+
+    // Une URL qui ne vient pas de Google n'est jamais suivie par le service :
+    // la pastille d'initiales reste servie, sans requete sortante.
+    mpacer_api::db::upsert_user(
+        &state.pool,
+        None,
+        "dev@localhost",
+        None,
+        Some("https://exemple.invalid/photo.jpg"),
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+    let response = app
+        .oneshot(get_with_cookie("/avatar", &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "image/svg+xml; charset=utf-8"
+    );
+    let body = body_text(response).await;
+    assert!(body.contains(">D</text>"), "{body}");
+}
+
+/// Verification du proxy de photo Google, a lancer explicitement :
+///
+///     cargo test -p mpacer-api --test api -- --ignored
+///
+/// Le test est ignore par defaut : il exige un acces reseau a
+/// googleusercontent.com, ce qui n'a pas sa place dans une suite hors ligne.
+#[tokio::test]
+#[ignore = "necessite un acces reseau a googleusercontent.com"]
+async fn a_real_google_picture_is_proxied() {
+    let (app, state) = app_or_skip!(test_app(false).await);
+    const PHOTO: &str = "https://lh3.googleusercontent.com/-XdUIqdMkCWA/AAAAAAAAAAI/AAAAAAAAAAA/4252rscbv5M/photo.jpg";
+
+    let now = state.now_ms();
+    let user = mpacer_api::db::upsert_user(
+        &state.pool,
+        None,
+        "photo@localhost",
+        Some("Coureur Photo"),
+        Some(PHOTO),
+        now,
+    )
+    .await
+    .unwrap();
+    let session = format!(
+        "{}={}",
+        mpacer_api::auth::SESSION_COOKIE,
+        mpacer_api::auth::issue_session(&state.config, &user, now).unwrap()
+    );
+
+    let response = app
+        .oneshot(get_with_cookie("/avatar", &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response.headers()[header::CONTENT_TYPE]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let body = body_text(response).await;
+    assert!(
+        content_type.starts_with("image/") && !content_type.contains("svg"),
+        "la photo Google doit etre servie ({content_type})"
+    );
+    assert!(body.len() > 100, "photo vide");
 }
 
 #[tokio::test]
@@ -1381,6 +1533,775 @@ async fn an_implausible_heart_rate_is_rejected() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = body_text(response).await;
     assert!(body.contains("frequence cardiaque"), "{body}");
+}
+
+/// Dossier de medias isole par test (les fichiers audio sont reels sur disque).
+///
+/// Il vit sous le dossier `target` du depot, toujours inscriptible : le dossier
+/// temporaire du systeme peut manquer ou etre refuse selon l'environnement.
+fn media_test_dir(schema: &str) -> std::path::PathBuf {
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("target")
+        .join("test-media")
+        .join(schema);
+    let _ = std::fs::remove_dir_all(&directory);
+    directory
+}
+
+// ------------------------------------------------------------------ musique
+
+/// MP3 minimal portant une balise ID3v2.3 `TBPM` (172 BPM ici).
+///
+/// Le corps d'une trame texte ID3v2.3 commence par l'octet d'encodage
+/// (0x00 = ISO-8859-1) et se termine par un NUL.
+fn tagged_mp3(bpm: &str) -> Vec<u8> {
+    let mut frame = Vec::new();
+    frame.extend_from_slice(b"TBPM");
+    frame.extend_from_slice(&(bpm.len() as u32 + 2).to_be_bytes());
+    frame.extend_from_slice(&[0, 0]);
+    frame.push(0);
+    frame.extend_from_slice(bpm.as_bytes());
+    frame.push(0);
+
+    let mut tag = Vec::new();
+    tag.extend_from_slice(b"ID3");
+    tag.extend_from_slice(&[3, 0, 0]);
+    let size = frame.len() as u32;
+    tag.push(((size >> 21) & 0x7f) as u8);
+    tag.push(((size >> 14) & 0x7f) as u8);
+    tag.push(((size >> 7) & 0x7f) as u8);
+    tag.push((size & 0x7f) as u8);
+    tag.extend_from_slice(&frame);
+    // Quelques octets d'audio apres la balise, comme dans un vrai fichier.
+    tag.extend_from_slice(&[0xff, 0xfb, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    tag
+}
+
+fn push_text(body: &mut Vec<u8>, text: &str) {
+    body.extend_from_slice(text.as_bytes());
+}
+
+/// Corps `multipart/form-data` minimal (aucune dependance de test supplementaire).
+fn multipart_body(boundary: &str, playlist_name: &str, files: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    multipart_body_named(boundary, "playlist_name", playlist_name, files)
+}
+
+/// Meme corps, avec le nom du champ libre (le navigateur envoie
+/// `playlist_name`, l'API appareil `name`).
+fn multipart_body_named(
+    boundary: &str,
+    field: &str,
+    playlist_name: &str,
+    files: &[(&str, Vec<u8>)],
+) -> Vec<u8> {
+    let mut body = Vec::new();
+    push_text(&mut body, &format!("--{boundary}\r\n"));
+    push_text(
+        &mut body,
+        &format!("Content-Disposition: form-data; name=\"{field}\"\r\n\r\n"),
+    );
+    push_text(&mut body, playlist_name);
+    push_text(&mut body, "\r\n");
+    for (filename, bytes) in files {
+        push_text(&mut body, &format!("--{boundary}\r\n"));
+        push_text(
+            &mut body,
+            &format!(
+                "Content-Disposition: form-data; name=\"files\"; filename=\"{filename}\"\r\n"
+            ),
+        );
+        push_text(&mut body, "Content-Type: audio/mpeg\r\n\r\n");
+        body.extend_from_slice(bytes);
+        push_text(&mut body, "\r\n");
+    }
+    push_text(&mut body, &format!("--{boundary}--\r\n"));
+    body
+}
+
+/// Jeton d'appareil pour l'utilisateur donne.
+async fn device_token(state: &AppState, user_id: &str) -> String {
+    let token = mpacer_api::auth::new_device_token();
+    mpacer_api::db::insert_api_token(
+        &state.pool,
+        user_id,
+        &mpacer_api::auth::hash_token(&token),
+        "montre de test",
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+    token
+}
+
+fn bearer(uri: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn music_api_serves_playlists_tracks_files_and_plans() {
+    let (app, state) = app_or_skip!(test_app(false).await);
+    let (user, _session) = dev_user_session(&state).await;
+    let token = device_token(&state, &user.id).await;
+
+    // Une playlist televersee : les octets sont sur le disque du serveur.
+    let playlist = mpacer_api::db::insert_music_playlist(
+        &state.pool,
+        &user.id,
+        &mpacer_api::models::MusicPlaylistInput {
+            name: "Ma course 10 km".into(),
+            source: "upload".into(),
+            spotify_id: None,
+            cover_url: None,
+            target_bpm: Some(170.0),
+        },
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+
+    let bytes = tagged_mp3("172");
+    let relative = format!("{}/titre-test.mp3", user.id);
+    let path = state.config.media_dir.join(&relative);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+
+    let track_id = mpacer_api::db::insert_music_track(
+        &state.pool,
+        &user.id,
+        &playlist.id,
+        &mpacer_api::models::MusicTrackInput {
+            position: 0,
+            title: "Wake me up".into(),
+            artist: Some("Avicii".into()),
+            album: None,
+            duration_s: Some(249.0),
+            bpm: Some(172.0),
+            bpm_source: Some("tag".into()),
+            spotify_uri: None,
+            mime: Some("audio/mpeg".into()),
+            size_bytes: Some(bytes.len() as i64),
+            storage_path: Some(relative.clone()),
+        },
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+
+    // 1. La liste resume la playlist.
+    let response = app.clone().oneshot(bearer("/api/v1/music/playlists", &token)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let list: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert_eq!(list["playlists"][0]["name"], "Ma course 10 km");
+    assert_eq!(list["playlists"][0]["track_count"], 1);
+    assert_eq!(list["playlists"][0]["total_bytes"], bytes.len() as i64);
+    assert_eq!(list["playlists"][0]["ready_track_count"], 1);
+    assert_eq!(list["playlists"][0]["target_bpm"], 170.0);
+
+    // 2. La fiche publie le chemin relatif de telechargement.
+    let response = app
+        .clone()
+        .oneshot(bearer(&format!("/api/v1/music/playlists/{}", playlist.id), &token))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let detail: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert_eq!(detail["source"], "upload");
+    assert_eq!(detail["tracks"][0]["title"], "Wake me up");
+    assert_eq!(detail["tracks"][0]["bpm"], 172.0);
+    assert_eq!(detail["tracks"][0]["bpm_source"], "tag");
+    assert_eq!(
+        detail["tracks"][0]["download_url"],
+        format!("/api/v1/music/tracks/{track_id}/file")
+    );
+
+    // 3. Le fichier est servi entier, puis par tranches (reprise du telechargement).
+    let response = app
+        .clone()
+        .oneshot(bearer(&format!("/api/v1/music/tracks/{track_id}/file"), &token))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "audio/mpeg");
+    assert_eq!(response.headers()[header::ACCEPT_RANGES], "bytes");
+    assert_eq!(response.headers()[header::CONTENT_LENGTH], bytes.len().to_string());
+    let downloaded = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(downloaded.as_ref(), bytes.as_slice());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/music/tracks/{track_id}/file"))
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::RANGE, "bytes=0-9")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        response.headers()[header::CONTENT_RANGE],
+        format!("bytes 0-9/{}", bytes.len())
+    );
+    let partial = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(partial.as_ref(), &bytes[..10]);
+
+    // 4. Accuse de la montre.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/music/playlists/{}/ack", playlist.id))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(
+                    serde_json::json!({ "track_ids": [track_id] }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let ack: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert_eq!(ack["playlist_id"], playlist.id.as_str());
+    assert_eq!(ack["downloaded"], 1);
+
+    // 5. Plan de telechargement : absent, cree, acquitte.
+    let response = app.clone().oneshot(bearer("/api/v1/music/prepare", &token)).await.unwrap();
+    let prepared: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert!(prepared["plan"].is_null(), "{prepared}");
+
+    let plan = mpacer_api::db::insert_music_plan(
+        &state.pool,
+        &user.id,
+        &playlist.id,
+        None,
+        Some(176.0),
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+    let response = app.clone().oneshot(bearer("/api/v1/music/prepare", &token)).await.unwrap();
+    let prepared: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert_eq!(prepared["plan"]["id"], plan.id.as_str());
+    assert_eq!(prepared["plan"]["name"], "Ma course 10 km");
+    assert_eq!(prepared["plan"]["target_bpm"], 176.0);
+    assert_eq!(prepared["plan"]["tracks"][0]["id"], track_id.as_str());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/music/prepare/ack")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(
+                    serde_json::json!({ "plan_id": plan.id }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(body_text(response).await.contains("\"ok\":true"));
+
+    let response = app.clone().oneshot(bearer("/api/v1/music/prepare", &token)).await.unwrap();
+    let prepared: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert!(prepared["plan"].is_null(), "le plan acquitte disparait : {prepared}");
+
+    // 6. Meme garde que /api/v1/workouts : sans jeton, rien n'est accessible.
+    let response = app.oneshot(get("/api/v1/music/playlists")).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn music_page_has_four_blocks_and_prepares_a_race() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (_user, session) = dev_user_session(&state).await;
+
+    // La page vide presente les quatre blocs de la maquette.
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie("/music", &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    for expected in [
+        "1. Source de musique",
+        "2. Playlists preparees",
+        "3. Titres (playlist selectionnee)",
+        "4. Preparation de la prochaine course",
+        "Fichiers personnels",
+        "Choisir des fichiers MP3/OGG/M4A",
+        "Nom de playlist",
+        "Importer sur le serveur",
+        "BPM cible",
+        "Envoyer sur la montre",
+        "aucun plan en attente",
+        "Aucune playlist pour l'instant",
+    ] {
+        assert!(body.contains(expected), "« {expected} » absent de /music : {body}");
+    }
+    // Spotify reste explicitement optionnel.
+    assert!(body.contains("Spotify n'est pas configure"), "{body}");
+
+    // Televersement multipart de deux fichiers, dont un porte un BPM en balise.
+    let boundary = "----mpacer-test-boundary";
+    let files = vec![
+        ("Wake_me-up.mp3", tagged_mp3("172")),
+        ("Titre_sans_bpm.mp3", vec![0x49, 0x44, 0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02]),
+    ];
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/music/upload")
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .header(header::COOKIE, &session)
+                .body(Body::from(multipart_body(boundary, "Ma course 10 km", &files)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response.headers()[header::LOCATION].to_str().unwrap().to_string();
+    assert!(location.contains("ok=fichiers_importes"), "{location}");
+    let playlist_id = location
+        .split("playlist=")
+        .nth(1)
+        .unwrap()
+        .split('&')
+        .next()
+        .unwrap()
+        .to_string();
+
+    // Les titres apparaissent avec leur BPM de balise.
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie(
+                &format!("/music?playlist={playlist_id}"),
+                &session,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    for expected in [
+        "Ma course 10 km",
+        "Wake me up",
+        "Titre sans bpm",
+        "172",
+        "tapper",
+        "saisir",
+        "Preparer",
+    ] {
+        assert!(body.contains(expected), "« {expected} » absent : {body}");
+    }
+
+    // Consigne de tempo de la playlist.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/music/playlists/{playlist_id}/target"),
+            "target_bpm=170",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    // BPM saisi a la main, puis tap-tempo.
+    let tracks = mpacer_api::db::list_music_tracks(&state.pool, &_user.id, &playlist_id)
+        .await
+        .unwrap();
+    assert_eq!(tracks.len(), 2);
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/music/playlists/{playlist_id}/track-bpm"),
+            &format!("track_id={}&bpm=181&source=manual", tracks[1].id),
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/music/playlists/{playlist_id}/track-bpm"),
+            &format!("track_id={}&taps=0,500,1000,1500,2000", tracks[0].id),
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let tracks = mpacer_api::db::list_music_tracks(&state.pool, &_user.id, &playlist_id)
+        .await
+        .unwrap();
+    assert_eq!(tracks[1].bpm, Some(181.0));
+    assert_eq!(tracks[1].bpm_source.as_deref(), Some("manual"));
+    assert_eq!(tracks[0].bpm, Some(120.0));
+    assert_eq!(tracks[0].bpm_source.as_deref(), Some("tap"));
+
+    // Un BPM hors bornes est refuse sans rien ecrire.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/music/playlists/{playlist_id}/track-bpm"),
+            &format!("track_id={}&bpm=1000", tracks[1].id),
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert!(response.headers()[header::LOCATION].to_str().unwrap().contains("erreur=bpm_invalide"));
+
+    // Preparation de la course : le plan attend la montre.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            "/music/prepare",
+            &format!("playlist_id={playlist_id}&race_id="),
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie(
+                &format!("/music?playlist={playlist_id}"),
+                &session,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("en attente de la montre"), "{body}");
+    assert!(body.contains("Annuler le plan"), "{body}");
+    assert!(body.contains("value=\"170\""), "BPM cible affiche : {body}");
+
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/api/v1/music/prepare", &session))
+        .await
+        .unwrap();
+    let prepared: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert_eq!(prepared["plan"]["playlist_id"], playlist_id.as_str());
+    assert_eq!(prepared["plan"]["target_bpm"], 170.0);
+
+    let response = app
+        .clone()
+        .oneshot(form_request("POST", "/music/prepare/cancel", "", &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/api/v1/music/prepare", &session))
+        .await
+        .unwrap();
+    let prepared: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert!(prepared["plan"].is_null(), "{prepared}");
+
+    // Suppression : la playlist et ses fichiers disparaissent.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/music/playlists/{playlist_id}/delete"),
+            "",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie("/music", &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    // Le libelle du formulaire contient aussi « Ma course 10 km » (placeholder) :
+    // on cherche donc le lien de la playlist, pas le simple texte.
+    assert!(!body.contains(">Ma course 10 km</a>"), "{body}");
+    assert!(
+        mpacer_api::db::list_music_playlists(&state.pool, &_user.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        mpacer_api::db::list_music_tracks(&state.pool, &_user.id, &playlist_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let stored: Vec<_> = walkdir(&state.config.media_dir);
+    assert!(stored.is_empty(), "fichiers restants : {stored:?}");
+}
+
+/// Tous les fichiers d'un dossier, recursivement (verification de nettoyage).
+fn walkdir(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return files;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            files.extend(walkdir(&path));
+        } else {
+            files.push(path);
+        }
+    }
+    files
+}
+
+#[tokio::test]
+async fn spotify_stays_optional_without_credentials() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (_user, session) = dev_user_session(&state).await;
+
+    // Sans identifiants, /auth/spotify renvoie vers la page avec un message clair
+    // (aucun appel reseau).
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/auth/spotify", &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers()[header::LOCATION],
+        "/music?erreur=spotify_non_configure"
+    );
+
+    // La recherche affiche le meme message sans contacter Spotify.
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie("/music/search?q=running", &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("Spotify n'est pas configure"), "{body}");
+
+    // L'import est refuse proprement.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            "/music/import",
+            "spotify_ref=https%3A%2F%2Fopen.spotify.com%2Fplaylist%2F37i9dQZF1DXcBWIGoYBM5M&target_bpm=",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers()[header::LOCATION],
+        "/music?erreur=spotify_non_configure"
+    );
+
+    // Le compte n'existe pas : rien n'a ete ecrit.
+    assert!(mpacer_api::db::get_spotify_account(&state.pool, &_user.id)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+/// Requete multipart portant (ou non) le jeton d'appareil.
+fn multipart_request(
+    uri: &str,
+    boundary: &str,
+    body: Vec<u8>,
+    token: Option<&str>,
+) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        );
+    if let Some(token) = token {
+        builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
+    builder.body(Body::from(body)).unwrap()
+}
+
+#[tokio::test]
+async fn music_upload_endpoint_accepts_a_device_token() {
+    let (app, state) = app_or_skip!(test_app(false).await);
+    let (user, _session) = dev_user_session(&state).await;
+    let token = device_token(&state, &user.id).await;
+
+    let boundary = "----mpacer-device-boundary";
+    let files = vec![
+        ("Wake_me-up.mp3", tagged_mp3("172")),
+        ("Titre_sans_bpm.ogg", b"OggS.....".to_vec()),
+    ];
+    let body = multipart_body_named(boundary, "name", "Run du soir", &files);
+
+    // Sans jeton d'appareil, l'endpoint est ferme (meme garde que /api/v1/workouts).
+    let response = app
+        .clone()
+        .oneshot(multipart_request("/api/v1/music/playlists", boundary, body.clone(), None))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // Avec le jeton : la playlist est creee et ses octets sont servables.
+    let response = app
+        .clone()
+        .oneshot(multipart_request(
+            "/api/v1/music/playlists",
+            boundary,
+            body,
+            Some(&token),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let created: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    assert_eq!(created["name"], "Run du soir");
+    assert_eq!(created["track_count"], 2);
+    assert_eq!(created["ready_track_count"], 2);
+    assert!(created["total_bytes"].as_i64().unwrap() > 0, "{created}");
+    let playlist_id = created["playlist_id"].as_str().unwrap().to_string();
+
+    let response = app
+        .clone()
+        .oneshot(bearer(
+            &format!("/api/v1/music/playlists/{playlist_id}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let detail: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
+    let tracks = detail["tracks"].as_array().unwrap();
+    assert_eq!(tracks.len(), 2);
+    assert_eq!(tracks[0]["bpm"], 172.0);
+    assert_eq!(tracks[0]["bpm_source"], "tag");
+    let download = tracks[0]["download_url"]
+        .as_str()
+        .expect("chemin de telechargement")
+        .to_string();
+    let response = app.clone().oneshot(bearer(&download, &token)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "audio/mpeg");
+
+    // Format inconnu : 415 unsupported_media_type.
+    let body = multipart_body_named(
+        boundary,
+        "name",
+        "Notes",
+        &[("notes.txt", b"pas de l'audio".to_vec())],
+    );
+    let response = app
+        .clone()
+        .oneshot(multipart_request(
+            "/api/v1/music/playlists",
+            boundary,
+            body,
+            Some(&token),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    assert!(body_text(response).await.contains("unsupported_media_type"));
+
+    // Nom de playlist absent : 400 invalid_multipart.
+    let body = multipart_body_named(boundary, "name", "", &files);
+    let response = app
+        .clone()
+        .oneshot(multipart_request(
+            "/api/v1/music/playlists",
+            boundary,
+            body,
+            Some(&token),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(body_text(response).await.contains("invalid_multipart"));
+
+    // Aucun fichier orphelin : une seule playlist et deux fichiers.
+    assert_eq!(
+        mpacer_api::db::list_music_playlists(&state.pool, &user.id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let stored = walkdir(&state.config.media_dir);
+    assert_eq!(stored.len(), 2, "fichiers restants : {stored:?}");
+}
+
+#[tokio::test]
+async fn spotify_oauth_starts_when_configured() {
+    let (app, state) = app_or_skip!(test_app_spotify(true).await);
+    let (_user, session) = dev_user_session(&state).await;
+
+    // La page propose la connexion quand le service est configure.
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie("/music", &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("Connecter Spotify"), "{body}");
+    assert!(!body.contains("Spotify n'est pas configure"), "{body}");
+
+    // /auth/spotify part vers Spotify avec PKCE, sans aucun appel reseau.
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/auth/spotify", &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        location.starts_with("https://accounts.spotify.com/authorize"),
+        "{location}"
+    );
+    assert!(location.contains("client_id=client-de-test"), "{location}");
+    assert!(location.contains("code_challenge_method=S256"), "{location}");
+    assert!(
+        location.contains("playlist-read-private"),
+        "{location}"
+    );
+
+    // La recherche demande d'abord de connecter le compte.
+    let body = body_text(
+        app.oneshot(get_with_cookie("/music/search?q=running", &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("Connectez votre compte Spotify"), "{body}");
 }
 
 #[tokio::test]

@@ -17,6 +17,7 @@ use mpacer_core::cardio::{self, HeartRateZones, ZONE_NAMES};
 use mpacer_core::engine::{EngineConfig, PacerEngine};
 use mpacer_core::geo::Position;
 use mpacer_core::gps::GpsSample;
+use mpacer_core::music::{DirectiveReason, MusicConfig, MusicDirective, NowPlaying, Playlist, Track};
 use mpacer_core::pace::PaceConfig;
 use mpacer_core::race_plan::NegativeSplit;
 use mpacer_core::units::{format_duration, format_pace, UnitSystem};
@@ -47,6 +48,9 @@ struct Options {
     hr_max: u16,
     /// Nombre de pauses inserees dans la seance.
     pauses: u32,
+    /// Simuler une playlist de course : le directeur de musique est pilote et
+    /// un lecteur factice joue les pistes demandees.
+    music: bool,
 }
 
 impl Default for Options {
@@ -67,7 +71,41 @@ impl Default for Options {
             heart_rate: true,
             hr_max: 190,
             pauses: 2,
+            music: false,
         }
+    }
+}
+
+/// Playlist de demonstration : tempos etalonnes de 148 a 190 BPM, comme une
+/// playlist de course reelle. Les identifiants sont stables pour que le
+/// directeur choisisse toujours la meme piste (demonstration reproductible).
+fn demo_playlist() -> Playlist {
+    let titres: [(&str, &str, f64); 8] = [
+        ("Echauffement", "M-pacer", 148.0),
+        ("Mise en jambe", "M-pacer", 156.0),
+        ("Allure course", "M-pacer", 164.0),
+        ("Rythme 170", "M-pacer", 170.0),
+        ("Tempo 176", "M-pacer", 176.0),
+        ("Acceleration", "M-pacer", 182.0),
+        ("Sprint final", "M-pacer", 190.0),
+        ("Recuperation", "M-pacer", 120.0),
+    ];
+    Playlist {
+        id: "demo-run-170".to_string(),
+        name: "Demo course 170 BPM".to_string(),
+        target_bpm: None,
+        tracks: titres
+            .iter()
+            .enumerate()
+            .map(|(index, (title, artist, bpm))| Track {
+                id: format!("demo-{}", index + 1),
+                title: (*title).to_string(),
+                artist: Some((*artist).to_string()),
+                duration_s: 210.0,
+                bpm: Some(*bpm),
+                position: index as u32,
+            })
+            .collect(),
     }
 }
 
@@ -127,6 +165,8 @@ OPTIONS:\n\
   --no-hr           ne pas simuler de frequence cardiaque\n\
   --hr-max N        frequence cardiaque maximale pour les zones (defaut 190)\n\
   --pauses N        nombre de pauses inserees, 0 pour aucune (defaut 2)\n\
+  --music           simule une playlist de course : tempo cible, Boost/Relax,\n\
+                    changement de morceau et lecteur factice\n\
 \n\
 SYNCHRONISATION (optionnelle):\n\
   --api-url URL     envoie la seance au backend M-pacer (ex. https://mpacer.p.zacharie.org)\n\
@@ -247,6 +287,7 @@ fn parse_args() -> Result<(Options, Option<String>), String> {
             }
             "--seed" => options.seed = value()?.parse().map_err(|_| "graine invalide")?,
             "--no-hr" => options.heart_rate = false,
+            "--music" => options.music = true,
             "--hr-max" => options.hr_max = value()?.parse().map_err(|_| "FC max invalide")?,
             "--pauses" => {
                 options.pauses = value()?.parse().map_err(|_| "nombre de pauses invalide")?
@@ -309,9 +350,23 @@ async fn main() {
             frequency: VoiceFrequency::Every5Minutes,
             ..Default::default()
         },
+        music: MusicConfig {
+            enabled: options.music,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut engine = PacerEngine::new(config);
+    // Playlist de demonstration : conservee ici pour que le lecteur factice
+    // retrouve la piste demandee par le directeur de musique.
+    let music_playlist = if options.music {
+        Some(demo_playlist())
+    } else {
+        None
+    };
+    if let Some(playlist) = music_playlist.as_ref() {
+        engine.set_music_playlist(Some(playlist.clone()));
+    }
     engine.set_assistant_config(AssistantConfig {
         mode: options.mode,
         race_distance_m: Some(options.distance_m),
@@ -376,6 +431,9 @@ async fn main() {
     let mut next_pause = 0_usize;
     let mut remaining_pause_s = 0.0_f64;
     let mut heart_rate = 88.0_f64;
+    // Lecteur factice : la montre ferait exactement cela (Play / SkipTo -> charger
+    // la piste, sinon avancer la position, puis remonter l'instantane au moteur).
+    let mut music_now: Option<NowPlaying> = None;
 
     for second in 0..total_samples {
         t_ms += 1000;
@@ -434,6 +492,10 @@ async fn main() {
         }
         let output = engine.on_gps(GpsSample::new(t_ms, position, accuracy).with_speed(step_m));
         travelled += step_m;
+        if let Some(playlist) = music_playlist.as_ref() {
+            jouer_directive(playlist, &output, &mut music_now);
+            engine.on_now_playing(music_now.clone());
+        }
         let elapsed = second + 1;
         if elapsed % options.display_every_s == 0 || !output.messages.is_empty() {
             print_output(&output, options.units, options.display_every_s, elapsed);
@@ -652,6 +714,75 @@ async fn synchronise(
     }
 }
 
+/// Etiquette francaise d'une directive de musique.
+fn directive_label(directive: MusicDirective) -> &'static str {
+    match directive {
+        MusicDirective::None => "aucune",
+        MusicDirective::Play => "demarrage",
+        MusicDirective::Keep => "stable",
+        MusicDirective::Boost => "acceleration",
+        MusicDirective::Relax => "ralentissement",
+        MusicDirective::SkipTo => "changement de morceau",
+        MusicDirective::Pause => "pause",
+        MusicDirective::Resume => "reprise",
+    }
+}
+
+/// Etiquette francaise de la raison d'une directive.
+fn reason_label(reason: DirectiveReason) -> &'static str {
+    match reason {
+        DirectiveReason::Disabled => "musique coupee",
+        DirectiveReason::NoPlaylist => "aucune playlist",
+        DirectiveReason::Steady => "allure libre",
+        DirectiveReason::OnPlan => "sur le plan",
+        DirectiveReason::BehindPlan => "en retard sur le plan",
+        DirectiveReason::AheadOfPlan => "en avance sur le plan",
+        DirectiveReason::PaceSlow => "allure trop lente",
+        DirectiveReason::PaceFast => "allure trop rapide",
+        DirectiveReason::HeartRateHigh => "cardio haut",
+        DirectiveReason::Paused => "seance en pause",
+        DirectiveReason::Resumed => "reprise",
+        DirectiveReason::TrackBpmMismatch => "tempo de la piste inadapte",
+    }
+}
+
+/// Lecteur factice : applique la directive du moteur a la playlist.
+///
+/// Le moteur ne connait pas le lecteur audio ; c'est le shell (ici la
+/// simulation) qui charge la piste demandee et lui renvoie la position.
+fn jouer_directive(
+    playlist: &Playlist,
+    output: &mpacer_core::engine::EngineOutput,
+    now: &mut Option<NowPlaying>,
+) {
+    let trouver = |id: &str| playlist.tracks.iter().find(|track| track.id == id).cloned();
+    match output.music.directive {
+        MusicDirective::Play | MusicDirective::SkipTo => {
+            if let Some(track) = output.music.next_track_id.as_deref().and_then(trouver) {
+                println!(
+                    "    >> lecture : {} ({} bpm)",
+                    track.title,
+                    track.bpm.map_or("?".to_string(), |bpm| format!("{bpm:.0}"))
+                );
+                *now = Some(NowPlaying {
+                    track_id: track.id.clone(),
+                    title: track.title.clone(),
+                    artist: track.artist.clone(),
+                    bpm: track.bpm,
+                    position_s: 0.0,
+                });
+            }
+        }
+        MusicDirective::Pause => {}
+        MusicDirective::None => *now = None,
+        _ => {
+            if let Some(playing) = now.as_mut() {
+                playing.position_s += 1.0;
+            }
+        }
+    }
+}
+
 fn print_output(
     output: &mpacer_core::engine::EngineOutput,
     units: UnitSystem,
@@ -682,9 +813,35 @@ fn print_output(
         },
         None => String::new(),
     };
+    let musique = match output.music.directive {
+        MusicDirective::None | MusicDirective::Pause => String::new(),
+        directive => {
+            let cible = output
+                .music
+                .target_bpm
+                .map_or("?".to_string(), |bpm| format!("{bpm:.0}"));
+            let cadence = output
+                .music
+                .cadence_spm
+                .map_or(String::new(), |spm| format!(" cad={spm:.0}"));
+            let titre = output
+                .music
+                .current
+                .as_ref()
+                .map_or(String::new(), |playing| format!(" - {}", playing.title));
+            format!(
+                " | musique {} bpm{} {} ({}){}",
+                cible,
+                cadence,
+                directive_label(directive),
+                reason_label(output.music.reason),
+                titre
+            )
+        }
+    };
     if second > 0 {
         println!(
-            "[{}] t={:>6} ecoule={:>6} dist={:>7} allure={:>5} tour={:>5}{}{}",
+            "[{}] t={:>6} ecoule={:>6} dist={:>7} allure={:>5} tour={:>5}{}{}{}",
             status,
             format_duration(output.elapsed_s),
             second,
@@ -692,7 +849,8 @@ fn print_output(
             format_pace(output.current_pace),
             format_pace(output.current_lap_pace),
             cardio,
-            panel
+            panel,
+            musique
         );
     }
     for message in &output.messages {

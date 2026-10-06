@@ -14,6 +14,15 @@ pub enum AppError {
     Forbidden,
     #[error("requete invalide : {0}")]
     BadRequest(String),
+    /// Corps multipart illisible ou incomplet (champ obligatoire absent).
+    #[error("multipart invalide : {0}")]
+    InvalidMultipart(String),
+    /// Corps de requete au-dela de la limite acceptee.
+    #[error("charge trop volumineuse : {0}")]
+    PayloadTooLarge(String),
+    /// Format de fichier refuse (le serveur ne stocke que de l'audio connu).
+    #[error("type de fichier non pris en charge : {0}")]
+    UnsupportedMediaType(String),
     #[error("conflit : {0}")]
     Conflict(String),
     #[error("base de donnees : {0}")]
@@ -41,7 +50,9 @@ impl AppError {
             AppError::NotFound => StatusCode::NOT_FOUND,
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
             AppError::Forbidden => StatusCode::FORBIDDEN,
-            AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            AppError::BadRequest(_) | AppError::InvalidMultipart(_) => StatusCode::BAD_REQUEST,
+            AppError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+            AppError::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             AppError::OAuth(_) => StatusCode::BAD_REQUEST,
             AppError::Conflict(_) => StatusCode::CONFLICT,
             AppError::Database(_) | AppError::Network(_) | AppError::Internal(_) => {
@@ -57,6 +68,9 @@ impl AppError {
             AppError::Unauthorized => "unauthorized".to_string(),
             AppError::Forbidden => "forbidden".to_string(),
             AppError::BadRequest(_) => "invalid_request".to_string(),
+            AppError::InvalidMultipart(_) => "invalid_multipart".to_string(),
+            AppError::PayloadTooLarge(_) => "payload_too_large".to_string(),
+            AppError::UnsupportedMediaType(_) => "unsupported_media_type".to_string(),
             AppError::Conflict(_) => "conflict".to_string(),
             AppError::OAuth(kind) => kind.clone(),
             AppError::Database(_) => "database_error".to_string(),

@@ -20,3 +20,4 @@ android/app/src/main/jniLibs/
 # Sorties du simulateur
 *.gpx
 !examples/*.gpx
+watch-screen.png

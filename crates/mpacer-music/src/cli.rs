@@ -4,9 +4,10 @@
 //! 127.0.0.1:8077 : la CLI et l'interface appellent le meme planificateur
 //! (`crate::planner`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::adb;
+use crate::library::{default_library_root, LibraryStore};
 use crate::planner::{self, Progress, ProgressSink, TransferRequest, WATCH_MUSIC_DIR};
 use crate::server::{self, Bootstrap};
 
@@ -70,13 +71,14 @@ pub fn run(args: Vec<String>) -> i32 {
 fn print_help() {
     println!("mpacer-music : copie les fichiers audio du PC vers la montre M-pacer par USB (adb)");
     println!();
-    println!("  mpacer-music [--port N] [--no-browser] [--target-dir DIR]");
+    println!("  mpacer-music [--port N] [--no-browser] [--target-dir DIR] [--library DIR]");
     println!("  mpacer-music devices");
-    println!("  mpacer-music inspect  --manifest FICHIER --folder DOSSIER");
-    println!("  mpacer-music transfer --manifest FICHIER --folder DOSSIER [--serial XXX]");
+    println!("  mpacer-music inspect  --manifest FICHIER --folder DOSSIER [--library DIR]");
+    println!("  mpacer-music transfer --manifest FICHIER --folder DOSSIER [--library DIR] [--serial XXX]");
     println!("                        [--dry-run] [--prune] [--strict] [--target-dir DIR]");
     println!();
     println!("Option commune : --adb CHEMIN");
+    println!("--library DIR : racine de la bibliotheque locale ; sans option, dossier de donnees de l'utilisateur.");
     println!(
         "Codes de sortie : 0 ok, 2 usage, 3 adb introuvable, 4 aucune montre, 5 espace insuffisant, 6 titres manquants (--strict)"
     );
@@ -88,6 +90,7 @@ fn serve(args: &[String], adb: Option<PathBuf>) -> i32 {
     let mut port: u16 = 8077;
     let mut open_browser = true;
     let mut target_dir: Option<PathBuf> = None;
+    let mut library: Option<PathBuf> = Some(default_library_root());
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -119,6 +122,14 @@ fn serve(args: &[String], adb: Option<PathBuf>) -> i32 {
                 target_dir = Some(PathBuf::from(value));
                 index += 2;
             }
+            "--library" => {
+                let Some(value) = args.get(index + 1) else {
+                    eprintln!("--library attend un chemin");
+                    return EXIT_USAGE;
+                };
+                library = Some(PathBuf::from(value));
+                index += 2;
+            }
             other => {
                 eprintln!("option inconnue : {other}");
                 return EXIT_USAGE;
@@ -141,7 +152,11 @@ fn serve(args: &[String], adb: Option<PathBuf>) -> i32 {
             return EXIT_USAGE;
         }
     };
-    let bootstrap = Bootstrap { adb, target_dir };
+    let bootstrap = Bootstrap {
+        adb,
+        target_dir,
+        library,
+    };
     match runtime.block_on(server::serve(port, bootstrap)) {
         Ok(()) => EXIT_OK,
         Err(error) => {
@@ -205,11 +220,13 @@ fn resolve_adb_or_report(adb_option: Option<PathBuf>) -> Option<PathBuf> {
 struct InspectArgs {
     manifest: String,
     folder: String,
+    library: Option<PathBuf>,
 }
 
 fn parse_inspect_args(args: &[String]) -> Result<InspectArgs, String> {
     let mut manifest = None;
     let mut folder = None;
+    let mut library = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -221,12 +238,17 @@ fn parse_inspect_args(args: &[String]) -> Result<InspectArgs, String> {
                 folder = args.get(index + 1).cloned();
                 index += 2;
             }
+            "--library" => {
+                library = args.get(index + 1).map(PathBuf::from);
+                index += 2;
+            }
             other => return Err(format!("option inconnue : {other}")),
         }
     }
     Ok(InspectArgs {
         manifest: manifest.ok_or("--manifest est obligatoire")?,
         folder: folder.ok_or("--folder est obligatoire")?,
+        library,
     })
 }
 
@@ -245,7 +267,14 @@ fn inspect_command(args: &[String]) -> i32 {
             return error.exit_code();
         }
     };
-    match planner::inspect(&manifest, &PathBuf::from(&parsed.folder)) {
+    let library = parsed
+        .library
+        .map(|root| LibraryStore::new(root).playlist_dir(&manifest.playlist_id));
+    match planner::inspect_with_library(
+        &manifest,
+        Some(Path::new(&parsed.folder)),
+        library.as_deref(),
+    ) {
         Ok(inspection) => {
             print_inspection(&inspection);
             EXIT_OK
@@ -262,6 +291,7 @@ fn inspect_command(args: &[String]) -> i32 {
 struct TransferArgs {
     manifest: String,
     folder: String,
+    library: Option<PathBuf>,
     serial: Option<String>,
     dry_run: bool,
     prune: bool,
@@ -273,6 +303,7 @@ fn parse_transfer_args(args: &[String]) -> Result<TransferArgs, String> {
     let mut parsed = TransferArgs {
         manifest: String::new(),
         folder: String::new(),
+        library: None,
         serial: None,
         dry_run: false,
         prune: false,
@@ -298,6 +329,10 @@ fn parse_transfer_args(args: &[String]) -> Result<TransferArgs, String> {
             }
             "--target-dir" => {
                 parsed.target_dir = args.get(index + 1).map(PathBuf::from);
+                index += 2;
+            }
+            "--library" => {
+                parsed.library = args.get(index + 1).map(PathBuf::from);
                 index += 2;
             }
             "--dry-run" => {
@@ -346,7 +381,11 @@ fn transfer_command(args: &[String], adb_option: Option<PathBuf>) -> i32 {
         return EXIT_ADB_MISSING;
     }
 
+    let library = parsed
+        .library
+        .map(|root| LibraryStore::new(root).playlist_dir(&manifest.playlist_id));
     let mut request = TransferRequest::new(manifest, PathBuf::from(&parsed.folder));
+    request.library = library;
     request.serial = parsed.serial;
     request.prune = parsed.prune;
     request.dry_run = parsed.dry_run;

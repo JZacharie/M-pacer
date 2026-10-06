@@ -362,7 +362,41 @@ impl Inspection {
 
 /// Apparie le manifeste au dossier choisi. Seule E/S : le scan du dossier.
 pub fn inspect(manifest: &TransferManifest, folder: &Path) -> Result<Inspection, ToolError> {
-    let files = scan_folder(folder)?;
+    inspect_with_library(manifest, Some(folder), None)
+}
+
+/// Apparie le manifeste a un ou deux dossiers : le dossier choisi sur le disque
+/// et/ou la bibliotheque geree par l'application. Les dossiers absents sont
+/// ignores, les fichiers sont dedupliques par chemin, puis la logique est
+/// exactement celle de inspect. Erreur seulement si aucun dossier n'est fourni.
+pub fn inspect_with_library(
+    manifest: &TransferManifest,
+    folder: Option<&Path>,
+    library: Option<&Path>,
+) -> Result<Inspection, ToolError> {
+    let mut provided = false;
+    let mut files: Vec<LocalFile> = Vec::new();
+    for directory in [folder, library].into_iter().flatten() {
+        provided = true;
+        if !directory.is_dir() {
+            continue;
+        }
+        files.extend(scan_folder(directory)?);
+    }
+    if !provided {
+        return Err(ToolError::Usage(
+            "aucun dossier audio : designer un dossier du disque ou une bibliotheque".to_string(),
+        ));
+    }
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    files.dedup_by(|left, right| left.path == right.path);
+    Ok(build_inspection(manifest, files))
+}
+
+/// Appariement pur, a partir des fichiers deja scannes : une entree par piste,
+/// file vaut None quand rien n'a ete trouve, les autres fichiers du scan sont
+/// listes dans unused_files.
+fn build_inspection(manifest: &TransferManifest, files: Vec<LocalFile>) -> Inspection {
     let found = match_tracks(&manifest.tracks, &files);
     let mut matches = Vec::with_capacity(manifest.tracks.len());
     let mut missing = Vec::new();
@@ -414,7 +448,7 @@ pub fn inspect(manifest: &TransferManifest, folder: &Path) -> Result<Inspection,
         })
         .collect();
 
-    Ok(Inspection {
+    Inspection {
         playlist: PlaylistSummary {
             id: manifest.playlist_id.clone(),
             name: manifest.name.clone(),
@@ -427,7 +461,7 @@ pub fn inspect(manifest: &TransferManifest, folder: &Path) -> Result<Inspection,
         unused_files,
         total_bytes,
         manifest: manifest.clone(),
-    })
+    }
 }
 
 fn extension_of(file_name: &str) -> String {
@@ -537,6 +571,8 @@ pub fn copy_order(inspection: &Inspection) -> Vec<&MatchEntry> {
 pub struct TransferRequest {
     pub manifest: TransferManifest,
     pub folder: PathBuf,
+    /// Dossier supplementaire : la bibliotheque de cette playlist (facultatif).
+    pub library: Option<PathBuf>,
     pub serial: Option<String>,
     pub prune: bool,
     pub dry_run: bool,
@@ -556,6 +592,7 @@ impl TransferRequest {
         Self {
             manifest,
             folder,
+            library: None,
             serial: None,
             prune: false,
             dry_run: false,
@@ -602,7 +639,8 @@ pub fn transfer(
         total: request.manifest.tracks.len(),
         bytes_sent: 0,
     });
-    let inspection = inspect(&request.manifest, &request.folder)?;
+    let folder = (!request.folder.as_os_str().is_empty()).then_some(request.folder.as_path());
+    let inspection = inspect_with_library(&request.manifest, folder, request.library.as_deref())?;
     let matched = inspection.matched_count();
     sink.log(&format!(
         "{matched} titre(s) apparie(s), {} manquant(s), {} fichier(s) ignore(s)",

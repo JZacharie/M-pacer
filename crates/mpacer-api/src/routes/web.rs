@@ -8,8 +8,8 @@ use crate::auth::{AuthUser, OptionalUser, SESSION_COOKIE};
 use crate::error::{AppError, AppResult};
 use crate::live::{LivePoint, LiveSessionView};
 use crate::models::{
-    MusicPlaylistInput, MusicTrack, MusicTrackInput, Race, RaceInput, RaceTask, SpotifyAccount,
-    User,
+    DeezerAccount, MusicPlaylistInput, MusicTrack, MusicTrackInput, Race, RaceInput, RaceTask,
+    SourcePlaylist, SpotifyAccount, User,
 };
 use crate::mqtt::MqttStatus;
 use crate::state::AppState;
@@ -23,7 +23,8 @@ use cookie::{Cookie, SameSite};
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 use mpacer_core::cardio::HeartRateZones;
 use mpacer_core::music::{
-    music_coverage, race_duration_s, MusicConfig, Track as MusicTrackCore, MUSIC_MARGIN_RATIO,
+    music_coverage, race_duration_s, suggested_file_name, MusicConfig, Track as MusicTrackCore,
+    WantedTrack, MUSIC_MARGIN_RATIO,
 };
 use mpacer_core::units::{format_duration, format_pace, UnitSystem};
 use serde::Deserialize;
@@ -111,9 +112,13 @@ pub fn router() -> Router<AppState> {
         .route("/music/search", get(music_search))
         .route("/auth/spotify", get(spotify_start))
         .route("/auth/spotify/callback", get(spotify_callback))
+        .route("/auth/deezer", get(deezer_start))
+        .route("/auth/deezer/callback", get(deezer_callback))
         .route("/music/spotify/disconnect", post(spotify_disconnect))
+        .route("/music/deezer/disconnect", post(deezer_disconnect))
         .route("/music/import", post(music_import))
         .route("/music/playlists/{id}/manifest", get(music_manifest))
+        .route("/music/playlists/{id}/files", get(music_files))
         .route("/music/playlists/{id}/track-bpm", post(music_track_bpm))
         .route("/music/playlists/{id}/target", post(music_target))
         .route("/music/playlists/{id}/rename", post(music_rename))
@@ -3502,15 +3507,19 @@ async fn race_task_delete(
 
 // ------------------------------------------------------------------ musique
 //
-// La page /music reprend les quatre blocs de docs/07 section 6.1 :
-//   1. source Spotify (facultatif) : connexion, recherche, import ;
+// La page /music reprend les six blocs de docs/11 :
+//   1. source des playlists : Spotify **ou** Deezer (connexion, recherche,
+//      playlists du compte, import) ;
 //   2. playlists preparees (source, titres, duree, BPM cible, manifeste) ;
 //   3. titres de la playlist selectionnee (tap-tempo ou saisie manuelle) ;
-//   4. transfert vers la montre par USB.
+//   4. fichiers MP3 a mettre en place (un nom attendu par piste, export .txt) ;
+//   5. transfert vers la montre par USB ;
+//   6. la playlist couvre-t-elle la course ?
 //
-// Le serveur ne stocke aucun audio : il publie les fiches et le manifeste de
-// transfert, que l'outil local `mpacer-music` consomme pour copier les fichiers
-// du disque de l'utilisateur sur la montre (adb push).
+// Le serveur ne stocke aucun audio : il publie les fiches, la liste des MP3 a
+// rassembler et le manifeste de transfert, que l'outil local `mpacer-music`
+// consomme pour apporter les fichiers (dossier du disque ou fichiers pousses
+// dans l'application locale) puis les copier sur la montre (adb push).
 
 /// Parametres de la page musique.
 #[derive(Debug, Deserialize)]
@@ -3518,19 +3527,25 @@ struct MusicQuery {
     /// Playlist affichee dans le bloc 3.
     #[serde(default)]
     playlist: Option<String>,
-    /// Terme de recherche Spotify.
+    /// Terme de recherche (Spotify ou Deezer).
     #[serde(default)]
     q: Option<String>,
-    /// Bloc 5 : course dont on verifie la couverture.
+    /// Source interrogee : `spotify` (defaut) ou `deezer`.
+    #[serde(default)]
+    source: Option<String>,
+    /// `mes` : liste les playlists du compte lie au lieu de chercher.
+    #[serde(default)]
+    vue: Option<String>,
+    /// Bloc 6 : course dont on verifie la couverture.
     #[serde(default)]
     race: Option<String>,
-    /// Bloc 5 : distance saisie (km), prioritaire sur la fiche de course.
+    /// Bloc 6 : distance saisie (km), prioritaire sur la fiche de course.
     #[serde(default)]
     distance_km: Option<String>,
-    /// Bloc 5 : allure (m:ss au km, ou secondes).
+    /// Bloc 6 : allure (m:ss au km, ou secondes).
     #[serde(default)]
     allure: Option<String>,
-    /// Bloc 5 : temps vise (h:mm:ss).
+    /// Bloc 6 : temps vise (h:mm:ss).
     #[serde(default)]
     temps: Option<String>,
     #[serde(default)]
@@ -3546,6 +3561,11 @@ fn music_error_message(code: &str) -> String {
         "spotify_refuse" => "Spotify a refuse la demande (identifiants invalides, redirection non autorisee ou endpoint restreint).".to_string(),
         "spotify_ref_invalide" => "La reference de playlist Spotify est illisible : collez un lien open.spotify.com ou un identifiant.".to_string(),
         "spotify_non_connecte" => "Connectez votre compte Spotify avant d'importer une playlist.".to_string(),
+        "deezer_non_configure" => "Deezer n'est pas configure sur ce service : renseignez MPACER_DEEZER_APP_ID et MPACER_DEEZER_APP_SECRET.".to_string(),
+        "deezer_refuse" => "Deezer a refuse la demande (identifiants invalides, redirection non autorisee ou jeton expire).".to_string(),
+        "deezer_ref_invalide" => "La reference de playlist Deezer est illisible : collez un lien deezer.com ou un identifiant numerique.".to_string(),
+        "deezer_non_connecte" => "Connectez votre compte Deezer avant de recuperer une playlist.".to_string(),
+        "source_inconnue" => "Source musicale inconnue : choisissez Spotify ou Deezer.".to_string(),
         "playlist_inconnue" => "Cette playlist n'existe plus.".to_string(),
         "nom_invalide" => "Le nom de la playlist ne peut pas etre vide.".to_string(),
         "bpm_invalide" => "Le BPM doit etre un nombre entre 30 et 300.".to_string(),
@@ -3558,7 +3578,9 @@ fn music_ok_message(code: &str) -> String {
     match code {
         "spotify_connecte" => "Compte Spotify connecte.".to_string(),
         "spotify_deconnecte" => "Compte Spotify deconnecte.".to_string(),
-        "playlist_importee" => "Playlist Spotify importee.".to_string(),
+        "deezer_connecte" => "Compte Deezer connecte.".to_string(),
+        "deezer_deconnecte" => "Compte Deezer deconnecte.".to_string(),
+        "playlist_importee" => "Playlist importee.".to_string(),
         "bpm_enregistre" => "BPM enregistre.".to_string(),
         "playlist_renommee" => "Playlist renommee.".to_string(),
         "playlist_supprimee" => "Playlist supprimee.".to_string(),
@@ -3566,7 +3588,213 @@ fn music_ok_message(code: &str) -> String {
     }
 }
 
-/// Commande de transfert montree dans le bloc 4 (exemple de dossier).
+/// Source musicale normalisee depuis la chaine de requete.
+///
+/// Deezer est la seule valeur alternative : tout le reste retombe sur Spotify,
+/// pour que `/?q=...` sans `source` continue de fonctionner comme avant.
+fn normalize_source(source: Option<&str>) -> &'static str {
+    match source
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("deezer") => "deezer",
+        _ => "spotify",
+    }
+}
+
+/// Libelle affiche d'une source.
+fn source_label(source: &str) -> &'static str {
+    match source {
+        "deezer" => "Deezer",
+        _ => "Spotify",
+    }
+}
+
+/// Message affiche quand la source n'est pas configuree sur ce service.
+fn source_unconfigured_message(source: &str) -> &'static str {
+    match source {
+        "deezer" => {
+            "Deezer n'est pas configure sur ce service : renseignez MPACER_DEEZER_APP_ID et MPACER_DEEZER_APP_SECRET."
+        }
+        _ => {
+            "Spotify n'est pas configure sur ce service : renseignez MPACER_SPOTIFY_CLIENT_ID et MPACER_SPOTIFY_CLIENT_SECRET."
+        }
+    }
+}
+
+/// Rappel affiche avant la connexion du compte.
+fn source_connect_hint(source: &str) -> &'static str {
+    match source {
+        "deezer" => {
+            "Connectez Deezer pour retrouver vos playlists : seules les metadonnees (titres, durees) sont stockees. Deezer ne fournit pas de tempo : le BPM se complete par la balise du MP3, le tap ou la saisie."
+        }
+        _ => {
+            "Connectez Spotify pour retrouver vos playlists : seules les metadonnees (titres, durees, BPM) sont stockees. L'audio est copie sur la montre par USB, depuis les fichiers de votre ordinateur."
+        }
+    }
+}
+
+/// Vue commune d'une playlist Spotify (voir `SourcePlaylist`).
+fn spotify_source_playlist(item: crate::spotify::PlaylistRef) -> SourcePlaylist {
+    SourcePlaylist {
+        source: "spotify".to_string(),
+        id: item.id,
+        name: item.name,
+        track_count: item.track_count,
+        cover_url: item.cover_url,
+        owner: item.owner,
+    }
+}
+
+/// Vue commune d'une playlist Deezer (voir `SourcePlaylist`).
+fn deezer_source_playlist(item: crate::deezer::PlaylistRef) -> SourcePlaylist {
+    SourcePlaylist {
+        source: "deezer".to_string(),
+        id: item.id,
+        name: item.name,
+        track_count: item.track_count,
+        cover_url: item.cover_url,
+        owner: item.owner,
+    }
+}
+
+/// Panneau d'une source musicale : connexion, recherche, playlists du compte.
+///
+/// Les resultats affiches appartiennent a la source interrogee (`active`) : le
+/// panneau de l'autre service reste visible pour changer de source.
+fn source_panel(
+    source: &'static str,
+    ready: bool,
+    connected_name: Option<String>,
+    results: &[SourcePlaylist],
+    active: bool,
+    term: &str,
+    error: Option<&str>,
+) -> Markup {
+    let label = source_label(source);
+    html! {
+        div class="panel" {
+            h3 { (label) }
+            @if active {
+                @if let Some(error) = error {
+                    p class="alert" {
+                        span class="icon icon-alert" {}
+                        span { (error) }
+                    }
+                }
+            }
+            @if !ready {
+                p class="muted" { (source_unconfigured_message(source)) }
+            } @else if let Some(name) = connected_name {
+                p class="split" {
+                    span class="pill on" { "Connecte" }
+                    span class="muted" { (name) }
+                }
+                form method="get" action="/music/search" class="music-search" {
+                    input type="hidden" name="source" value=(source);
+                    input type="text" name="q" value=(term) placeholder="running";
+                    button type="submit" { "Chercher" }
+                }
+                div class="actions" {
+                    a class="button small ghost" href={ "/music/search?source=" (source) "&vue=mes" } {
+                        "Mes playlists"
+                    }
+                }
+                @if active && !results.is_empty() {
+                    ul class="music-results" {
+                        @for result in results {
+                            li {
+                                div class="music-result" {
+                                    strong { (result.name) }
+                                    span class="muted" { (result.track_count) " titres" }
+                                    @if let Some(owner) = &result.owner {
+                                        span class="tiny muted" { (owner) }
+                                    }
+                                }
+                                form method="post" action="/music/import" class="music-import" {
+                                    input type="hidden" name="source" value=(source);
+                                    input type="hidden" name="ref" value=(result.id);
+                                    input type="text" name="target_bpm" inputmode="numeric" placeholder="BPM cible (auto)";
+                                    button class="small" type="submit" { "Importer" }
+                                }
+                            }
+                        }
+                    }
+                }
+                @if active && results.is_empty() {
+                    p class="muted" { "Aucune playlist trouvee." }
+                }
+                form method="post" action={ "/music/" (source) "/disconnect" } {
+                    button class="ghost" type="submit" { "Deconnecter" }
+                }
+            } @else {
+                p class="muted" { (source_connect_hint(source)) }
+                div class="actions" {
+                    a class="button" href={ "/auth/" (source) } { "Connecter " (label) }
+                }
+            }
+        }
+    }
+}
+
+/// Un fichier MP3 a mettre en place pour une playlist, avec le nom attendu.
+struct PreparedFile {
+    position: u32,
+    title: String,
+    artist: Option<String>,
+    file_name: String,
+}
+
+/// Liste des fichiers MP3 a preparer pour une playlist selectionnee.
+///
+/// Le nom est exactement celui que `mpacer-music` ecrit sur la montre
+/// (`01 - Artiste - Titre.mp3`) : l'utilisateur sait donc quoi telecharger ou
+/// convertir, et l'appariement du dossier local retrouve le fichier.
+fn prepared_files(tracks: &[MusicTrack]) -> Vec<PreparedFile> {
+    tracks
+        .iter()
+        .map(|track| {
+            let wanted = WantedTrack {
+                id: track.id.clone(),
+                position: track.position.max(0) as u32,
+                title: track.title.clone(),
+                artist: track.artist.clone(),
+                album: track.album.clone(),
+                duration_s: track.duration_s,
+                bpm: track.bpm,
+                file: None,
+                size_bytes: None,
+            };
+            PreparedFile {
+                position: wanted.position,
+                title: track.title.clone(),
+                artist: track.artist.clone(),
+                file_name: suggested_file_name(&wanted, "mp3"),
+            }
+        })
+        .collect()
+}
+
+/// Contenu texte de la liste des fichiers a preparer (piece jointe `.txt`).
+fn prepared_files_text(playlist_name: &str, files: &[PreparedFile]) -> String {
+    let mut text = String::new();
+    let _ = writeln!(
+        text,
+        "# {playlist_name} : {} fichier(s) MP3 a mettre en place",
+        files.len()
+    );
+    let _ = writeln!(
+        text,
+        "# un nom par ligne, tel qu'attendu sur la montre (mpacer-music apparie le dossier)"
+    );
+    for file in files {
+        let _ = writeln!(text, "{}", file.file_name);
+    }
+    text
+}
+
+/// Commande de transfert montree dans le bloc 5 (exemple de dossier).
 ///
 /// Seul le nom du manifeste compte : l'utilisateur remplace le dossier par le
 /// sien, celui ou sont ranges ses fichiers audio.
@@ -3838,7 +4066,7 @@ async fn spotify_access_token(state: &AppState, user_id: &str) -> AppResult<Opti
 // le navigateur (cookie) et l'application compagnon (jeton d'appareil)
 // televersent exactement par le meme chemin de code.
 
-/// Page /music : source, playlists, titres et preparation de la course.
+/// Page /music : sources, playlists, titres, MP3 a preparer et couverture.
 async fn music_page(
     State(state): State<AppState>,
     OptionalUser(user): OptionalUser,
@@ -3848,7 +4076,9 @@ async fn music_page(
         return Ok(Redirect::to("/login").into_response());
     };
     let spotify_ready = state.config.spotify_configured();
+    let deezer_ready = state.config.deezer_configured();
     let account = crate::db::get_spotify_account(&state.pool, &user.id).await?;
+    let deezer_account = crate::db::get_deezer_account(&state.pool, &user.id).await?;
     let playlists = crate::db::list_music_playlist_summaries(&state.pool, &user.id).await?;
 
     // Playlist affichee : celle demandee, sinon la plus recemment modifiee.
@@ -3869,33 +4099,88 @@ async fn music_page(
         .as_ref()
         .and_then(|id| playlists.iter().find(|playlist| &playlist.id == id));
 
-    // Recherche Spotify : aucun appel reseau quand le service n'est pas configure.
-    let mut search_results: Vec<crate::spotify::PlaylistRef> = Vec::new();
-    let mut search_error: Option<String> = None;
-    if let Some(term) = query
+    // Source interrogee : recherche (terme) ou playlists du compte (`vue=mes`).
+    // Aucun appel reseau quand la source n'est pas configuree.
+    let source = normalize_source(query.source.as_deref());
+    let term = query
         .q
         .as_deref()
         .map(str::trim)
         .filter(|term| !term.is_empty())
-    {
-        if !spotify_ready {
-            search_error = Some("Spotify n'est pas configure sur ce service.".to_string());
-        } else if account.is_none() {
-            search_error = Some("Connectez votre compte Spotify pour rechercher.".to_string());
+        .map(str::to_string);
+    let mine = query.vue.as_deref().map(str::trim) == Some("mes");
+
+    let mut source_playlists: Vec<SourcePlaylist> = Vec::new();
+    let mut search_error: Option<String> = None;
+    if term.is_some() || mine {
+        let ready = if source == "deezer" {
+            deezer_ready
         } else {
-            match spotify_access_token(&state, &user.id).await? {
+            spotify_ready
+        };
+        let connected = if source == "deezer" {
+            deezer_account.is_some()
+        } else {
+            account.is_some()
+        };
+        if !ready {
+            search_error = Some(source_unconfigured_message(source).to_string());
+        } else if !connected {
+            search_error = Some(format!(
+                "Connectez votre compte {} pour continuer.",
+                source_label(source)
+            ));
+        } else {
+            let token = if source == "deezer" {
+                deezer_access_token(&state, &user.id).await?
+            } else {
+                spotify_access_token(&state, &user.id).await?
+            };
+            match token {
                 Some(token) => {
-                    match crate::spotify::search_playlists(&state.http, &token, term).await {
-                        Ok(results) => search_results = results,
+                    let outcome: AppResult<Vec<SourcePlaylist>> = if source == "deezer" {
+                        if mine {
+                            crate::deezer::list_user_playlists(&state.http, &token)
+                                .await
+                                .map(|items| {
+                                    items.into_iter().map(deezer_source_playlist).collect()
+                                })
+                        } else {
+                            crate::deezer::search_playlists(
+                                &state.http,
+                                &token,
+                                term.as_deref().unwrap_or_default(),
+                            )
+                            .await
+                            .map(|items| items.into_iter().map(deezer_source_playlist).collect())
+                        }
+                    } else if mine {
+                        crate::spotify::list_user_playlists(&state.http, &token)
+                            .await
+                            .map(|items| items.into_iter().map(spotify_source_playlist).collect())
+                    } else {
+                        crate::spotify::search_playlists(
+                            &state.http,
+                            &token,
+                            term.as_deref().unwrap_or_default(),
+                        )
+                        .await
+                        .map(|items| items.into_iter().map(spotify_source_playlist).collect())
+                    };
+                    match outcome {
+                        Ok(results) => source_playlists = results,
                         Err(error) => {
-                            tracing::warn!(error = %error, "recherche Spotify refusee");
-                            search_error = Some("La recherche Spotify a echoue.".to_string());
+                            tracing::warn!(error = %error, source, "requete de playlists refusee");
+                            search_error =
+                                Some(format!("La requete {} a echoue.", source_label(source)));
                         }
                     }
                 }
                 None => {
-                    search_error =
-                        Some("Session Spotify expiree : reconnectez le compte.".to_string());
+                    search_error = Some(format!(
+                        "Session {} expiree : reconnectez le compte.",
+                        source_label(source)
+                    ));
                 }
             }
         }
@@ -3919,6 +4204,21 @@ async fn music_page(
         .as_ref()
         .map(|playlist| crate::models::manifest_file_name(&playlist.name));
     let manifest_command = manifest_name.as_deref().map(transfer_command);
+    // Bloc 4 : les noms de fichiers attendus sur la montre pour cette playlist.
+    let prepared = prepared_files(&tracks);
+    // Nom affiche du compte lie, quel que soit le fournisseur.
+    let spotify_name = account.as_ref().and_then(|account| {
+        account
+            .display_name
+            .clone()
+            .or_else(|| account.spotify_user_id.clone())
+    });
+    let deezer_name = deezer_account.as_ref().and_then(|account| {
+        account
+            .display_name
+            .clone()
+            .or_else(|| account.deezer_user_id.clone())
+    });
 
     let content = html! {
         section class="hero" {
@@ -3941,65 +4241,27 @@ async fn music_page(
             }
         }
 
-        // ------------------------------------------------ 1. source Spotify
-        div class="section-head" { h2 { "1. Source Spotify (facultatif)" } }
+        // ------------------------------------ 1. sources Spotify et Deezer
+        div class="section-head" { h2 { "1. Source des playlists (Spotify ou Deezer)" } }
         div class="music-grid" {
-            div class="panel" {
-                h3 { "Spotify" }
-                @if let Some(error) = &search_error {
-                    p class="alert" {
-                        span class="icon icon-alert" {}
-                        span { (error) }
-                    }
-                }
-                @if !spotify_ready {
-                    p class="muted" {
-                        "Spotify n'est pas configure sur ce service : renseignez "
-                        "MPACER_SPOTIFY_CLIENT_ID et MPACER_SPOTIFY_CLIENT_SECRET pour "
-                        "importer des playlists."
-                    }
-                } @else if let Some(account) = &account {
-                    p class="split" {
-                        span class="pill on" { "Connecte" }
-                        @if let Some(nom) = account.display_name.as_deref().or(account.spotify_user_id.as_deref()) {
-                            span class="muted" { (nom) }
-                        }
-                    }
-                    form method="get" action="/music/search" class="music-search" {
-                        input type="text" name="q" value=(query.q.clone().unwrap_or_default()) placeholder="running";
-                        button type="submit" { "Chercher" }
-                    }
-                    @if !search_results.is_empty() {
-                        ul class="music-results" {
-                            @for result in &search_results {
-                                li {
-                                    div class="music-result" {
-                                        strong { (result.name) }
-                                        span class="muted" { (result.track_count) " titres" }
-                                    }
-                                    form method="post" action="/music/import" class="music-import" {
-                                        input type="hidden" name="spotify_ref" value=(result.id);
-                                        input type="text" name="target_bpm" inputmode="numeric" placeholder="BPM cible (auto)";
-                                        button class="small" type="submit" { "Importer" }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    form method="post" action="/music/spotify/disconnect" {
-                        button class="ghost" type="submit" { "Deconnecter" }
-                    }
-                } @else {
-                    p class="muted" {
-                        "Importez une playlist Spotify : seules les metadonnees (titres, durees, "
-                        "BPM) sont stockees ici. L'audio est copie sur la montre par USB, depuis "
-                        "le dossier de votre ordinateur."
-                    }
-                    div class="actions" {
-                        a class="button" href="/auth/spotify" { "Connecter Spotify" }
-                    }
-                }
-            }
+            (source_panel(
+                "spotify",
+                spotify_ready,
+                spotify_name,
+                &source_playlists,
+                source == "spotify",
+                term.as_deref().unwrap_or_default(),
+                search_error.as_deref(),
+            ))
+            (source_panel(
+                "deezer",
+                deezer_ready,
+                deezer_name,
+                &source_playlists,
+                source == "deezer",
+                term.as_deref().unwrap_or_default(),
+                search_error.as_deref(),
+            ))
         }
 
         // ------------------------------------------------ 2. playlists preparees
@@ -4133,8 +4395,50 @@ async fn music_page(
             p class="muted" { "Selectionnez une playlist dans le bloc 2 pour saisir les BPM." }
         }
 
-        // ------------------------------------------------ 4. transfert USB
-        div class="section-head" { h2 { "4. Transfert vers la montre (USB)" } }
+        // -------------------------------------- 4. fichiers MP3 a preparer
+        div class="section-head" { h2 { "4. Fichiers a preparer (MP3)" } }
+        @if let Some(playlist) = &selected_playlist {
+            @if prepared.is_empty() {
+                p class="muted" { "Cette playlist ne contient aucun titre." }
+            } @else {
+                p class="muted" {
+                    (prepared.len()) " fichier(s) MP3 a mettre en place : un nom par piste, "
+                    "exactement celui ecrit sur la montre par mpacer-music."
+                }
+                div class="actions" {
+                    a class="button" href={ "/music/playlists/" (playlist.id) "/files" } {
+                        "Telecharger la liste (.txt)"
+                    }
+                }
+                div class="table-wrap" {
+                    table {
+                        thead {
+                            tr {
+                                th { "#" }
+                                th { "Titre" }
+                                th { "Artiste" }
+                                th { "Fichier MP3 attendu" }
+                            }
+                        }
+                        tbody {
+                            @for file in &prepared {
+                                tr {
+                                    td { (file.position) }
+                                    td { (file.title) }
+                                    td { (file.artist.clone().unwrap_or_else(|| "-".to_string())) }
+                                    td { code { (file.file_name) } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } @else {
+            p class="muted" { "Selectionnez une playlist dans le bloc 2 pour lister ses fichiers MP3." }
+        }
+
+        // ------------------------------------------------ 5. transfert USB
+        div class="section-head" { h2 { "5. Transfert vers la montre (USB)" } }
         @if let (Some(playlist), Some(name), Some(command)) =
             (&selected_playlist, &manifest_name, &manifest_command)
         {
@@ -4168,8 +4472,8 @@ async fn music_page(
             p class="muted" { "Selectionnez une playlist dans le bloc 2 pour preparer son transfert." }
         }
 
-        // ------------------------------------------------ 5. couverture musicale
-        div class="section-head" { h2 { "5. Assez de musique pour la course ?" } }
+        // ------------------------------------------------ 6. couverture musicale
+        div class="section-head" { h2 { "6. Assez de musique pour la course ?" } }
         @if let Some(playlist) = &selected_playlist {
             form class="coverage-form" method="get" action="/music" {
                 input type="hidden" name="playlist" value=(playlist.id);
@@ -4336,29 +4640,204 @@ async fn spotify_disconnect(
     Ok(Redirect::to("/music?ok=spotify_deconnecte").into_response())
 }
 
+// ---------------------------------------------------------------- Deezer (web)
+
+/// Jeton d'acces Deezer du compte lie.
+///
+/// Deezer n'emet pas de jeton de rafraichissement : `expires_at_ms = 0` signifie
+/// "duree inconnue" et le jeton reste utilisable jusqu'a un refus de l'API, qui
+/// invite alors a reconnecter le compte.
+async fn deezer_access_token(state: &AppState, user_id: &str) -> AppResult<Option<String>> {
+    let Some(account) = crate::db::get_deezer_account(&state.pool, user_id).await? else {
+        return Ok(None);
+    };
+    if account.expires_at_ms == 0 || account.expires_at_ms > state.now_ms() + 60_000 {
+        return Ok(Some(account.access_token));
+    }
+    tracing::warn!(utilisateur = %user_id, "jeton Deezer expire : reconnexion necessaire");
+    Ok(None)
+}
+
+/// Demarre l'OAuth Deezer (code d'autorisation, sans PKCE).
+async fn deezer_start(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+) -> AppResult<Response> {
+    if !state.config.deezer_configured() {
+        return Ok(Redirect::to("/music?erreur=deezer_non_configure").into_response());
+    }
+    let oauth_state = crate::auth::random_urlsafe(24);
+    let now = state.now_ms();
+    // Meme table que Google et Spotify : l'etat est a usage unique. Deezer n'a
+    // pas de PKCE, le verificateur porte donc un marqueur de provenance.
+    sqlx::query(
+        "INSERT INTO oauth_states (state, pkce_verifier, redirect_to, created_at_ms, expires_at_ms)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(&oauth_state)
+    .bind("deezer")
+    .bind("/music/deezer")
+    .bind(now)
+    .bind(now + 600_000)
+    .execute(&state.pool)
+    .await?;
+
+    let url = crate::deezer::authorize_url(&state.config, &oauth_state)?;
+    Ok(Redirect::to(&url).into_response())
+}
+
+/// Echange le code Deezer, enregistre le compte lie et revient sur /music.
+pub(crate) async fn deezer_callback(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Query(query): Query<CallbackQuery>,
+) -> AppResult<Response> {
+    if let Some(error) = query.error {
+        return Ok(Redirect::to(&format!("/music?erreur={error}")).into_response());
+    }
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let Some(code) = query.code else {
+        return Err(AppError::bad_request("parametres OAuth manquants"));
+    };
+    let now = state.now_ms();
+    // Deezer renvoie `state` quand il est fourni ; s'il manque, on retombe sur le
+    // dernier etat Deezer en attente : une protection minimale est conservee et
+    // la connexion ne casse pas sur un fournisseur qui omet le parametre.
+    let row: Option<(String, String)> = match query.state.as_deref() {
+        Some(oauth_state) => {
+            sqlx::query_as(
+                "SELECT state, pkce_verifier FROM oauth_states
+                  WHERE state = $1 AND expires_at_ms > $2",
+            )
+            .bind(oauth_state)
+            .bind(now)
+            .fetch_optional(&state.pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as(
+                "SELECT state, pkce_verifier FROM oauth_states
+                  WHERE redirect_to = '/music/deezer' AND expires_at_ms > $1
+                  ORDER BY created_at_ms DESC LIMIT 1",
+            )
+            .bind(now)
+            .fetch_optional(&state.pool)
+            .await?
+        }
+    };
+    let Some((oauth_state, _provenance)) = row else {
+        return Err(AppError::bad_request("etat OAuth inconnu ou expire"));
+    };
+    sqlx::query("DELETE FROM oauth_states WHERE state = $1")
+        .bind(&oauth_state)
+        .execute(&state.pool)
+        .await?;
+
+    let token = match crate::deezer::exchange_code(&state.http, &state.config, &code).await {
+        Ok(token) => token,
+        Err(error) => {
+            tracing::warn!(error = %error, "echange de jeton Deezer refuse");
+            return Ok(Redirect::to("/music?erreur=deezer_refuse").into_response());
+        }
+    };
+    // Le profil n'est qu'un confort d'affichage : un echec ne remet pas en cause
+    // la liaison, qui a bien recu son jeton.
+    let profile = crate::deezer::current_user(&state.http, &token.access_token)
+        .await
+        .unwrap_or(crate::deezer::Profile {
+            id: None,
+            display_name: None,
+        });
+
+    let account = DeezerAccount {
+        user_id: user.id.clone(),
+        deezer_user_id: profile.id,
+        display_name: profile.display_name,
+        access_token: token.access_token,
+        expires_at_ms: token.expires_in.map_or(0, |seconds| now + seconds * 1000),
+        scope: Some(crate::deezer::PERMS.to_string()),
+        connected_at_ms: now,
+    };
+    crate::db::upsert_deezer_account(&state.pool, &account).await?;
+    tracing::info!(user = %user.email, "compte Deezer connecte");
+    Ok(Redirect::to("/music?ok=deezer_connecte").into_response())
+}
+
+/// Supprime la liaison Deezer (le jeton est oublie).
+async fn deezer_disconnect(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Response> {
+    crate::db::delete_deezer_account(&state.pool, &user.id).await?;
+    tracing::info!(user = %user.email, "compte Deezer deconnecte");
+    Ok(Redirect::to("/music?ok=deezer_deconnecte").into_response())
+}
+
 // ---------------------------------------------------------------- actions musique
 
 #[derive(Debug, Deserialize)]
 struct MusicImportForm {
+    /// Source demandee : `spotify` (defaut) ou `deezer`.
+    #[serde(default)]
+    source: String,
+    /// Reference generique : lien, URI ou identifiant chez le fournisseur.
+    #[serde(default, rename = "ref")]
+    reference: String,
+    /// Ancien nom du champ Spotify : conserve pour ne pas casser un formulaire
+    /// deja ouvert dans un navigateur.
     #[serde(default)]
     spotify_ref: String,
+    #[serde(default)]
+    deezer_ref: String,
     #[serde(default)]
     target_bpm: String,
 }
 
-/// Importe une playlist Spotify (fiche + tempo quand l'API l'autorise encore).
+/// Importe une playlist d'une source externe (Spotify ou Deezer).
 async fn music_import(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Form(form): Form<MusicImportForm>,
 ) -> AppResult<Response> {
+    let requested = form.source.trim();
+    if !requested.is_empty() && !matches!(requested, "spotify" | "deezer") {
+        return Ok(Redirect::to("/music?erreur=source_inconnue").into_response());
+    }
+    let source = normalize_source(Some(requested));
+    let reference = if !form.reference.trim().is_empty() {
+        form.reference.trim().to_string()
+    } else if source == "deezer" {
+        form.deezer_ref.trim().to_string()
+    } else {
+        form.spotify_ref.trim().to_string()
+    };
+    let target_bpm = match parse_number(&form.target_bpm, "le BPM cible") {
+        Ok(value) => crate::models::clean_bpm(value),
+        Err(_) => return Ok(Redirect::to("/music?erreur=bpm_invalide").into_response()),
+    };
+    if source == "deezer" {
+        import_deezer(&state, &user, &reference, target_bpm).await
+    } else {
+        import_spotify(&state, &user, &reference, target_bpm).await
+    }
+}
+
+/// Importe une playlist Spotify (fiche + tempo quand l'API l'autorise encore).
+async fn import_spotify(
+    state: &AppState,
+    user: &User,
+    reference: &str,
+    target_bpm: Option<f64>,
+) -> AppResult<Response> {
     if !state.config.spotify_configured() {
         return Ok(Redirect::to("/music?erreur=spotify_non_configure").into_response());
     }
-    let Some(spotify_id) = crate::spotify::playlist_id_from_ref(&form.spotify_ref) else {
+    let Some(spotify_id) = crate::spotify::playlist_id_from_ref(reference) else {
         return Ok(Redirect::to("/music?erreur=spotify_ref_invalide").into_response());
     };
-    let Some(token) = spotify_access_token(&state, &user.id).await? else {
+    let Some(token) = spotify_access_token(state, &user.id).await? else {
         return Ok(Redirect::to("/music?erreur=spotify_non_connecte").into_response());
     };
     let detail = match crate::spotify::get_playlist(&state.http, &token, &spotify_id).await {
@@ -4402,10 +4881,6 @@ async fn music_import(
         crate::db::delete_music_playlist(&state.pool, &user.id, &existing.id).await?;
     }
 
-    let target_bpm = match parse_number(&form.target_bpm, "le BPM cible") {
-        Ok(value) => crate::models::clean_bpm(value),
-        Err(_) => return Ok(Redirect::to("/music?erreur=bpm_invalide").into_response()),
-    };
     let playlist = crate::db::insert_music_playlist(
         &state.pool,
         &user.id,
@@ -4413,6 +4888,7 @@ async fn music_import(
             name: detail.name.chars().take(200).collect(),
             source: "spotify".to_string(),
             spotify_id: Some(spotify_id.clone()),
+            deezer_id: None,
             cover_url: detail.cover_url.clone(),
             target_bpm,
         },
@@ -4446,6 +4922,88 @@ async fn music_import(
         playlist = %playlist.id,
         titres = detail.tracks.len(),
         "playlist Spotify importee"
+    );
+    Ok(Redirect::to(&format!(
+        "/music?playlist={}&ok=playlist_importee",
+        playlist.id
+    ))
+    .into_response())
+}
+
+/// Importe une playlist Deezer (fiche seule : Deezer n'expose aucun tempo).
+///
+/// Le BPM reste inconnu a l'import ; il se complete ensuite par la balise du
+/// fichier MP3, le tap-tempo ou la saisie manuelle sur la page.
+async fn import_deezer(
+    state: &AppState,
+    user: &User,
+    reference: &str,
+    target_bpm: Option<f64>,
+) -> AppResult<Response> {
+    if !state.config.deezer_configured() {
+        return Ok(Redirect::to("/music?erreur=deezer_non_configure").into_response());
+    }
+    let Some(deezer_id) = crate::deezer::playlist_id_from_ref(reference) else {
+        return Ok(Redirect::to("/music?erreur=deezer_ref_invalide").into_response());
+    };
+    let Some(token) = deezer_access_token(state, &user.id).await? else {
+        return Ok(Redirect::to("/music?erreur=deezer_non_connecte").into_response());
+    };
+    let detail = match crate::deezer::get_playlist(&state.http, &token, &deezer_id).await {
+        Ok(detail) => detail,
+        Err(error) => {
+            tracing::warn!(error = %error, "import Deezer refuse");
+            return Ok(Redirect::to("/music?erreur=deezer_refuse").into_response());
+        }
+    };
+
+    // Un reimport remplace la playlist existante : aucune fiche en double.
+    if let Some(existing) =
+        crate::db::find_music_playlist_by_deezer(&state.pool, &user.id, &deezer_id).await?
+    {
+        crate::db::delete_music_playlist(&state.pool, &user.id, &existing.id).await?;
+    }
+
+    let playlist = crate::db::insert_music_playlist(
+        &state.pool,
+        &user.id,
+        &MusicPlaylistInput {
+            name: detail.name.chars().take(200).collect(),
+            source: "deezer".to_string(),
+            spotify_id: None,
+            deezer_id: Some(deezer_id.clone()),
+            cover_url: detail.cover_url.clone(),
+            target_bpm,
+        },
+        state.now_ms(),
+    )
+    .await?;
+
+    for (position, track) in detail.tracks.iter().enumerate() {
+        crate::db::insert_music_track(
+            &state.pool,
+            &user.id,
+            &playlist.id,
+            &MusicTrackInput {
+                position: position as i32,
+                title: track.title.clone(),
+                artist: track.artist.clone(),
+                album: track.album.clone(),
+                duration_s: track.duration_s,
+                bpm: None,
+                bpm_source: None,
+                spotify_uri: None,
+            },
+            state.now_ms(),
+        )
+        .await?;
+    }
+
+    tracing::info!(
+        user = %user.email,
+        playlist = %playlist.id,
+        titres = detail.tracks.len(),
+        "playlist Deezer importee"
     );
     Ok(Redirect::to(&format!(
         "/music?playlist={}&ok=playlist_importee",
@@ -4592,6 +5150,34 @@ async fn music_manifest(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     super::manifest_response(&state, &user.id, &id).await
+}
+
+/// Liste des fichiers MP3 a mettre en place pour une playlist (piece jointe).
+///
+/// C'est la reponse a "quels fichiers me manque-t-il ?" : un nom par piste,
+/// exactement celui que `mpacer-music` ecrit sur la montre, a rassembler dans un
+/// dossier puis a laisser apparier par l'outil local.
+async fn music_files(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let playlist = crate::db::get_music_playlist(&state.pool, &user.id, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let tracks = crate::db::list_music_tracks(&state.pool, &user.id, &id).await?;
+    let files = prepared_files(&tracks);
+    let body = prepared_files_text(&playlist.name, &files);
+    let base = crate::models::manifest_file_name(&playlist.name);
+    let base = base.strip_suffix(".json").unwrap_or(&base);
+    Response::builder()
+        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{base}.txt\""),
+        )
+        .body(Body::from(body))
+        .map_err(|error| AppError::internal(error.to_string()))
 }
 
 // ------------------------------------------------------------- suivi en direct
@@ -4926,6 +5512,46 @@ mod music_web_tests {
     }
 
     #[test]
+    fn the_source_falls_back_to_spotify() {
+        assert_eq!(normalize_source(None), "spotify");
+        assert_eq!(normalize_source(Some("")), "spotify");
+        assert_eq!(normalize_source(Some(" Spotify ")), "spotify");
+        assert_eq!(normalize_source(Some("DEEZER")), "deezer");
+        assert_eq!(source_label("deezer"), "Deezer");
+        assert_eq!(source_label("spotify"), "Spotify");
+        // Les messages de developpement restent explicites.
+        assert!(music_error_message("deezer_non_configure").contains("MPACER_DEEZER_APP_ID"));
+        assert!(music_error_message("deezer_ref_invalide").contains("deezer.com"));
+        assert!(music_error_message("source_inconnue").contains("Spotify"));
+        assert!(music_ok_message("deezer_connecte").contains("Deezer"));
+    }
+
+    #[test]
+    fn prepared_files_follow_the_watch_scheme() {
+        let tracks = vec![
+            music_track(Some(249.0), None),
+            MusicTrack {
+                artist: None,
+                title: "Levels".into(),
+                position: 4,
+                ..music_track(Some(200.0), None)
+            },
+        ];
+        let files = prepared_files(&tracks);
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].file_name, "01 - Artiste - Titre.mp3");
+        assert_eq!(files[1].file_name, "04 - Levels.mp3");
+
+        let text = prepared_files_text("Run 170", &files);
+        assert!(text.contains("# Run 170 : 2 fichier(s) MP3 a mettre en place"));
+        assert!(text.contains("01 - Artiste - Titre.mp3"));
+        assert!(text.contains("04 - Levels.mp3"));
+
+        let empty = prepared_files_text("Vide", &[]);
+        assert!(empty.contains("0 fichier(s) MP3"));
+    }
+
+    #[test]
     fn paces_and_durations_are_read_as_written() {
         assert_eq!(parse_pace_input("5:00"), Some(300.0));
         assert_eq!(parse_pace_input("5:00/km"), Some(300.0));
@@ -4966,11 +5592,13 @@ mod music_web_tests {
         }
     }
 
-    /// Formulaire du bloc 5, sans course selectionnee.
+    /// Formulaire du bloc 6, sans course selectionnee.
     fn coverage_query(distance_km: &str, allure: &str) -> MusicQuery {
         MusicQuery {
             playlist: Some("p1".into()),
             q: None,
+            source: None,
+            vue: None,
             race: None,
             distance_km: Some(distance_km.into()),
             allure: Some(allure.into()),

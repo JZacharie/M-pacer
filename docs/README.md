@@ -14,6 +14,7 @@ Index des documents. Le point d'entrée reste le [README principal](../README.md
 | [07 - Musique, BPM et playlists de course](07-musique-bpm-et-playlists.md) | ajouter de la musique à la montre : playlists Spotify ou fichiers personnels, tempo cible, préparation avant une course, contrat d'interface du coeur, de l'API et des écrans |
 | [09 - Montre Garmin (Connect IQ, Monkey C)](09-montre-garmin.md) | porter l'application sur une montre Garmin : correspondance module par module avec le cœur Rust, capteurs et FIT, contraintes de mémoire et de réseau, contrat d'API, outillage et vérification |
 | [10 - Suivi en direct (MQTT)](10-suivi-temps-reel.md) | suivre la course en temps réel : contrat du sujet et de la charge utile, cadence et filtre de précision sur la montre, page `/live`, budget de ressources chiffré, sécurité et limites |
+| [11 - Playlists multi-sources et synchro des MP3](11-playlists-multi-sources-et-synchro-mp3.md) | chercher et récupérer des playlists sur **Spotify ou Deezer**, lister les MP3 à mettre en place, pousser des fichiers dans l'application locale et suivre le statut de synchronisation vers la montre |
 | [08 - Tableaux de bord](08-tableaux-de-bord.md) | composer vos propres écrans : catalogue de neuf widgets (allure, carte, tours, meilleures distances, cardio, historique…), gabarits Pace Control / Analyse / Historique, modèle de données et routes |
 | [Guide de déploiement](../deploy/README.md) | déployer concrètement sur le cluster k3s **jo3** : image, secrets, Helm, ingress, TLS, sauvegardes, dépannage |
 

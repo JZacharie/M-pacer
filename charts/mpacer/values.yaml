@@ -57,6 +57,9 @@ config:
   # URI de redirection OAuth Spotify, declaree dans la console Spotify for
   # Developers. Vide => <publicUrl>/auth/spotify/callback
   spotifyRedirectUri: ""
+  # URI de redirection OAuth Deezer, declaree dans "Application Domains" sur
+  # https://developers.deezer.com/myapps. Vide => <publicUrl>/auth/deezer/callback
+  deezerRedirectUri: ""
   # Suivi en direct : le service s'abonne a ce broker MQTT et publie la page
   # /live avec la position de la montre pendant la seance. Vide => fonctionnalite
   # desactivee (aucune connexion ouverte, page /live explicative).
@@ -77,6 +80,11 @@ auth:
   # pour les fichiers personnels et annonce que Spotify n'est pas configure.
   spotifyClientId: ""
   spotifyClientSecret: ""
+  # OAuth Deezer (optionnel) : identifiant d'application et cle secrete
+  # (https://developers.deezer.com/myapps). Sans les deux, la source Deezer est
+  # annoncee "non configuree" et la page /music reste utilisable.
+  deezerAppId: ""
+  deezerAppSecret: ""
   # Mot de passe du broker MQTT du suivi en direct (optionnel). Stocke dans le
   # Secret, jamais dans le ConfigMap.
   mqttPassword: ""
@@ -146,6 +154,10 @@ externalSecrets:
     # un remoteRef absent fait echouer la synchronisation de l'ExternalSecret.
     spotifyClientId: ""
     spotifyClientSecret: ""
+    # Idem pour Deezer : vides tant que MPACER_DEEZER_APP_ID et
+    # MPACER_DEEZER_APP_SECRET ne sont pas scelles dans Vault.
+    deezerAppId: ""
+    deezerAppSecret: ""
   # NB : le cluster jo3 provisionne deja 'regcred' (et 'tls-zacharie-org') dans chaque
   # namespace via ses propres ExternalSecrets. On ne les recree donc pas ici, pour
   # eviter un conflit de propriete sur un secret existant.

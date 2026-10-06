@@ -427,9 +427,11 @@ pub struct MusicPlaylist {
     pub id: String,
     pub user_id: String,
     pub name: String,
-    /// `spotify` | `manual`.
+    /// `spotify` | `deezer` | `manual`.
     pub source: String,
     pub spotify_id: Option<String>,
+    /// Identifiant Deezer quand la source est `deezer` (sinon `None`).
+    pub deezer_id: Option<String>,
     pub cover_url: Option<String>,
     /// Consigne fixe ; `None` = tempo automatique (calcule par la montre).
     pub target_bpm: Option<f64>,
@@ -443,6 +445,7 @@ pub struct MusicPlaylistInput {
     pub name: String,
     pub source: String,
     pub spotify_id: Option<String>,
+    pub deezer_id: Option<String>,
     pub cover_url: Option<String>,
     pub target_bpm: Option<f64>,
 }
@@ -498,6 +501,38 @@ pub struct SpotifyAccount {
     pub expires_at_ms: i64,
     pub scope: Option<String>,
     pub connected_at_ms: i64,
+}
+
+/// Compte Deezer lie (OAuth 2.0). Jamais expose tel quel a l'interface.
+///
+/// Deezer ne renvoie pas de jeton de rafraichissement : `expires_at_ms` vaut
+/// `0` quand la duree est inconnue (jeton sans expiration) et la page se contente
+/// alors du jeton stocke tel quel.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct DeezerAccount {
+    pub user_id: String,
+    pub deezer_user_id: Option<String>,
+    pub display_name: Option<String>,
+    pub access_token: String,
+    pub expires_at_ms: i64,
+    pub scope: Option<String>,
+    pub connected_at_ms: i64,
+}
+
+/// Playlist proposee par une source externe (Spotify ou Deezer) avant import.
+///
+/// Vue commune aux deux fournisseurs : la page /music affiche une seule liste,
+/// quel que soit le service qui a repondu.
+#[derive(Debug, Clone, Serialize)]
+pub struct SourcePlaylist {
+    /// `spotify` | `deezer`.
+    pub source: String,
+    /// Identifiant chez le fournisseur (Spotify : base62, Deezer : numerique).
+    pub id: String,
+    pub name: String,
+    pub track_count: i64,
+    pub cover_url: Option<String>,
+    pub owner: Option<String>,
 }
 
 /// Resume d'une playlist pour la liste de l'API appareil.
@@ -792,6 +827,7 @@ mod music_tests {
             name: "Run 170".into(),
             source: "spotify".into(),
             spotify_id: Some("8f".into()),
+            deezer_id: None,
             cover_url: None,
             target_bpm: Some(170.0),
             created_at_ms: 0,

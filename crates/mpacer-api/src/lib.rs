@@ -24,6 +24,7 @@ pub mod bpm;
 pub mod config;
 pub mod dashboards;
 pub mod db;
+pub mod deezer;
 pub mod error;
 pub mod live;
 pub mod models;

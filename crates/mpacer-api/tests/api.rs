@@ -1574,6 +1574,7 @@ async fn music_api_publishes_playlists_and_the_transfer_manifest() {
             name: "Run 170".into(),
             source: "spotify".into(),
             spotify_id: Some("8f-playlist".into()),
+            deezer_id: None,
             cover_url: None,
             target_bpm: Some(170.0),
         },
@@ -1741,12 +1742,12 @@ async fn music_api_publishes_playlists_and_the_transfer_manifest() {
 }
 
 #[tokio::test]
-async fn music_page_has_five_blocks_and_downloads_the_manifest() {
+async fn music_page_has_six_blocks_and_downloads_the_manifest() {
     let (app, state) = app_or_skip!(test_app(true).await);
     let (_user, session) = dev_user_session(&state).await;
 
-    // La page vide presente les cinq blocs de la maquette v3 (docs/07 10.2) et
-    // ne propose plus aucun televersement.
+    // La page vide presente les six blocs de la maquette v4 (docs/11) et ne
+    // propose toujours aucun televersement audio cote serveur.
     let body = body_text(
         app.clone()
             .oneshot(get_with_cookie("/music", &session))
@@ -1755,12 +1756,14 @@ async fn music_page_has_five_blocks_and_downloads_the_manifest() {
     )
     .await;
     for expected in [
-        "1. Source Spotify (facultatif)",
+        "1. Source des playlists (Spotify ou Deezer)",
         "2. Playlists preparees",
         "3. Titres (playlist selectionnee)",
-        "4. Transfert vers la montre (USB)",
-        "5. Assez de musique pour la course ?",
+        "4. Fichiers a preparer (MP3)",
+        "5. Transfert vers la montre (USB)",
+        "6. Assez de musique pour la course ?",
         "Spotify n'est pas configure",
+        "Deezer n'est pas configure",
         "Aucune playlist pour l'instant",
         "Selectionnez une playlist dans le bloc 2",
     ] {
@@ -1772,7 +1775,7 @@ async fn music_page_has_five_blocks_and_downloads_the_manifest() {
     assert!(!body.contains("multipart/form-data"), "{body}");
     assert!(!body.contains("Envoyer sur la montre"), "{body}");
 
-    // Une playlist importee alimente les blocs 2 a 5.
+    // Une playlist importee alimente les blocs 2 a 6.
     let playlist = mpacer_api::db::insert_music_playlist(
         &state.pool,
         &_user.id,
@@ -1780,6 +1783,7 @@ async fn music_page_has_five_blocks_and_downloads_the_manifest() {
             name: "Run 170".into(),
             source: "spotify".into(),
             spotify_id: Some("8f-run-170".into()),
+            deezer_id: None,
             cover_url: None,
             target_bpm: None,
         },
@@ -1829,7 +1833,10 @@ async fn music_page_has_five_blocks_and_downloads_the_manifest() {
         "Brancher la montre en USB",
         "Importer (USB)",
         "BPM cible",
-        // Bloc 5 : sans duree de course, le verdict reste en attente.
+        // Bloc 4 : le nom de fichier attendu sur la montre.
+        "01 - Avicii - Wake me up.mp3",
+        "Telecharger la liste (.txt)",
+        // Bloc 6 : sans duree de course, le verdict reste en attente.
         "coverage-warn",
         "coverage-gauge-fill",
         "Duree playlist",
@@ -1913,6 +1920,30 @@ async fn music_page_has_five_blocks_and_downloads_the_manifest() {
     assert_eq!(manifest["name"], "Run 170");
     assert_eq!(manifest["target_bpm"], 170.0);
     assert_eq!(manifest["tracks"][0]["bpm"], 120.0);
+
+    // La liste des MP3 a mettre en place se telecharge en texte (session).
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/music/playlists/{}/files", playlist.id),
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers()[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .contains("run-170.txt"));
+    let listing = body_text(response).await;
+    assert!(
+        listing.contains("# Run 170 : 1 fichier(s) MP3 a mettre en place"),
+        "{listing}"
+    );
+    assert!(
+        listing.contains("01 - Avicii - Wake me up.mp3"),
+        "{listing}"
+    );
 
     // Suppression : la playlist disparait.
     let response = app
@@ -2907,6 +2938,7 @@ async fn music_page_validates_the_coverage_and_renames_a_playlist() {
             name: "Run 170".into(),
             source: "spotify".into(),
             spotify_id: None,
+            deezer_id: None,
             cover_url: None,
             target_bpm: Some(170.0),
         },
@@ -2967,6 +2999,7 @@ async fn music_page_validates_the_coverage_and_renames_a_playlist() {
             name: "Courte".into(),
             source: "manual".into(),
             spotify_id: None,
+            deezer_id: None,
             cover_url: None,
             target_bpm: None,
         },

@@ -490,3 +490,14 @@ du `layout` pointe sur `/static/logo-mark.svg`.
 | Menu | `NAV` a 7 onglets avec **Reglages** ; menu deroulant supprime ; `/settings` = profil + appareils appaires + appairage + deconnexion | rendu verifie : Seances, Tableaux, Courses, Planning, Statistiques, Musique, Reglages |
 | Identite visuelle | `static/logo.svg`, `logo-mark.svg`, `illustration-usb.svg`, 5 icones et habillage `.coverage*`/`.bpm-gauge*` en clair et sombre | 200 HTTP sur les 4 fichiers (tailles identiques), contraste WCAG >= 4.4, 28 SVG bien formes |
 | Qualite | — | `cargo test --workspace` vert, `cargo clippy --workspace --all-targets -- -D warnings` propre, `cargo fmt --all --check` propre, `cargo test -p mpacer-api --test api` : 29 verts / 1 ignore |
+
+## 11. v4 - sources multiples et synchro des MP3
+
+> Le contrat v4 (7 octobre 2026) est decrit dans
+> [11 - Playlists multi-sources et synchro des MP3](11-playlists-multi-sources-et-synchro-mp3.md) :
+> **Deezer** comme deuxieme source de metadonnees, bloc **« Fichiers a preparer
+> (MP3) »** (nom de fichier attendu par piste) et **push de MP3 dans
+> l'application locale** avec statut de synchronisation par fichier. La page
+> `/music` passe a **six blocs** (le transfert USB devient le bloc 5, la
+> couverture le bloc 6). Le present document reste la reference du coeur, de
+> l'appariement, du manifeste et de l'ecran de la montre.

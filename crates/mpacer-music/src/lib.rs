@@ -10,13 +10,15 @@
 
 pub mod adb;
 pub mod cli;
+pub mod library;
 pub mod planner;
 pub mod server;
 pub mod web;
 
+pub use library::{default_library_root, LibraryFile, LibraryStore, MAX_FILE_BYTES};
 pub use mpacer_core::music::TransferManifest;
 pub use planner::{
-    inspect, materialize, probe_bpm, probe_duration_s, scan_folder, Inspection, Progress,
-    ProgressSink, SilentSink, ToolError, TransferReport, TransferRequest, AUDIO_EXTENSIONS,
-    TAG_PROBE_BYTES, WATCH_MUSIC_DIR,
+    inspect, inspect_with_library, materialize, probe_bpm, probe_duration_s, scan_folder,
+    Inspection, Progress, ProgressSink, SilentSink, ToolError, TransferReport, TransferRequest,
+    AUDIO_EXTENSIONS, TAG_PROBE_BYTES, WATCH_MUSIC_DIR,
 };

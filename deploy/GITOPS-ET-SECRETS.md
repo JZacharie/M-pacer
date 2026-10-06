@@ -46,7 +46,7 @@ expressions sont alignées sur celles des autres applications du cluster.
 
 | Secret Kubernetes | ClusterSecretStore | Clé `remoteRef` | Chemin Vault réel | Contenu |
 |---|---|---|---|---|
-| `mpacer-secrets` | `vault-apps` | `mpacer` | `apps/data/mpacer` | `MPACER_SESSION_SECRET`, `MPACER_GOOGLE_CLIENT_ID`, `MPACER_GOOGLE_CLIENT_SECRET` — et, si Spotify est active, `MPACER_SPOTIFY_CLIENT_ID`, `MPACER_SPOTIFY_CLIENT_SECRET` |
+| `mpacer-secrets` | `vault-apps` | `mpacer` | `apps/data/mpacer` | `MPACER_SESSION_SECRET`, `MPACER_GOOGLE_CLIENT_ID`, `MPACER_GOOGLE_CLIENT_SECRET` — et, si Spotify est active, `MPACER_SPOTIFY_CLIENT_ID`, `MPACER_SPOTIFY_CLIENT_SECRET` ; si Deezer est active, `MPACER_DEEZER_APP_ID`, `MPACER_DEEZER_APP_SECRET` |
 
 > **Attention au piège** : dans un `ClusterSecretStore`, `provider.vault.path` désigne le
 > **montage** KV, pas un préfixe de chemin. Sur jo3, `vault-apps` est monté sur `apps/`
@@ -67,16 +67,18 @@ vault kv put apps/mpacer \
   MPACER_GOOGLE_CLIENT_ID="<ID>.apps.googleusercontent.com" \
   MPACER_GOOGLE_CLIENT_SECRET="GOCSPX-<secret>" \
   MPACER_SPOTIFY_CLIENT_ID="<id Spotify>" \
-  MPACER_SPOTIFY_CLIENT_SECRET="<secret Spotify>"
+  MPACER_SPOTIFY_CLIENT_SECRET="<secret Spotify>" \
+  MPACER_DEEZER_APP_ID="<Application ID Deezer>" \
+  MPACER_DEEZER_APP_SECRET="<Secret Key Deezer>"
 ```
 
-> **Spotify est optionnel.** Si les deux cles ne sont pas scellees dans Vault,
-> laisser `externalSecrets.keys.spotifyClientId` et
-> `externalSecrets.keys.spotifyClientSecret` **vides** dans les valeurs : un
-> `remoteRef` qui pointe vers une propriete absente fait echouer la
-> synchronisation de l'ExternalSecret (`SecretSyncedError`). La page `/music`
-> reste alors utilisable pour les fichiers personnels et affiche que Spotify
-> n'est pas configure.
+> **Spotify et Deezer sont optionnels.** Si les deux cles d'un service ne sont pas
+> scellees dans Vault, laisser les cles correspondantes **vides** dans les valeurs
+> (`externalSecrets.keys.spotifyClientId`/`...Secret` et
+> `externalSecrets.keys.deezerAppId`/`...AppSecret`) : un `remoteRef` qui pointe
+> vers une propriete absente fait echouer la synchronisation de l'ExternalSecret
+> (`SecretSyncedError`). La page `/music` reste alors utilisable pour les fichiers
+> personnels et affiche que la source concernee n'est pas configuree.
 
 ### 2.1.1 Musique : aucun stockage cote serveur
 

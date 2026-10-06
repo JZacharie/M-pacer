@@ -58,6 +58,11 @@ config:
   # redirection https://mpacer.p.zacharie.org/auth/spotify/callback
   # dans la console Spotify for Developers.
   spotifyRedirectUri: ""
+  # Deezer (optionnel) : renseigner apres avoir scelle MPACER_DEEZER_APP_ID et
+  # MPACER_DEEZER_APP_SECRET dans Vault (deploy/GITOPS-ET-SECRETS.md section 2)
+  # et declare https://mpacer.p.zacharie.org/auth/deezer/callback dans
+  # "Application Domains" sur https://developers.deezer.com/myapps.
+  deezerRedirectUri: ""
 
 # PostgreSQL gere par l'operateur CloudNativePG (present sur jo3 : cnpg-system)
 postgresql:

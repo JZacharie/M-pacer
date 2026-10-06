@@ -146,6 +146,16 @@ pub struct Config {
     /// URI de redirection Spotify explicitement enregistree dans la console.
     /// Vide => `{public_url}/auth/spotify/callback`.
     pub spotify_redirect_uri: Option<String>,
+    /// Identifiants de l'application Deezer (absents = source desactivee).
+    ///
+    /// Deezer exige l'app_id **et** le secret applicatif pour echanger le code
+    /// d'autorisation : sans les deux, la source reste eteinte et la page
+    /// /music continue de fonctionner avec Spotify ou un dossier local.
+    pub deezer_app_id: Option<String>,
+    pub deezer_app_secret: Option<String>,
+    /// URI de redirection Deezer explicitement enregistree.
+    /// Vide => `{public_url}/auth/deezer/callback`.
+    pub deezer_redirect_uri: Option<String>,
     /// Autorise une connexion de test sans Google (`/auth/dev-login`).
     pub dev_auth: bool,
     /// Broker MQTT du suivi en direct (absent = fonctionnalite eteinte, aucun cout).
@@ -203,6 +213,9 @@ impl Config {
             spotify_client_id: env_var("MPACER_SPOTIFY_CLIENT_ID"),
             spotify_client_secret: env_var("MPACER_SPOTIFY_CLIENT_SECRET"),
             spotify_redirect_uri: env_var("MPACER_SPOTIFY_REDIRECT_URI"),
+            deezer_app_id: env_var("MPACER_DEEZER_APP_ID"),
+            deezer_app_secret: env_var("MPACER_DEEZER_APP_SECRET"),
+            deezer_redirect_uri: env_var("MPACER_DEEZER_REDIRECT_URI"),
             dev_auth: env_var("MPACER_DEV_AUTH")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
@@ -252,6 +265,28 @@ impl Config {
     /// et annonce explicitement que Spotify n'est pas disponible.
     pub fn spotify_configured(&self) -> bool {
         match (&self.spotify_client_id, &self.spotify_client_secret) {
+            (Some(id), Some(secret)) => {
+                !looks_like_placeholder(id) && !looks_like_placeholder(secret)
+            }
+            _ => false,
+        }
+    }
+
+    /// URI de redirection OAuth declaree dans la console Deezer.
+    pub fn deezer_redirect_uri(&self) -> String {
+        self.deezer_redirect_uri
+            .clone()
+            .unwrap_or_else(|| format!("{}/auth/deezer/callback", self.public_url))
+    }
+
+    /// Chemin (sur ce service) ou Deezer renverra le navigateur.
+    pub fn deezer_redirect_path(&self) -> String {
+        redirect_path_of(&self.deezer_redirect_uri())
+    }
+
+    /// Vrai si une application Deezer **exploitable** est configuree.
+    pub fn deezer_configured(&self) -> bool {
+        match (&self.deezer_app_id, &self.deezer_app_secret) {
             (Some(id), Some(secret)) => {
                 !looks_like_placeholder(id) && !looks_like_placeholder(secret)
             }
@@ -334,6 +369,9 @@ impl Config {
             spotify_client_id: None,
             spotify_client_secret: None,
             spotify_redirect_uri: None,
+            deezer_app_id: None,
+            deezer_app_secret: None,
+            deezer_redirect_uri: None,
             dev_auth: false,
             mqtt_url: None,
             mqtt_topic: crate::live::DEFAULT_TOPIC.to_string(),
@@ -425,6 +463,39 @@ mod tests {
         assert_eq!(
             config.spotify_redirect_uri(),
             "https://mpacer.p.zacharie.org/spotify/retour"
+        );
+    }
+
+    #[test]
+    fn deezer_is_optional_and_configurable() {
+        let mut config = Config::for_tests("http://localhost:8080", "postgresql://exemple");
+        assert!(
+            !config.deezer_configured(),
+            "sans identifiants, Deezer est desactive"
+        );
+        assert_eq!(
+            config.deezer_redirect_uri(),
+            "http://localhost:8080/auth/deezer/callback"
+        );
+        assert_eq!(config.deezer_redirect_path(), "/auth/deezer/callback");
+
+        // Un gabarit ne compte pas comme configure, et il faut les deux valeurs.
+        config.deezer_app_id = Some("REMPLACER-PAR-VOTRE-APP-ID".to_string());
+        config.deezer_app_secret = Some("vrai-secret".to_string());
+        assert!(!config.deezer_configured());
+
+        config.deezer_app_id = Some("123456".to_string());
+        assert!(config.deezer_configured());
+        config.deezer_app_secret = None;
+        assert!(!config.deezer_configured(), "l'app_id seul ne suffit pas");
+
+        config.deezer_app_secret = Some("vrai-secret".to_string());
+        config.deezer_redirect_uri =
+            Some("https://mpacer.p.zacharie.org/deezer/retour".to_string());
+        assert_eq!(config.deezer_redirect_path(), "/deezer/retour");
+        assert_eq!(
+            config.deezer_redirect_uri(),
+            "https://mpacer.p.zacharie.org/deezer/retour"
         );
     }
 

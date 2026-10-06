@@ -33,6 +33,14 @@ th { color: var(--doux); font-weight: 500; }
 .progress { height: 10px; background: #0d1219; border: 1px solid var(--bord); border-radius: 6px; overflow: hidden; margin-top: 12px; }
 #bar { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
 .logs { background: #0d1219; border: 1px solid var(--bord); border-radius: 8px; padding: 10px; min-height: 40px; max-height: 220px; overflow: auto; font-size: 12px; color: var(--doux); white-space: pre-wrap; }
+.drop { border: 2px dashed var(--bord); border-radius: 10px; padding: 18px; text-align: center; color: var(--doux); }
+.drop.actif { border-color: var(--accent); color: var(--texte); }
+.drop input { display: none; }
+.drop label { color: var(--accent); cursor: pointer; text-decoration: underline; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--bord); }
+.badge-attente { color: #e0b341; border-color: #e0b341; }
+.badge-ok { color: var(--ok); border-color: var(--ok); }
+.badge-erreur { color: var(--erreur); border-color: var(--erreur); }
 </style>
 </head>
 <body>
@@ -50,14 +58,14 @@ th { color: var(--doux); font-weight: 500; }
   <p id="playlist" class="muted">aucun manifeste analyse</p>
 </section>
 <section>
-  <h2>2. Dossier des audio</h2>
+  <h2>2. Dossier des audio (facultatif)</h2>
   <div class="row">
-    <input id="folder" type="text" placeholder="dossier des fichiers audio">
+    <input id="folder" type="text" placeholder="dossier des fichiers audio du disque (ou poussez-les en section 6)">
     <button onclick="browseNow()">Parcourir</button>
     <button onclick="inspectNow()">Analyser</button>
   </div>
   <div id="browser" class="browser"></div>
-  <p id="folderinfo" class="muted"></p>
+  <p id="folderinfo" class="muted">Dossier du disque facultatif : vous pouvez aussi pousser les fichiers dans l'application (section 6).</p>
 </section>
 <section>
   <h2>3. Montre</h2>
@@ -82,6 +90,19 @@ th { color: var(--doux); font-weight: 500; }
   <div class="progress"><div id="bar"></div></div>
   <p id="progress" class="muted">aucun transfert en cours</p>
   <pre id="logs" class="logs"></pre>
+</section>
+<section>
+  <h2>6. Push MP3 dans l'application</h2>
+  <div id="drop" class="drop">
+    <p>Glissez-deposez des fichiers audio ici, ou <label for="fileInput">choisissez des fichiers</label>.</p>
+    <input id="fileInput" type="file" multiple accept=".mp3,.m4a,.ogg,.opus,.flac,.wav,audio/*">
+  </div>
+  <p class="muted">Rien ne part sur Internet : les fichiers restent sur le PC, puis sont copies sur la montre par USB (adb push).</p>
+  <p id="libraryinfo" class="muted">analysez d abord un manifeste pour connaitre la playlist cible</p>
+  <table id="library">
+    <thead><tr><th>Fichier</th><th>Taille</th><th>Statut</th><th>Synchronise</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
 </section>
 </main>
 <script>
@@ -165,11 +186,14 @@ function renderInspection(data) {
     row.appendChild(cell(match.score ? match.score.toFixed(2) : ''));
     body.appendChild(row);
   });
+  refreshLibrary();
 }
 
 function inspectNow() {
-  var body = { folder: el('folder').value.trim(), manifest_path: el('manifest').value.trim() || null };
-  if (!body.folder) { el('summary').textContent = 'choisissez d abord le dossier des fichiers audio'; return Promise.resolve(); }
+  var manifestPath = el('manifest').value.trim();
+  if (!manifestPath) { el('summary').textContent = 'choisissez d abord un manifeste'; return Promise.resolve(); }
+  var body = { manifest_path: manifestPath };
+  if (el('folder').value.trim()) { body.folder = el('folder').value.trim(); }
   return callApi('/api/inspect', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -178,13 +202,14 @@ function inspectNow() {
 }
 
 function startTransfer(dryRun) {
+  var manifestPath = el('manifest').value.trim();
+  if (!manifestPath) { el('progress').textContent = 'choisissez d abord un manifeste'; return Promise.resolve(); }
   var body = {
-    folder: el('folder').value.trim(),
-    manifest_path: el('manifest').value.trim() || null,
+    manifest_path: manifestPath,
     dry_run: dryRun,
     prune: false
   };
-  if (!body.folder) { el('progress').textContent = 'choisissez d abord le dossier des fichiers audio'; return Promise.resolve(); }
+  if (el('folder').value.trim()) { body.folder = el('folder').value.trim(); }
   return callApi('/api/transfer', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -212,6 +237,7 @@ function pollJob() {
     el('cancel').disabled = true;
     el('progress').textContent = job.state + ' - ' + job.step + (job.error ? (' : ' + job.error) : '');
     currentJob = null;
+    refreshLibrary();
     if (job.state === 'done') { inspectNow(); }
   }).catch(showError);
 }
@@ -248,7 +274,108 @@ function copyReport() {
   if (navigator.clipboard) { navigator.clipboard.writeText(lines.join('\n')); }
 }
 
+function libraryPlaylistId() {
+  return lastInspection && lastInspection.playlist ? lastInspection.playlist.id : null;
+}
+
+function libraryUrl(name) {
+  var id = libraryPlaylistId();
+  if (!id) { return null; }
+  var url = '/api/library/' + encodeURIComponent(id);
+  if (name) { url = url + '?name=' + encodeURIComponent(name); }
+  return url;
+}
+
+function statusBadge(status) {
+  var label = status === 'synchronise' ? 'synchronise' : (status === 'erreur' ? 'erreur' : 'a synchroniser');
+  var badge = document.createElement('span');
+  badge.className = 'badge ' + (status === 'synchronise' ? 'badge-ok' : (status === 'erreur' ? 'badge-erreur' : 'badge-attente'));
+  badge.textContent = label;
+  return badge;
+}
+
+function refreshLibrary() {
+  var url = libraryUrl();
+  if (!url) {
+    el('libraryinfo').textContent = 'analysez d abord un manifeste';
+    return Promise.resolve();
+  }
+  return callApi(url).then(function (data) {
+    var files = data.files || [];
+    var body = el('library').querySelector('tbody');
+    body.innerHTML = '';
+    files.forEach(function (file) {
+      var row = document.createElement('tr');
+      row.appendChild(cell(file.file_name));
+      row.appendChild(cell(humanBytes(file.size_bytes)));
+      var status = document.createElement('td');
+      status.appendChild(statusBadge(file.status));
+      row.appendChild(status);
+      var detail = file.status === 'erreur' && file.error ? file.error : (file.synced_at_ms ? new Date(file.synced_at_ms).toLocaleString() : '');
+      row.appendChild(cell(detail));
+      var actions = document.createElement('td');
+      var remove = document.createElement('button');
+      remove.className = 'danger';
+      remove.textContent = 'Supprimer';
+      remove.onclick = function () { removeLibraryFile(file.file_name); };
+      actions.appendChild(remove);
+      row.appendChild(actions);
+      body.appendChild(row);
+    });
+    el('libraryinfo').textContent = files.length + ' fichier(s) dans la bibliotheque';
+  }).catch(showError);
+}
+
+function removeLibraryFile(name) {
+  var url = libraryUrl();
+  if (!url) { return; }
+  callApi(url + '/' + encodeURIComponent(name), { method: 'DELETE' })
+    .then(refreshLibrary).catch(showError);
+}
+
+function uploadFiles(fileList) {
+  var id = libraryPlaylistId();
+  if (!id) { el('libraryinfo').textContent = 'analysez d abord un manifeste'; return; }
+  var files = Array.prototype.slice.call(fileList || []);
+  if (files.length === 0) { return; }
+  var imported = 0;
+  var refused = 0;
+  var chain = Promise.resolve();
+  files.forEach(function (file) {
+    chain = chain.then(function () {
+      var url = '/api/library/' + encodeURIComponent(id) + '?name=' + encodeURIComponent(file.name);
+      return callApi(url, { method: 'POST', body: file }).then(function () {
+        imported = imported + 1;
+      }).catch(function () {
+        refused = refused + 1;
+      });
+    });
+  });
+  chain.then(function () {
+    el('libraryinfo').textContent = imported + ' fichier(s) importe(s)' + (refused ? (', ' + refused + ' refuse(s)') : '');
+    refreshLibrary();
+  });
+}
+
+function initLibraryDrop() {
+  var drop = el('drop');
+  ['dragenter', 'dragover'].forEach(function (name) {
+    drop.addEventListener(name, function (event) { event.preventDefault(); drop.classList.add('actif'); });
+  });
+  ['dragleave', 'drop'].forEach(function (name) {
+    drop.addEventListener(name, function (event) { event.preventDefault(); drop.classList.remove('actif'); });
+  });
+  drop.addEventListener('drop', function (event) {
+    uploadFiles(event.dataTransfer ? event.dataTransfer.files : null);
+  });
+  el('fileInput').addEventListener('change', function (event) {
+    uploadFiles(event.target.files);
+    event.target.value = '';
+  });
+}
+
 loadDevices();
+initLibraryDrop();
 inspectNow();
 </script>
 </body>

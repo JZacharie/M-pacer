@@ -5,8 +5,9 @@
 
 use crate::config::Config;
 use crate::models::{
-    ApiToken, ImportedRaceMeta, MusicPlaylist, MusicPlaylistInput, MusicPlaylistSummary,
-    MusicTrack, MusicTrackInput, Race, RaceInput, RaceTask, SpotifyAccount, User, WorkoutRow,
+    ApiToken, DeezerAccount, ImportedRaceMeta, MusicPlaylist, MusicPlaylistInput,
+    MusicPlaylistSummary, MusicTrack, MusicTrackInput, Race, RaceInput, RaceTask, SpotifyAccount,
+    User, WorkoutRow,
 };
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{PgPool, Row};
@@ -23,6 +24,8 @@ const SCHEMA_MUSIC: &str = include_str!("../migrations/0003_music.sql");
 const SCHEMA_REFERENCES: &str = include_str!("../migrations/0004-references-et-commentaires.sql");
 /// Tableaux de bord : ecrans composes par l'utilisateur (widgets ordonnes).
 const SCHEMA_DASHBOARDS: &str = include_str!("../migrations/0005-tableaux-de-bord.sql");
+/// Sources musicales multiples : compte Deezer et identifiant Deezer des playlists.
+const SCHEMA_MUSIC_SOURCES: &str = include_str!("../migrations/0006-sources-musique.sql");
 
 /// Ouvre le pool et applique le schema (idempotent).
 pub async fn connect(config: &Config) -> anyhow::Result<PgPool> {
@@ -42,6 +45,7 @@ pub async fn connect_with_options(options: PgConnectOptions) -> anyhow::Result<P
     sqlx::raw_sql(SCHEMA_MUSIC).execute(&pool).await?;
     sqlx::raw_sql(SCHEMA_REFERENCES).execute(&pool).await?;
     sqlx::raw_sql(SCHEMA_DASHBOARDS).execute(&pool).await?;
+    sqlx::raw_sql(SCHEMA_MUSIC_SOURCES).execute(&pool).await?;
     Ok(pool)
 }
 
@@ -842,14 +846,16 @@ pub async fn insert_music_playlist(
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO music_playlists
-             (id, user_id, name, source, spotify_id, cover_url, target_bpm, created_at_ms, updated_at_ms)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             (id, user_id, name, source, spotify_id, deezer_id, cover_url, target_bpm,
+              created_at_ms, updated_at_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(&id)
     .bind(user_id)
     .bind(&input.name)
     .bind(&input.source)
     .bind(input.spotify_id.as_deref())
+    .bind(input.deezer_id.as_deref())
     .bind(input.cover_url.as_deref())
     .bind(input.target_bpm)
     .bind(now_ms)
@@ -887,6 +893,21 @@ pub async fn find_music_playlist_by_spotify(
     )
     .bind(user_id)
     .bind(spotify_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Playlist deja importee depuis Deezer (un import deux fois ne cree pas de doublon).
+pub async fn find_music_playlist_by_deezer(
+    pool: &PgPool,
+    user_id: &str,
+    deezer_id: &str,
+) -> Result<Option<MusicPlaylist>, sqlx::Error> {
+    sqlx::query_as::<_, MusicPlaylist>(
+        "SELECT * FROM music_playlists WHERE user_id = $1 AND deezer_id = $2",
+    )
+    .bind(user_id)
+    .bind(deezer_id)
     .fetch_optional(pool)
     .await
 }
@@ -1154,6 +1175,57 @@ pub async fn update_spotify_access_token(
 /// Supprime la liaison Spotify (les jetons sont oublies).
 pub async fn delete_spotify_account(pool: &PgPool, user_id: &str) -> Result<bool, sqlx::Error> {
     let result = sqlx::query("DELETE FROM spotify_accounts WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+// ------------------------------------------------------------------ comptes Deezer
+
+/// Enregistre (ou remplace) le compte Deezer lie a l'utilisateur.
+pub async fn upsert_deezer_account(
+    pool: &PgPool,
+    account: &DeezerAccount,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO deezer_accounts
+             (user_id, deezer_user_id, display_name, access_token, expires_at_ms, scope,
+              connected_at_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (user_id) DO UPDATE SET
+             deezer_user_id = EXCLUDED.deezer_user_id,
+             display_name = COALESCE(EXCLUDED.display_name, deezer_accounts.display_name),
+             access_token = EXCLUDED.access_token,
+             expires_at_ms = EXCLUDED.expires_at_ms,
+             scope = COALESCE(EXCLUDED.scope, deezer_accounts.scope),
+             connected_at_ms = EXCLUDED.connected_at_ms",
+    )
+    .bind(&account.user_id)
+    .bind(account.deezer_user_id.as_deref())
+    .bind(account.display_name.as_deref())
+    .bind(&account.access_token)
+    .bind(account.expires_at_ms)
+    .bind(account.scope.as_deref())
+    .bind(account.connected_at_ms)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn get_deezer_account(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<Option<DeezerAccount>, sqlx::Error> {
+    sqlx::query_as::<_, DeezerAccount>("SELECT * FROM deezer_accounts WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Supprime la liaison Deezer (le jeton est oublie).
+pub async fn delete_deezer_account(pool: &PgPool, user_id: &str) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM deezer_accounts WHERE user_id = $1")
         .bind(user_id)
         .execute(pool)
         .await?;

@@ -26,6 +26,7 @@ pub mod dashboards;
 pub mod db;
 pub mod deezer;
 pub mod error;
+pub mod friends;
 pub mod live;
 pub mod models;
 pub mod mqtt;

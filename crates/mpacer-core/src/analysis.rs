@@ -143,6 +143,8 @@ pub struct Split {
     pub planned_cumulative_s: Option<f64>,
     /// Temps reel cumule moins temps planifie : positif = en retard sur le plan.
     pub plan_delta_s: Option<f64>,
+    /// Temps de pause (s) attribue au tronçon, pauses chevauchantes comprises.
+    pub pause_s: f64,
 }
 
 /// Un echantillon de vitesse lissee.
@@ -200,6 +202,263 @@ pub fn speed_curve(track: &[TrackPoint], window_s: f64) -> Vec<SpeedSample> {
             }
         })
         .collect()
+}
+
+/// Options de calcul du denivele, telles que les expose VisuGPX.
+///
+/// Le seuil ignore les micro-variations et le lissage moyenne l'altitude avant
+/// le calcul : sans eux, le bruit de la mesure gonfle le D+ de plusieurs dizaines
+/// de metres sur une seance longue.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ElevationOptions {
+    /// Variation minimale (m) avant de compter un denivele (0 = aucune).
+    pub threshold_m: f64,
+    /// Nombre de points de la moyenne glissante centree (1 = aucun lissage).
+    pub smoothing_points: usize,
+}
+
+impl Default for ElevationOptions {
+    /// Les valeurs par defaut de VisuGPX : seuil de 10 m, lissage sur 5 points.
+    fn default() -> Self {
+        Self {
+            threshold_m: 10.0,
+            smoothing_points: 5,
+        }
+    }
+}
+
+/// Denivele et altitudes d'une trace.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ElevationSummary {
+    pub gain_m: f64,
+    pub loss_m: f64,
+    pub min_m: f64,
+    pub max_m: f64,
+    pub average_m: f64,
+    pub start_m: f64,
+    pub end_m: f64,
+    /// Nombre de points d'altitude reellement lus.
+    pub sample_count: usize,
+}
+
+/// Denivele positif et negatif d'une trace, avec seuil et lissage.
+///
+/// Renvoie None sans altitude : mieux vaut ne rien afficher que d'inventer un
+/// denivele. Les altitudes manquantes sont ignorees ; une trace trouee est donc
+/// lissee par-dessus le trou, ce qui reste acceptable pour un profil.
+pub fn elevation_summary(
+    track: &[TrackPoint],
+    options: ElevationOptions,
+) -> Option<ElevationSummary> {
+    let samples: Vec<f64> = track
+        .iter()
+        .filter_map(|point| point.elevation_m)
+        .filter(|elevation| elevation.is_finite())
+        .collect();
+    let count = samples.len();
+    if count == 0 {
+        return None;
+    }
+    let smoothed = smooth_series(&samples, options.smoothing_points);
+    let threshold = options.threshold_m.max(0.0);
+    let mut gain = 0.0;
+    let mut loss = 0.0;
+    let mut reference = smoothed[0];
+    for value in &smoothed[1..] {
+        let delta = value - reference;
+        // Hysteresis : un denivele n'est compte qu'une fois le seuil franchi,
+        // puis le calcul repart de la nouvelle altitude de reference.
+        if delta > 0.0 && delta >= threshold {
+            gain += delta;
+            reference = *value;
+        } else if delta < 0.0 && -delta >= threshold {
+            loss -= delta;
+            reference = *value;
+        }
+    }
+    Some(ElevationSummary {
+        gain_m: gain,
+        loss_m: loss,
+        min_m: samples.iter().cloned().fold(f64::INFINITY, f64::min),
+        max_m: samples.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+        average_m: samples.iter().sum::<f64>() / count as f64,
+        start_m: samples[0],
+        end_m: samples[count - 1],
+        sample_count: count,
+    })
+}
+
+/// Profil altimetrique lisse (distance en m, altitude en m), pour l'affichage.
+///
+/// Le lissage est celui du calcul du denivele : le dessin et le chiffre parlent
+/// donc du meme relief. Renvoie une liste vide sans altitude exploitable.
+pub fn elevation_profile(track: &[TrackPoint], options: ElevationOptions) -> Vec<(f64, f64)> {
+    let samples: Vec<(f64, f64)> = track
+        .iter()
+        .filter_map(|point| {
+            point
+                .elevation_m
+                .filter(|elevation| elevation.is_finite())
+                .map(|elevation| (point.dist_m, elevation))
+        })
+        .collect();
+    if samples.len() < 2 {
+        return Vec::new();
+    }
+    let elevations: Vec<f64> = samples.iter().map(|(_, elevation)| *elevation).collect();
+    let smoothed = smooth_series(&elevations, options.smoothing_points);
+    samples
+        .iter()
+        .zip(smoothed)
+        .map(|((distance, _), elevation)| (*distance, elevation))
+        .collect()
+}
+
+/// Moyenne glissante centree sur un nombre de points (1 = serie inchangee).
+fn smooth_series(values: &[f64], points: usize) -> Vec<f64> {
+    let window = points.max(1);
+    if window == 1 || values.len() < 3 {
+        return values.to_vec();
+    }
+    let half = window / 2;
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            let low = index.saturating_sub(half);
+            let high = (index + half + 1).min(values.len());
+            values[low..high].iter().sum::<f64>() / (high - low) as f64
+        })
+        .collect()
+}
+
+/// Pente minimale d'une portion retenue pour le denivele horaire (3 %).
+pub const CLIMB_MIN_GRADE: f64 = 0.03;
+/// Longueur minimale d'une portion retenue pour le denivele horaire (200 m).
+pub const CLIMB_MIN_LENGTH_M: f64 = 200.0;
+
+/// Denivele horaire en montee et en descente.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ClimbRates {
+    pub gain_m: f64,
+    pub gain_s: f64,
+    /// Denivele horaire en montee (m/h), None sans portion de montee retenue.
+    pub gain_m_per_h: Option<f64>,
+    pub loss_m: f64,
+    pub loss_s: f64,
+    /// Denivele horaire en descente (m/h), None sans portion de descente.
+    pub loss_m_per_h: Option<f64>,
+}
+
+/// Denivele horaire des portions ou la pente depasse 3 % sur au moins 200 m.
+///
+/// C'est la definition de VisuGPX : elle ignore les faux plats et les
+/// micro-reliefs pour ne garder que les montees (ou descentes) franches. Le
+/// temps vient des horodatages de la trace, pas des tours.
+pub fn climb_rates(track: &[TrackPoint]) -> Option<ClimbRates> {
+    let points: Vec<&TrackPoint> = track
+        .iter()
+        .filter(|point| point.elevation_m.map(f64::is_finite).unwrap_or(false))
+        .collect();
+    if points.len() < 2 {
+        return None;
+    }
+    let (mut gain, mut gain_s) = (0.0, 0.0);
+    let (mut loss, mut loss_s) = (0.0, 0.0);
+    let mut index = 0_usize;
+    while index + 1 < points.len() {
+        let Some(end) = window_end(&points, index) else {
+            break;
+        };
+        let grade = grade_between(points[index], points[end]);
+        let climbing = grade > CLIMB_MIN_GRADE;
+        let descending = grade < -CLIMB_MIN_GRADE;
+        if !climbing && !descending {
+            index += 1;
+            continue;
+        }
+        // Etend la portion tant que chaque fenetre de 200 m garde le meme sens.
+        let mut last = end;
+        let mut cursor = end;
+        while let Some(next) = window_end(&points, cursor) {
+            let next_grade = grade_between(points[cursor], points[next]);
+            let continues = if climbing {
+                next_grade > CLIMB_MIN_GRADE
+            } else {
+                next_grade < -CLIMB_MIN_GRADE
+            };
+            if !continues {
+                break;
+            }
+            last = next;
+            cursor = next;
+        }
+        let delta =
+            points[last].elevation_m.unwrap_or(0.0) - points[index].elevation_m.unwrap_or(0.0);
+        let seconds = ((points[last].t_ms - points[index].t_ms) as f64 / 1000.0).max(0.0);
+        if climbing {
+            gain += delta.max(0.0);
+            gain_s += seconds;
+        } else {
+            loss += (-delta).max(0.0);
+            loss_s += seconds;
+        }
+        index = last;
+    }
+    Some(ClimbRates {
+        gain_m: gain,
+        gain_s,
+        gain_m_per_h: (gain_s > 0.0).then(|| gain / (gain_s / 3600.0)),
+        loss_m: loss,
+        loss_s,
+        loss_m_per_h: (loss_s > 0.0).then(|| loss / (loss_s / 3600.0)),
+    })
+}
+
+/// Premier point situe au moins CLIMB_MIN_LENGTH_M plus loin que le point donne.
+fn window_end(points: &[&TrackPoint], start: usize) -> Option<usize> {
+    let target = points[start].dist_m + CLIMB_MIN_LENGTH_M;
+    let mut index = start + 1;
+    while index < points.len() && points[index].dist_m < target {
+        index += 1;
+    }
+    (index < points.len()).then_some(index)
+}
+
+/// Pente (denivele / distance) entre deux points de trace.
+fn grade_between(start: &TrackPoint, end: &TrackPoint) -> f64 {
+    let distance = end.dist_m - start.dist_m;
+    if distance <= 0.0 {
+        return 0.0;
+    }
+    (end.elevation_m.unwrap_or(0.0) - start.elevation_m.unwrap_or(0.0)) / distance
+}
+
+/// Vitesse maximale lissee et distance ou elle a ete atteinte.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SpeedExtremes {
+    pub max_speed_mps: f64,
+    pub max_distance_m: f64,
+}
+
+/// Vitesse maximale lissee sur une fenetre de quelques secondes.
+///
+/// La vitesse est lissee avant la recherche : un point GPS isole ne doit pas
+/// devenir un record. Une fenetre nulle prend 5 s par defaut.
+pub fn speed_extremes(track: &[TrackPoint], window_s: f64) -> Option<SpeedExtremes> {
+    let window = if window_s > 0.0 { window_s } else { 5.0 };
+    let curve = speed_curve(track, window);
+    let best = curve
+        .iter()
+        .filter(|sample| sample.speed_mps.is_finite())
+        .max_by(|a, b| a.speed_mps.total_cmp(&b.speed_mps))?;
+    if best.speed_mps <= 0.0 {
+        return None;
+    }
+    Some(SpeedExtremes {
+        max_speed_mps: best.speed_mps,
+        max_distance_m: distance_at_elapsed_s(track, best.t_s).unwrap_or(0.0),
+    })
 }
 
 /// Denivele positif cumule (m).
@@ -304,10 +563,27 @@ pub fn splits(summary: &WorkoutSummary) -> Vec<Split> {
             planned_pace_s_per_km,
             planned_cumulative_s,
             plan_delta_s: planned_cumulative_s.map(|planned| cumulative_s - planned),
+            pause_s: pause_overlap_s(&summary.pauses, cumulative_s - duration_s, cumulative_s),
         });
         previous_pace = Some(pace_s_per_km);
     }
     splits
+}
+
+/// Temps de pause (s) contenu dans un intervalle de temps de course.
+///
+/// Une pause peut chevaucher deux tronçons : seule la part qui tombe dans
+/// l'intervalle est comptee, pour que la somme des tronçons ne depasse jamais le
+/// temps de pause total.
+fn pause_overlap_s(pauses: &[Pause], start_s: f64, end_s: f64) -> f64 {
+    pauses
+        .iter()
+        .map(|pause| {
+            let debut = pause.at_s.max(start_s);
+            let fin = (pause.at_s + pause.duration_s).min(end_s);
+            (fin - debut).max(0.0)
+        })
+        .sum()
 }
 
 /// Frequence cardiaque moyenne et maximale dans une plage de distance.
@@ -673,6 +949,188 @@ mod tests {
             "{first:?}"
         );
         assert!(first.gap_pace_s_per_km.unwrap() < first.pace_s_per_km);
+    }
+
+    /// Trace plate de 6 km a 3 m/s, altitude lissee de 2 % avec un bruit de
+    /// +/-2 m : le cas typique ou un denivele brut devient absurde.
+    fn noisy_climb() -> Vec<TrackPoint> {
+        (0..=2000)
+            .map(|i| {
+                let distance = i as f64 * 3.0;
+                let noise = if i % 2 == 0 { 2.0 } else { -2.0 };
+                TrackPoint {
+                    t_ms: i as i64 * 1000,
+                    dist_m: distance,
+                    lat: 45.0,
+                    lon: 3.0,
+                    elevation_m: Some(100.0 + distance * 0.02 + noise),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn elevation_threshold_removes_the_measurement_noise() {
+        let track = noisy_climb();
+        // 2 % sur 6 km : 120 m de denivele reel.
+        let filtered = elevation_summary(&track, ElevationOptions::default()).unwrap();
+        assert!(
+            (filtered.gain_m - 120.0).abs() < 20.0,
+            "gain = {}",
+            filtered.gain_m
+        );
+        // Sans seuil, chaque oscillation de +/-2 m est comptee : le D+ explose.
+        let raw = elevation_summary(
+            &track,
+            ElevationOptions {
+                threshold_m: 0.0,
+                smoothing_points: 1,
+            },
+        )
+        .unwrap();
+        assert!(raw.gain_m > 2000.0, "gain brut = {}", raw.gain_m);
+        // Les altitudes affichees restent celles de la trace.
+        assert!((filtered.min_m - 98.0).abs() < 1.0);
+        assert!((filtered.max_m - 222.0).abs() < 1.0);
+        assert_eq!(filtered.sample_count, 2001);
+        assert!((filtered.start_m - 102.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn elevation_smoothing_dampens_a_short_spike() {
+        let track: Vec<TrackPoint> = (0..=20)
+            .map(|i| TrackPoint {
+                t_ms: i as i64 * 1000,
+                dist_m: i as f64 * 10.0,
+                lat: 45.0,
+                lon: 3.0,
+                elevation_m: Some(if i == 10 { 160.0 } else { 100.0 }),
+            })
+            .collect();
+        let smoothed = elevation_summary(
+            &track,
+            ElevationOptions {
+                threshold_m: 0.5,
+                smoothing_points: 5,
+            },
+        )
+        .unwrap();
+        // Le pic isole est reparti sur cinq points : il ne compte plus comme 60 m.
+        assert!(smoothed.gain_m < 30.0, "gain = {}", smoothed.gain_m);
+        let raw = elevation_summary(
+            &track,
+            ElevationOptions {
+                threshold_m: 0.5,
+                smoothing_points: 1,
+            },
+        )
+        .unwrap();
+        assert!(raw.gain_m > 55.0, "gain brut = {}", raw.gain_m);
+    }
+
+    #[test]
+    fn elevation_needs_altitude() {
+        let mut summary = steady_summary();
+        for point in &mut summary.track {
+            point.elevation_m = None;
+        }
+        assert!(elevation_summary(&summary.track, ElevationOptions::default()).is_none());
+    }
+
+    /// 1 km a +5 %, 1 km plat, 1 km a -5 %, un point tous les 3 m et par seconde.
+    fn hill_track() -> Vec<TrackPoint> {
+        (0..=1000)
+            .map(|i| {
+                let distance = i as f64 * 3.0;
+                let elevation = if distance <= 1000.0 {
+                    100.0 + distance * 0.05
+                } else if distance <= 2000.0 {
+                    150.0
+                } else {
+                    150.0 - (distance - 2000.0) * 0.05
+                };
+                TrackPoint {
+                    t_ms: i as i64 * 1000,
+                    dist_m: distance,
+                    lat: 45.0,
+                    lon: 3.0,
+                    elevation_m: Some(elevation),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn climb_rates_keep_only_sustained_slopes() {
+        let rates = climb_rates(&hill_track()).unwrap();
+        // 50 m de montee sur 1000 m parcourus en 334 s : environ 540 m/h.
+        assert!((rates.gain_m - 50.0).abs() < 6.0, "gain = {}", rates.gain_m);
+        assert!(
+            (450.0..650.0).contains(&rates.gain_m_per_h.unwrap()),
+            "montee = {:?}",
+            rates.gain_m_per_h
+        );
+        assert!(
+            (rates.loss_m - 50.0).abs() < 6.0,
+            "perte = {}",
+            rates.loss_m
+        );
+        // La descente est stockee en valeur positive : l'affichage ajoute le signe.
+        assert!(rates.loss_m_per_h.unwrap() > 450.0);
+    }
+
+    #[test]
+    fn climb_rates_ignore_the_flat() {
+        let summary = steady_summary();
+        let rates = climb_rates(&summary.track).unwrap();
+        // 1 % de pente moyenne : la portion n'est pas retenue (seuil de 3 %).
+        assert_eq!(rates.gain_m_per_h, None);
+        assert_eq!(rates.loss_m_per_h, None);
+        assert!(climb_rates(&[]).is_none());
+    }
+
+    #[test]
+    fn speed_extremes_lisse_the_curve() {
+        let summary = steady_summary();
+        let extremes = speed_extremes(&summary.track, 5.0).unwrap();
+        assert!(
+            (extremes.max_speed_mps - 3.0).abs() < 0.1,
+            "vitesse = {}",
+            extremes.max_speed_mps
+        );
+        assert!(extremes.max_distance_m > 0.0);
+        assert!(speed_extremes(&[], 5.0).is_none());
+    }
+
+    #[test]
+    fn splits_report_the_pause_time() {
+        let mut summary = steady_summary();
+        summary.pauses = vec![Pause {
+            at_s: 400.0,
+            at_distance_m: 1200.0,
+            duration_s: 40.0,
+            automatic: true,
+        }];
+        let splits = splits(&summary);
+        assert_eq!(splits[0].pause_s, 0.0);
+        assert!((splits[1].pause_s - 40.0).abs() < 1e-9);
+        assert_eq!(splits[2].pause_s, 0.0);
+    }
+
+    #[test]
+    fn a_pause_shared_by_two_splits_is_counted_once() {
+        let mut summary = steady_summary();
+        // Pause a cheval sur la fin du premier tour et le debut du deuxieme.
+        summary.pauses = vec![Pause {
+            at_s: 300.0,
+            at_distance_m: 900.0,
+            duration_s: 60.0,
+            automatic: false,
+        }];
+        let splits = splits(&summary);
+        let total: f64 = splits.iter().map(|split| split.pause_s).sum();
+        assert!((total - 60.0).abs() < 1e-9, "total = {total}");
+        assert!(splits[0].pause_s > 0.0 && splits[1].pause_s > 0.0);
     }
 
     #[test]

@@ -8,6 +8,7 @@ use crate::auth::device::{
 };
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
+use crate::friends::{CirclePayload, InviteOutcome};
 use crate::models::{
     MusicPlaylistDetail, MusicTrackView, Race, RaceInput, UploadResponse, WorkoutUpload,
 };
@@ -16,7 +17,7 @@ use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::header;
 use axum::response::Response;
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
@@ -26,12 +27,23 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/device/code", post(device_code))
         .route("/api/v1/device/token", post(device_token))
         .route("/api/v1/me", get(me))
+        // Amis et partage de la position en direct. L'appareil qui publie
+        // revendique d'abord son nom (sujet MQTT), puis ses amis voient la
+        // position tant que la seance dure et que le partage est actif.
+        .route("/api/v1/live/register", post(register_live_device))
+        .route("/api/v1/friends", get(list_friends))
+        .route("/api/v1/friends/invite", post(create_friend_invite))
+        .route("/api/v1/friends/accept", post(accept_friend_invite))
+        .route("/api/v1/friends/live", get(friends_live))
+        .route("/api/v1/friends/share", put(set_friend_share))
+        .route("/api/v1/friends/{id}", delete(remove_friend))
         .route("/api/v1/workouts", post(upload_workout).get(list_workouts))
         .route(
             "/api/v1/workouts/{id}",
             get(get_workout).delete(delete_workout),
         )
         .route("/api/v1/workouts/{id}/gpx", get(workout_gpx))
+        .route("/api/v1/workouts/{id}/kml", get(workout_kml))
         // Commentaire du coureur apres une seance (texte vide pour l'effacer).
         .route("/api/v1/workouts/{id}/comment", put(set_workout_comment))
         .route("/api/v1/races", get(list_races).post(create_race))
@@ -262,6 +274,15 @@ async fn workout_gpx(
     super::gpx_response(&state, &user.id, &id).await
 }
 
+/// Export KML d'une seance (Google Earth, cartes hors ligne).
+async fn workout_kml(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    super::kml_response(&state, &user.id, &id).await
+}
+
 // ------------------------------------------------------------------ courses
 
 /// Filtre de la liste des courses.
@@ -431,4 +452,215 @@ async fn get_music_manifest(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     super::manifest_response(&state, &user.id, &id).await
+}
+
+// ------------------------------------------------------------------ amis
+
+/// Demande de revendication d'un appareil en direct.
+#[derive(Debug, Deserialize)]
+struct LiveRegisterRequest {
+    /// Nom de l'appareil, tel qu'il apparait dans le sujet MQTT
+    /// (`<prefixe>/live/<montre>`).
+    device: String,
+    /// Libelle lisible ("Pixel 8", "Galaxy Watch 6"), facultatif.
+    #[serde(default)]
+    label: Option<String>,
+}
+
+/// Revendique un appareil pour le partage en direct.
+///
+/// Appele par la montre ou le telephone au depart d'une seance. C'est ce qui
+/// relie le nom du sujet MQTT a un compte, et donc ce qui decide qui peut voir
+/// la position : sans cette revendication, aucune trace ne sort du serveur.
+async fn register_live_device(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Json(request): Json<LiveRegisterRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    let device = crate::friends::clean_device_name(&request.device);
+    if device.is_empty() {
+        return Err(AppError::bad_request(
+            "nom d'appareil vide : renseignez le nom de l'appareil dans les reglages",
+        ));
+    }
+    let maintenant = state.now_ms();
+    // Un appareil muet depuis plus de 24 h n'a plus a bloquer son nom.
+    let _ =
+        crate::db::prune_live_devices(&state.pool, maintenant - crate::live::SESSION_TTL_MS).await;
+    let label = request
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|valeur| !valeur.is_empty());
+    if !crate::db::claim_live_device(&state.pool, &user.id, &device, label, maintenant).await? {
+        return Err(AppError::Conflict(format!(
+            "l'appareil '{device}' appartient deja a un autre compte : choisissez un autre nom dans les reglages"
+        )));
+    }
+    tracing::info!(user = %user.email, appareil = %device, "appareil en direct revendique");
+    Ok(Json(
+        serde_json::json!({ "device": device, "registered": true }),
+    ))
+}
+
+/// Liste du cercle : profils, partage et positions courantes.
+async fn list_friends(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Json<CirclePayload>> {
+    Ok(Json(
+        crate::friends::payload(&state, &user.id, user.share_live, false).await?,
+    ))
+}
+
+/// Positions seules, pour un rafraichissement frequent.
+#[derive(Debug, Deserialize)]
+struct FriendsLiveQuery {
+    /// Inclure la trace de la seance (carte) ; absent, seules les positions
+    /// courantes sont renvoyees, ce qui divise la charge par vingt.
+    #[serde(default)]
+    trace: bool,
+}
+
+async fn friends_live(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Query(query): Query<FriendsLiveQuery>,
+) -> AppResult<Json<CirclePayload>> {
+    Ok(Json(
+        crate::friends::payload(&state, &user.id, user.share_live, query.trace).await?,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+struct InviteRequest {
+    /// Forcer un nouveau code au lieu de renvoyer celui qui court encore.
+    #[serde(default)]
+    nouvelle: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct InviteResponse {
+    /// Code a dicter, dans sa forme lisible `BCDF-GHJK`.
+    code: String,
+    expires_at_ms: i64,
+    expires_in_s: i64,
+    /// Lien direct a envoyer : il pre-remplit le champ sur la page Amis.
+    url: String,
+}
+
+/// Cree (ou renvoie) un code d'invitation a usage unique.
+async fn create_friend_invite(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Json(request): Json<InviteRequest>,
+) -> AppResult<Json<InviteResponse>> {
+    let maintenant = state.now_ms();
+    if !request.nouvelle {
+        if let Some((code, expiration)) =
+            crate::db::current_friend_invite(&state.pool, &user.id, maintenant).await?
+        {
+            return Ok(Json(invite_response(&state, &code, expiration, maintenant)));
+        }
+    }
+    // Le code est tire au hasard : on retente si la place est prise (collision
+    // improbable, mais un code ne doit jamais ecraser celui d'un autre compte).
+    for _ in 0..6 {
+        let code = crate::friends::normalize_invite_code(&crate::friends::generate_invite_code());
+        let expiration = maintenant + crate::friends::INVITE_TTL_MS;
+        if crate::db::insert_friend_invite(&state.pool, &code, &user.id, maintenant, expiration)
+            .await?
+        {
+            tracing::info!(user = %user.email, "code d'invitation emis");
+            return Ok(Json(invite_response(&state, &code, expiration, maintenant)));
+        }
+    }
+    Err(AppError::internal(
+        "impossible de generer un code d'invitation (collisions repetees)",
+    ))
+}
+
+fn invite_response(
+    state: &AppState,
+    code: &str,
+    expires_at_ms: i64,
+    now_ms: i64,
+) -> InviteResponse {
+    let affiche = crate::friends::format_invite_code(code);
+    InviteResponse {
+        code: affiche.clone(),
+        expires_at_ms,
+        expires_in_s: ((expires_at_ms - now_ms) / 1000).max(0),
+        url: crate::friends::invite_url(&state.config.public_url, code),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AcceptRequest {
+    code: String,
+}
+
+/// Accepte un code d'invitation : l'amitie est creee dans les deux sens.
+async fn accept_friend_invite(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Json(request): Json<AcceptRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    if !crate::friends::is_invite_code(&request.code) {
+        return Err(AppError::bad_request(
+            "code d'invitation invalide : huit caracteres, du type BCDF-GHJK",
+        ));
+    }
+    let code = crate::friends::normalize_invite_code(&request.code);
+    match crate::db::accept_friend_invite(&state.pool, &code, &user.id, state.now_ms()).await? {
+        InviteOutcome::Accepted(ami) => {
+            tracing::info!(user = %user.email, ami = %ami.email, "amitie creee");
+            Ok(Json(serde_json::json!({ "friend": ami })))
+        }
+        InviteOutcome::Unknown => Err(AppError::bad_request(
+            "code inconnu ou deja utilise : demandez-en un nouveau",
+        )),
+        InviteOutcome::Expired => Err(AppError::bad_request(
+            "code expire : demandez-en un nouveau",
+        )),
+        InviteOutcome::SelfInvite => Err(AppError::bad_request(
+            "c'est votre propre code : envoyez-le a la personne a ajouter",
+        )),
+        InviteOutcome::TooMany => Err(AppError::bad_request(format!(
+            "cercle plein : {} amis au maximum",
+            crate::friends::MAX_FRIENDS
+        ))),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ShareRequest {
+    share_live: bool,
+}
+
+/// Active ou coupe le partage de sa position avec ses amis.
+async fn set_friend_share(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Json(request): Json<ShareRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    crate::db::set_share_live(&state.pool, &user.id, request.share_live).await?;
+    tracing::info!(user = %user.email, partage = request.share_live, "partage en direct regle");
+    Ok(Json(
+        serde_json::json!({ "share_live": request.share_live }),
+    ))
+}
+
+/// Retire un ami : plus aucune position ne circule entre les deux comptes.
+async fn remove_friend(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<axum::http::StatusCode> {
+    if crate::db::remove_friendship(&state.pool, &user.id, &id).await? {
+        tracing::info!(user = %user.email, ami = %id, "amitie retiree");
+        Ok(axum::http::StatusCode::NO_CONTENT)
+    } else {
+        Err(AppError::NotFound)
+    }
 }

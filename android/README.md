@@ -5,9 +5,9 @@ meme backend auto-heberge :
 
 | Module | Identifiant | Role |
 |---|---|---|
-| `:core` | `com.mpacer.core` | Bibliotheque commune : pont JNI vers `mpacer-core`, service de seance (GPS 1 Hz), voix, archive locale, synchronisation backend, suivi MQTT, musique. Aucune interface. |
+| `:core` | `com.mpacer.core` | Bibliotheque commune : pont JNI vers `mpacer-core`, service de seance (GPS 1 Hz), voix, archive locale, synchronisation backend, suivi MQTT, musique, amis et partage de position. Aucune interface. |
 | `:app` | `com.mpacer.watch` | Application Wear OS : ecrans ronds, capteur cardiaque de la montre, Data Layer (reception des seances envoyees par le telephone). |
-| `:phone` | `com.mpacer.phone` | Application telephone (Android 8+) pour **courir avec le telephone** : ecrans Material 3, ceinture cardiaque Bluetooth LE, historique, synchronisation, MQTT, musique. |
+| `:phone` | `com.mpacer.phone` | Application telephone (Android 8+) pour **courir avec le telephone** : ecrans Material 3, ceinture cardiaque Bluetooth LE, historique, synchronisation, MQTT, musique, onglet Amis (carte OpenStreetMap des proches). |
 | `:companion` | `com.mpacer.companion` | Application telephone d'appoint : connexion au backend, liste et detail des seances, import de fichier `.pac`/JSON, envoi vers la montre. **Ne fait pas de seance.** |
 
 > **Verifie le 6 octobre 2026** : les quatre modules compilent (`.gradlew.bat
@@ -41,6 +41,7 @@ android/
       SyncClient.kt        device flow, envoi des seances, jeton chiffre
       SessionConfig.kt     reglages assistant + voix gardes hors seance
       HeartRateSensor.kt   capteur integre + interface HeartRateSource (ceinture BLE)
+      social/FriendsClient.kt  amis et partage de position (API du backend)
       live/                MQTT : config, politique de cadence, charge utile, codec, tracker, test, persistance
       music/               Media3 : bibliotheque USB, lecteur, session, modeles du contrat docs/07 v2
       ui/Palette.kt        palette et voyant GPS partages par les deux interfaces
@@ -61,7 +62,8 @@ android/
       MainActivity.kt      permissions + navigation a cinq onglets
       PhoneSettings.kt     reglages persistants (assistant, voix, musique, cardio, ecran)
       hr/BleHeartRate.kt   ceinture cardiaque Bluetooth LE (0x180D / 0x2A37) + recherche
-      ui/                  Theme, RunScreen, HistoryScreen, MusicScreen, SyncScreen, SettingsScreen
+      ui/                  Theme, RunScreen, FriendsScreen (carte OSM), HistoryScreen,
+                           MusicScreen, SyncScreen, SettingsScreen
   companion/                                 module telephone
     build.gradle.kts                         Material 3, Compose, OkHttp, Wearable
     proguard-rules.pro
@@ -257,6 +259,14 @@ Ce qui est propre au telephone :
 - **Musique du telephone** : `adb push ./run-170
   /sdcard/Android/data/com.mpacer.phone/files/Music/` puis « Importer (USB) »
   dans l'onglet Musique (le dossier exact est affiche a l'ecran).
+- **Onglet Amis** : cercle ferme (code d'invitation a usage unique, ajout par
+  code, retrait), interrupteur de partage, et carte **OpenStreetMap** des amis en
+  direct (WebView alimentee par l'API, script `/static/map.js` du backend). Au
+  depart de chaque seance, l'application **revendique son nom d'appareil**
+  (`POST /api/v1/live/register`) : c'est ce qui relie le sujet MQTT a un compte
+  et autorise le partage. Trois conditions pour etre vu : appareil appaire,
+  broker MQTT renseigne (Reglages > Suivi en direct), seance en cours. Detail :
+  [docs/13](../docs/13-amis-partage-position.md).
 
 Permissions demandees au premier lancement : position, notifications, activite,
 capteur cardiaque, Bluetooth (Android 12+). **Aucune n'est obligatoire** : la
@@ -555,7 +565,14 @@ intents soient resolus.
 17. **Reglages persistants du telephone** : `PhoneSettings.kt` ecrit dans les
     `SharedPreferences` a chaque modification (et `LiveSettings` dans le
     Keystore). Verifier la latence percue sur un appareil modeste.
-18. **Musique du telephone** : `MediaStore` n'est pas utilise ; les fichiers
+18. **Amis et partage de position** : la revendication d'appareil part du service
+    de seance (`LiveTracker.start` -> `FriendsClient.registerDevice`) ; verifier
+    qu'un telephone et une montre publient bien sous deux noms distincts, qu'un
+    nom deja pris est refuse (409) et que la carte OpenStreetMap s'affiche dans la
+    WebView (tuiles accessibles depuis le telephone). Les tests d'integration du
+    backend (`friends_share_a_live_position_between_two_accounts`) exigent un
+    PostgreSQL : `MPACER_TEST_DATABASE_URL=... cargo test -p mpacer-api`.
+19. **Musique du telephone** : `MediaStore` n'est pas utilise ; les fichiers
     doivent etre pousses par `adb` dans
     `Android/data/com.mpacer.phone/files/Music/`. Une lecture depuis la
     bibliotheque du telephone (sans BPM, donc sans choix de tempo) reste une

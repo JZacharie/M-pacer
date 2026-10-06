@@ -270,6 +270,18 @@ impl LiveStore {
         vues
     }
 
+    /// Trace en cours d'un appareil precis, si elle existe.
+    ///
+    /// Sert au partage entre amis ([crate::friends]) : le service ne lit que les
+    /// appareils revendiques par un compte, jamais tout le magasin.
+    pub fn session(&self, device: &str) -> Option<LiveSessionView> {
+        let sessions = self
+            .sessions
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        sessions.get(device).map(resume)
+    }
+
     /// Nombre de montres suivies.
     pub fn len(&self) -> usize {
         self.sessions

@@ -35,6 +35,7 @@ import com.mpacer.core.live.LiveSettings
 import com.mpacer.core.live.LiveTracker
 import com.mpacer.core.music.MusicSession
 import com.mpacer.phone.hr.BleHeartRate
+import com.mpacer.phone.ui.FriendsScreen
 import com.mpacer.phone.ui.HistoryScreen
 import com.mpacer.phone.ui.MpacerTheme
 import com.mpacer.phone.ui.MusicScreen
@@ -103,11 +104,15 @@ private fun appliquerReglages(context: android.content.Context, settings: PhoneS
     LiveTracker.refresh(context)
 }
 
+/**
+ * Cinq destinations au maximum (conseil Material) : l'appairage du backend vit
+ * dans Reglages, comme dans l'interface web ou il a rejoint /settings.
+ */
 private enum class Onglet(val libelle: String, val icone: String) {
     Course("Course", "\u25B6"),
+    Amis("Amis", "\uD83D\uDC65"),
     Historique("Historique", "\u2261"),
     Musique("Musique", "\u266B"),
-    Sync("Sync", "\u2601"),
     Reglages("Reglages", "\u2699"),
 }
 
@@ -115,6 +120,8 @@ private enum class Onglet(val libelle: String, val icone: String) {
 private fun MpacerApp() {
     val context = LocalContext.current
     var onglet by remember { mutableStateOf(Onglet.Course) }
+    // Sous-page d'appairage, ouverte depuis Reglages.
+    var syncOuvert by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(PhoneSettingsStore.load(context)) }
     val session by TrackingService.state.collectAsState()
     val live by LiveTracker.state.collectAsState()
@@ -180,16 +187,21 @@ private fun MpacerApp() {
                     onResetPaceWindow = { TrackingService.send(context, TrackingService.ACTION_RESET_PACE) },
                 )
 
+                Onglet.Amis -> FriendsScreen()
                 Onglet.Historique -> HistoryScreen()
                 Onglet.Musique -> MusicScreen()
-                Onglet.Sync -> SyncScreen()
-                Onglet.Reglages -> SettingsScreen(
-                    settings = settings,
-                    liveState = live,
-                    probeState = probe,
-                    onSettingsChange = majReglages,
-                    onTestLive = { LiveProbe.test(it) },
-                )
+                Onglet.Reglages -> if (syncOuvert) {
+                    SyncScreen(onBack = { syncOuvert = false })
+                } else {
+                    SettingsScreen(
+                        settings = settings,
+                        liveState = live,
+                        probeState = probe,
+                        onSettingsChange = majReglages,
+                        onTestLive = { LiveProbe.test(it) },
+                        onOuvrirSync = { syncOuvert = true },
+                    )
+                }
             }
         }
     }

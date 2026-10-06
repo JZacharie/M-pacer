@@ -6,6 +6,7 @@
 use crate::auth::device;
 use crate::auth::{AuthUser, OptionalUser, SESSION_COOKIE};
 use crate::error::{AppError, AppResult};
+use crate::friends::InviteOutcome;
 use crate::live::{LivePoint, LiveSessionView};
 use crate::models::{
     DeezerAccount, MusicPlaylistInput, MusicTrack, MusicTrackInput, Race, RaceInput, RaceTask,
@@ -39,6 +40,14 @@ pub fn router() -> Router<AppState> {
         // seance (page HTML pour les proches, JSON pour un outil externe).
         .route("/live", get(live_page))
         .route("/live.json", get(live_json))
+        // Amis : cercle, partage de la position en direct, invitations et carte
+        // OpenStreetMap. Les positions viennent du suivi MQTT, jamais de la base.
+        .route("/amis", get(friends_page))
+        .route("/amis.json", get(friends_json))
+        .route("/amis/partage", post(friends_share_submit))
+        .route("/amis/invitation", post(friends_invite_submit))
+        .route("/amis/ajouter", post(friends_add_submit))
+        .route("/amis/{id}/retirer", post(friends_remove_submit))
         // Tableaux de bord : ecrans composes par l'utilisateur (docs/08).
         .route("/dashboards", get(dashboards_page))
         .route(
@@ -78,6 +87,7 @@ pub fn router() -> Router<AppState> {
         .route("/settings/tokens/{id}/revoke", post(revoke_token))
         .route("/workouts/{id}", get(workout_page))
         .route("/workouts/{id}/gpx", get(workout_gpx))
+        .route("/workouts/{id}/kml", get(workout_kml))
         .route("/workouts/{id}/delete", post(delete_workout))
         .route("/workouts/{id}/comment", post(workout_comment))
         .route("/courses", get(races_page))
@@ -125,6 +135,7 @@ pub fn router() -> Router<AppState> {
         .route("/music/playlists/{id}/delete", post(music_delete))
         .route("/static/app.css", get(stylesheet))
         .route("/static/app.js", get(script))
+        .route("/static/map.js", get(map_script))
         // Identite visuelle (docs/07 section 10.4) : SVG embarques.
         .route("/static/logo.svg", get(logo))
         .route("/static/logo-mark.svg", get(logo_mark))
@@ -153,6 +164,19 @@ async fn script() -> Response {
             HeaderValue::from_static("application/javascript; charset=utf-8"),
         )],
         crate::assets::APP_JS,
+    )
+        .into_response()
+}
+
+/// Carte OpenStreetMap (page Amis et vue Carte de l'application).
+async fn map_script() -> Response {
+    (
+        StatusCode::OK,
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/javascript; charset=utf-8"),
+        )],
+        crate::assets::MAP_JS,
     )
         .into_response()
 }
@@ -1286,10 +1310,33 @@ async fn revoke_token(
 
 // ------------------------------------------------------------------ detail seance
 
+/// Parametres d'affichage de la fiche de seance.
+///
+/// `seuil` et `lissage` reprennent les reglages de VisuGPX : le lecteur peut
+/// recalculer le denivele sans quitter la page.
+#[derive(Debug, Deserialize)]
+struct WorkoutQuery {
+    #[serde(default)]
+    seuil: Option<f64>,
+    #[serde(default)]
+    lissage: Option<usize>,
+}
+
+impl WorkoutQuery {
+    /// Options de denivele demandees, bornees pour rester lisibles.
+    fn elevation_options(&self) -> mpacer_core::analysis::ElevationOptions {
+        mpacer_core::analysis::ElevationOptions {
+            threshold_m: self.seuil.unwrap_or(10.0).clamp(0.0, 100.0),
+            smoothing_points: self.lissage.unwrap_or(5).clamp(1, 51),
+        }
+    }
+}
+
 async fn workout_page(
     State(state): State<AppState>,
     OptionalUser(user): OptionalUser,
     Path(id): Path<String>,
+    Query(query): Query<WorkoutQuery>,
 ) -> AppResult<Response> {
     let Some(user) = user else {
         return Ok(Redirect::to("/login").into_response());
@@ -1299,6 +1346,19 @@ async fn workout_page(
         .ok_or(AppError::NotFound)?;
 
     let summary: Option<mpacer_core::history::WorkoutSummary> = serde_json::from_str(&payload).ok();
+    let content = workout_content(&workout, summary, &query);
+    Ok(page(layout("Seance", "seances", Some(&user), content)))
+}
+
+/// Contenu complet de la fiche de seance.
+///
+/// Separe de la route pour rester testable sans base de donnees : tout ce qui
+/// s'affiche est calcule ici, a partir de la seance et de son resume.
+fn workout_content(
+    workout: &crate::models::WorkoutRow,
+    summary: Option<mpacer_core::history::WorkoutSummary>,
+    query: &WorkoutQuery,
+) -> Markup {
     let units = summary
         .as_ref()
         .map(|s| s.unit_system)
@@ -1343,6 +1403,28 @@ async fn workout_page(
         .any(|split| split.gap_pace_s_per_km.is_some());
     let plan = summary.as_ref().and_then(|summary| summary.plan);
 
+    // ------------------------------------------------ analyses a la VisuGPX
+    let elevation_options = query.elevation_options();
+    let elevation = summary.as_ref().and_then(|summary| {
+        mpacer_core::analysis::elevation_summary(&summary.track, elevation_options)
+    });
+    let climb = summary
+        .as_ref()
+        .and_then(|summary| mpacer_core::analysis::climb_rates(&summary.track));
+    let top_speed = summary
+        .as_ref()
+        .and_then(|summary| mpacer_core::analysis::speed_extremes(&summary.track, 5.0));
+    let (trace_json, markers_json) = summary
+        .as_ref()
+        .map(|summary| map_payload(&summary.track, units))
+        .unwrap_or_default();
+    let has_pauses = split_list.iter().any(|split| split.pause_s > 0.5);
+    // VisuGPX affiche l'heure de depart et d'arrivee : le coureur situe sa
+    // seance dans la journee sans rouvrir son agenda.
+    let times = format_time_short(workout.started_at_ms).zip(format_time_short(
+        workout.started_at_ms + (elapsed_total_s * 1000.0).round() as i64,
+    ));
+
     let content = html! {
         section class="hero" {
             h1 { (format_date(workout.started_at_ms)) }
@@ -1353,6 +1435,7 @@ async fn workout_page(
             }
             div class="actions" {
                 a class="button" href={ "/workouts/" (workout.id) "/gpx" } { "Telecharger le GPX" }
+                a class="button ghost" href={ "/workouts/" (workout.id) "/kml" } { "Telecharger le KML" }
                 form method="post" action={ "/workouts/" (workout.id) "/delete" }
                      data-confirm="Supprimer definitivement cette seance ?" {
                     button class="ghost danger" type="submit" { "Supprimer" }
@@ -1393,8 +1476,29 @@ async fn workout_page(
                     (mini_card("FC moyenne", &format!("{:.0} bpm", heart.average_bpm)))
                     (mini_card("FC max", &format!("{} bpm", heart.max_bpm)))
                 }
-                @if elevation_gain > 0.5 {
-                    (mini_card("Denivele +", &format!("{elevation_gain:.0} m")))
+                @if let Some(top) = &top_speed {
+                    (mini_card(
+                        &format!("Vitesse max (au {})", units.format_distance(top.max_distance_m)),
+                        &format_speed(top.max_speed_mps, units),
+                    ))
+                }
+                @if let Some(elevation) = &elevation {
+                    (mini_card("Denivele + / -", &format!("{:.0} / {:.0} m", elevation.gain_m, elevation.loss_m)))
+                    (mini_card("Altitude min / max", &format!("{:.0} / {:.0} m", elevation.min_m, elevation.max_m)))
+                }
+                @if let Some(climb) = &climb {
+                    @if let Some(rate) = climb.gain_m_per_h {
+                        (mini_card("Denivele horaire +", &format!("{rate:.0} m/h")))
+                    }
+                    @if let Some(rate) = climb.loss_m_per_h {
+                        (mini_card("Denivele horaire -", &format!("-{rate:.0} m/h")))
+                    }
+                }
+                @if let Some((debut, fin)) = &times {
+                    (mini_card("Depart / arrivee", &format!("{debut} - {fin}")))
+                }
+                @if !summary.track.is_empty() {
+                    (mini_card("Points GPS", &format!("{}", summary.track.len())))
                 }
                 @if paused_s > 0.5 {
                     (mini_card("Pauses", &format!("{} en {}", format_duration(paused_s), summary.pauses.len())))
@@ -1409,6 +1513,79 @@ async fn workout_page(
                         span class="muted" { "allure, frequence cardiaque et altitude sur la distance" }
                     }
                     (performance_chart(summary, units))
+                }
+            }
+
+            // -------------------------------------------- carte interactive
+            @if !trace_json.is_empty() {
+                section class="panel" {
+                    div class="section-head" {
+                        h2 { "Carte" }
+                        span class="muted" { "trace GPS et reperes de distance" }
+                    }
+                    div id="carte-seance" class="carte-vue carte-seance" data-carte="1" data-zoom="13"
+                        data-trace=(trace_json) data-reperes=(markers_json) {}
+                    p class="tiny" {
+                        "Fond OpenStreetMap dessine par le script du site : aucun service tiers, "
+                        "aucune donnee envoyee ailleurs. Les reperes marquent les kilometres."
+                    }
+                    script src="/static/map.js" defer {}
+                }
+            }
+
+            // -------------------------------------------- profil altimetrique
+            @if let Some(elevation) = &elevation {
+                section class="panel" {
+                    div class="section-head" {
+                        h2 { "Profil altimetrique" }
+                        span class="muted" {
+                            "colore par pente - seuil de " (format!("{:.0}", elevation_options.threshold_m))
+                            " m, lissage sur " (elevation_options.smoothing_points) " points"
+                        }
+                    }
+                    (elevation_profile_chart(&summary.track, elevation_options, units))
+                    div class="legend" {
+                        span class="legend-item slope-down2" { "Descente > 6 %" }
+                        span class="legend-item slope-down1" { "Descente 2-6 %" }
+                        span class="legend-item slope-flat" { "Plat" }
+                        span class="legend-item slope-up1" { "Montee 2-6 %" }
+                        span class="legend-item slope-up2" { "Montee > 6 %" }
+                    }
+                    div class="mini-cards" {
+                        (mini_card("Denivele +", &format!("{:.0} m", elevation.gain_m)))
+                        (mini_card("Denivele -", &format!("{:.0} m", elevation.loss_m)))
+                        (mini_card("Altitude min", &format!("{:.0} m", elevation.min_m)))
+                        (mini_card("Altitude max", &format!("{:.0} m", elevation.max_m)))
+                        (mini_card("Altitude moyenne", &format!("{:.0} m", elevation.average_m)))
+                    }
+                    @if let Some(climb) = &climb {
+                        p class="muted" {
+                            "Denivele horaire des portions a plus de 3 % sur au moins 200 m : "
+                            @match climb.gain_m_per_h {
+                                Some(rate) => (format!("+{rate:.0} m/h en montee")),
+                                None => ("aucune montee soutenue"),
+                            }
+                            ", "
+                            @match climb.loss_m_per_h {
+                                Some(rate) => (format!("-{rate:.0} m/h en descente")),
+                                None => ("aucune descente soutenue"),
+                            }
+                            "."
+                        }
+                    }
+                    form class="profile-options" method="get" action={ "/workouts/" (workout.id) } {
+                        label for="seuil" { "Seuil (m)" }
+                        input type="number" id="seuil" name="seuil" min="0" max="100" step="1"
+                            value=(format!("{:.0}", elevation_options.threshold_m));
+                        label for="lissage" { "Lissage (points)" }
+                        input type="number" id="lissage" name="lissage" min="1" max="51" step="2"
+                            value=(elevation_options.smoothing_points);
+                        button type="submit" { "Recalculer" }
+                    }
+                    p class="tiny" {
+                        "Le denivele brut (somme de toutes les variations) surestime le D+ : "
+                        "le seuil ignore le bruit de la mesure, comme les reglages de VisuGPX."
+                    }
                 }
             }
 
@@ -1465,6 +1642,7 @@ async fn workout_page(
                                 th { "Temps" }
                                 th { "Allure" }
                                 th { "Ecart" }
+                                @if has_pauses { th { "Pause" } }
                                 @if heart.is_some() { th { "FC" } }
                                 @if elevation_gain > 0.5 { th { "D+" } }
                                 @if has_gap { th { "GAP" } }
@@ -1483,6 +1661,15 @@ async fn workout_page(
                                         @match split.pace_delta_s {
                                             Some(delta) => (signed_seconds(delta)),
                                             None => "-",
+                                        }
+                                    }
+                                    @if has_pauses {
+                                        td {
+                                            @if split.pause_s > 0.5 {
+                                                (format_duration(split.pause_s))
+                                            } @else {
+                                                "-"
+                                            }
                                         }
                                     }
                                     @if heart.is_some() {
@@ -1608,7 +1795,7 @@ async fn workout_page(
             p class="alert" { "Le detail de cette seance n'a pas pu etre relu." }
         }
     };
-    Ok(page(layout("Seance", "seances", Some(&user), content)))
+    content
 }
 
 async fn delete_workout(
@@ -1648,6 +1835,15 @@ async fn workout_gpx(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     super::gpx_response(&state, &user.id, &id).await
+}
+
+/// Telechargement KML depuis le navigateur (Google Earth, cartes hors ligne).
+async fn workout_kml(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    super::kml_response(&state, &user.id, &id).await
 }
 
 // ------------------------------------------------------------------ avatar
@@ -1703,9 +1899,10 @@ fn page(markup: Markup) -> Response {
 /// Reglages est un onglet comme les autres (docs/07 section 10.3) : l'appairage
 /// d'une montre, les jetons et la deconnexion vivent sur `/settings`, et le menu
 /// deroulant de l'en-tete a disparu.
-const NAV: [(&str, &str, &str, &str); 8] = [
+const NAV: [(&str, &str, &str, &str); 9] = [
     ("seances", "Seances", "icon-activity", "/"),
     ("live", "Direct", "icon-watch", "/live"),
+    ("amis", "Amis", "icon-user", "/amis"),
     ("dashboards", "Tableaux", "icon-grid", "/dashboards"),
     ("courses", "Courses", "icon-route", "/courses"),
     ("planning", "Planning", "icon-clock", "/courses/planning"),
@@ -1885,6 +2082,165 @@ pub(crate) fn polyline_points(points: &[(f64, f64)]) -> String {
 
 /// Graphique multi-courbes : allure, frequence cardiaque et altitude, sur la
 /// meme axe de distance, chacun dans sa bande et sur sa propre echelle.
+fn format_speed(speed_mps: f64, units: UnitSystem) -> String {
+    match units {
+        UnitSystem::Metric => format!("{:.1} km/h", speed_mps * 3.6),
+        // 1 m/s = 2,236936 mi/h.
+        UnitSystem::Imperial => format!("{:.1} mi/h", speed_mps * 2.236_936),
+    }
+}
+
+/// Trace et reperes de distance encodes en JSON pour la carte interactive.
+///
+/// La trace est echantillonnee : une seance de 15 000 points tiendrait dans la
+/// page, mais une polyligne de 600 points suffit a remplir un ecran.
+fn map_payload(
+    track: &[mpacer_core::best_distances::TrackPoint],
+    units: UnitSystem,
+) -> (String, String) {
+    let geo: Vec<(f64, f64, f64)> = track
+        .iter()
+        .filter(|point| {
+            point.lat.is_finite()
+                && point.lon.is_finite()
+                && !(point.lat == 0.0 && point.lon == 0.0)
+        })
+        .map(|point| (point.lat, point.lon, point.dist_m))
+        .collect();
+    let (Some(first), Some(last)) = (geo.first(), geo.last()) else {
+        return (String::new(), String::new());
+    };
+    if geo.len() < 2 {
+        return (String::new(), String::new());
+    }
+    let step = (geo.len() / 600).max(1);
+    let trace: Vec<String> = geo
+        .iter()
+        .step_by(step)
+        .map(|(lat, lon, _)| format!("[{lat:.5},{lon:.5}]"))
+        .collect();
+
+    // Un repere par kilometre (par 5 km au-dela de 25 km) : sinon les etiquettes
+    // se recouvrent sur l'ecran.
+    let marker_step_m = if last.2 <= 25_000.0 { 1000.0 } else { 5000.0 };
+    let mut markers = vec![format!(
+        "{{\"lat\":{:.5},\"lon\":{:.5},\"nom\":\"Depart\"}}",
+        first.0, first.1
+    )];
+    let mut next = marker_step_m;
+    for (lat, lon, distance) in &geo {
+        if *distance + 1e-6 >= next {
+            let nom = format!("{:.0} {}", units.distance_in_units(next), units.label());
+            markers.push(format!(
+                "{{\"lat\":{lat:.5},\"lon\":{lon:.5},\"nom\":\"{nom}\"}}"
+            ));
+            next += marker_step_m;
+        }
+    }
+    markers.push(format!(
+        "{{\"lat\":{:.5},\"lon\":{:.5},\"nom\":\"Arrivee\"}}",
+        last.0, last.1
+    ));
+    (
+        format!("[{}]", trace.join(",")),
+        format!("[{}]", markers.join(",")),
+    )
+}
+
+/// Classe CSS d'une portion de profil selon sa pente.
+fn slope_class(grade: f64) -> &'static str {
+    if grade <= -0.06 {
+        "down2"
+    } else if grade <= -0.02 {
+        "down1"
+    } else if grade < 0.02 {
+        "flat"
+    } else if grade < 0.06 {
+        "up1"
+    } else {
+        "up2"
+    }
+}
+
+/// Profil altimetrique colore par pente, comme le profil interactif de VisuGPX.
+///
+/// Chaque portion porte une infobulle (distance, pente, altitude) : le survol
+/// remplace le curseur du traceur d'origine, sans script supplementaire.
+fn elevation_profile_chart(
+    track: &[mpacer_core::best_distances::TrackPoint],
+    options: mpacer_core::analysis::ElevationOptions,
+    units: UnitSystem,
+) -> Markup {
+    const HEIGHT: f64 = 240.0;
+    let profile = mpacer_core::analysis::elevation_profile(track, options);
+    if profile.len() < 2 {
+        return html! { p class="muted" { "Pas assez de points d'altitude pour tracer un profil." } };
+    }
+    let plot_width = CHART_WIDTH - CHART_LEFT - CHART_RIGHT;
+    let total_m = profile
+        .last()
+        .map(|(distance, _)| *distance)
+        .unwrap_or(1.0)
+        .max(1.0);
+    let step = (profile.len() / 300).max(1);
+    let points: Vec<(f64, f64)> = profile.iter().step_by(step).copied().collect();
+
+    let low = points
+        .iter()
+        .map(|(_, elevation)| *elevation)
+        .fold(f64::INFINITY, f64::min);
+    let high = points
+        .iter()
+        .map(|(_, elevation)| *elevation)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let padding = ((high - low) * 0.1).max(5.0);
+    let (low, high) = (low - padding, high + padding);
+    let span = (high - low).max(1e-6);
+    let x_of = |distance: f64| CHART_LEFT + (distance / total_m).clamp(0.0, 1.0) * plot_width;
+    let y_of = |elevation: f64| HEIGHT - 18.0 - ((elevation - low) / span) * (HEIGHT - 34.0);
+    let total_km = total_m / 1000.0;
+
+    html! {
+        div class="chart-block" {
+            svg class="chart profile" viewBox=(format!("0 0 {CHART_WIDTH} {HEIGHT}")) preserveAspectRatio="none" {
+                rect class="band" x="0" y="0" width=(format!("{CHART_WIDTH:.0}")) height=(format!("{HEIGHT:.0}")) rx="12" {}
+                @if total_km <= 100.0 {
+                    @for kilometre in 1..=(total_km as u32) {
+                        @let x = x_of(f64::from(kilometre) * 1000.0);
+                        line class="grid" x1=(format!("{x:.1}")) y1="6" x2=(format!("{x:.1}")) y2=(format!("{:.0}", HEIGHT - 18.0)) {}
+                    }
+                }
+                @for window in points.windows(2) {
+                    @let d0 = window[0].0;
+                    @let e0 = window[0].1;
+                    @let d1 = window[1].0;
+                    @let e1 = window[1].1;
+                    @let grade = if d1 > d0 { (e1 - e0) / (d1 - d0) } else { 0.0 };
+                    line class={ "slope " (slope_class(grade)) }
+                        x1=(format!("{:.1}", x_of(d0))) y1=(format!("{:.1}", y_of(e0)))
+                        x2=(format!("{:.1}", x_of(d1))) y2=(format!("{:.1}", y_of(e1))) {
+                        title {
+                            (format!(
+                                "{:.2} {} : {:+.1} % ({:.0} m)",
+                                units.distance_in_units(d0),
+                                units.label(),
+                                grade * 100.0,
+                                e0
+                            ))
+                        }
+                    }
+                }
+                text class="chart-label" x="4" y="14" { (format!("{high:.0} m")) }
+                text class="chart-label" x="4" y=(format!("{:.0}", HEIGHT - 18.0)) { (format!("{low:.0} m")) }
+                text class="chart-label" x=(format!("{CHART_LEFT:.0}")) y=(format!("{:.0}", HEIGHT - 2.0)) { "0" }
+                text class="chart-label" x=(format!("{:.0}", CHART_WIDTH - CHART_RIGHT)) y=(format!("{:.0}", HEIGHT - 2.0)) text-anchor="end" {
+                    (format_distance(total_m, units))
+                }
+            }
+        }
+    }
+}
+
 fn performance_chart(summary: &mpacer_core::history::WorkoutSummary, units: UnitSystem) -> Markup {
     let plot_width = CHART_WIDTH - CHART_LEFT - CHART_RIGHT;
     let total_m = summary.distance_m.max(1.0);
@@ -5489,6 +5845,451 @@ fn option_accuracy(valeur: Option<f64>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+// ------------------------------------------------------------------ amis
+
+/// Parametres de la page Amis : code pre-rempli (lien d'invitation) et messages.
+#[derive(Debug, Deserialize)]
+struct FriendsQuery {
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    ok: Option<String>,
+    #[serde(default)]
+    erreur: Option<String>,
+}
+
+/// Page Amis : cercle, partage, invitations et carte OpenStreetMap.
+async fn friends_page(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Query(query): Query<FriendsQuery>,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let now_ms = state.now_ms();
+    let cercle = crate::friends::payload(&state, &user.id, user.share_live, true).await?;
+    let invitation = crate::db::current_friend_invite(&state.pool, &user.id, now_ms).await?;
+    let content = friends_content(&cercle, invitation, &query);
+    Ok(page(layout("Amis", "amis", Some(&user), content)))
+}
+
+/// Memes donnees que la page, en JSON : la carte les relit toutes les dix
+/// secondes sans recharger la page, et un outil externe peut les consommer.
+async fn friends_json(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(StatusCode::UNAUTHORIZED.into_response());
+    };
+    let cercle = crate::friends::payload(&state, &user.id, user.share_live, true).await?;
+    Ok(Json(cercle).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct ShareForm {
+    /// "1" pour partager, "0" pour couper.
+    #[serde(default)]
+    share_live: Option<String>,
+}
+
+/// Active ou coupe le partage de sa position.
+async fn friends_share_submit(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Form(form): Form<ShareForm>,
+) -> AppResult<Response> {
+    let partage = matches!(
+        form.share_live.as_deref(),
+        Some("1") | Some("true") | Some("on")
+    );
+    crate::db::set_share_live(&state.pool, &user.id, partage).await?;
+    tracing::info!(user = %user.email, partage, "partage en direct regle depuis le web");
+    let code = if partage { "partage" } else { "partage_coupe" };
+    Ok(Redirect::to(&format!("/amis?ok={code}")).into_response())
+}
+
+/// Genere un nouveau code d'invitation (l'ancien reste valable jusqu'a expiration).
+async fn friends_invite_submit(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Response> {
+    let now_ms = state.now_ms();
+    for _ in 0..6 {
+        let code = crate::friends::normalize_invite_code(&crate::friends::generate_invite_code());
+        let expiration = now_ms + crate::friends::INVITE_TTL_MS;
+        if crate::db::insert_friend_invite(&state.pool, &code, &user.id, now_ms, expiration).await?
+        {
+            tracing::info!(user = %user.email, "code d'invitation emis depuis le web");
+            return Ok(Redirect::to("/amis?ok=invitation").into_response());
+        }
+    }
+    Ok(Redirect::to("/amis?erreur=generation").into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct AddFriendForm {
+    #[serde(default)]
+    code: String,
+}
+
+/// Accepte un code d'invitation saisi a la main.
+async fn friends_add_submit(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Form(form): Form<AddFriendForm>,
+) -> AppResult<Response> {
+    if !crate::friends::is_invite_code(&form.code) {
+        return Ok(Redirect::to("/amis?erreur=invalide").into_response());
+    }
+    let code = crate::friends::normalize_invite_code(&form.code);
+    let destination = match crate::db::accept_friend_invite(
+        &state.pool,
+        &code,
+        &user.id,
+        state.now_ms(),
+    )
+    .await?
+    {
+        InviteOutcome::Accepted(_) => {
+            tracing::info!(user = %user.email, "amitie creee depuis le web");
+            "/amis?ok=ajout"
+        }
+        InviteOutcome::Unknown => "/amis?erreur=inconnu",
+        InviteOutcome::Expired => "/amis?erreur=expire",
+        InviteOutcome::SelfInvite => "/amis?erreur=propre",
+        InviteOutcome::TooMany => "/amis?erreur=plein",
+    };
+    Ok(Redirect::to(destination).into_response())
+}
+
+/// Retire un ami : plus aucune position ne circule entre les deux comptes.
+async fn friends_remove_submit(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    crate::db::remove_friendship(&state.pool, &user.id, &id).await?;
+    tracing::info!(user = %user.email, ami = %id, "amitie retiree depuis le web");
+    Ok(Redirect::to("/amis?ok=retire").into_response())
+}
+
+/// Contenu de la page Amis.
+fn friends_content(
+    cercle: &crate::friends::CirclePayload,
+    invitation: Option<(String, i64)>,
+    query: &FriendsQuery,
+) -> Markup {
+    let en_direct = cercle.live;
+    html! {
+        section class="hero" {
+            h1 { "Amis" }
+            p class="muted" {
+                "Pendant une seance, votre montre (ou votre telephone) peut publier sa "
+                "position sur le broker MQTT. Cette page decide qui la voit : un petit "
+                "cercle d'amis, ajoutes par un code court, et rien d'autre."
+            }
+            @if let Some(ok) = query.ok.as_deref() {
+                p class="alert ok" { (friends_ok_message(ok)) }
+            }
+            @if let Some(erreur) = query.erreur.as_deref() {
+                p class="alert" { (friends_error_message(erreur)) }
+            }
+        }
+
+        section class="panel" id="partage" {
+            div class="section-head" {
+                h2 { "Mon partage" }
+                span class={ "pill " (if cercle.share_live { "on" } else { "off" }) } {
+                    (if cercle.share_live { "actif" } else { "coupe" })
+                }
+            }
+            p class="tiny muted" {
+                "Seules les seances en cours sont partagees : une trace terminee, un "
+                "appareil muet depuis cinq minutes ou un appareil non reconnu ne sortent "
+                "jamais du serveur. Vos seances archivees restent privees."
+            }
+            form method="post" action="/amis/partage" {
+                input type="hidden" name="share_live" value=(if cercle.share_live { "0" } else { "1" });
+                button type="submit" class="button" {
+                    (if cercle.share_live { "Couper le partage" } else { "Partager ma position" })
+                }
+            }
+        }
+
+        section class="panel" id="invitation" {
+            div class="section-head" { h2 { "Inviter un ami" } }
+            p class="tiny muted" {
+                "Donnez ce code a la personne a ajouter : elle le saisit dans son "
+                "application (onglet Amis) ou sur cette page. Usage unique, valable 24 h."
+            }
+            @if let Some((code, expiration)) = invitation {
+                p class="code-invitation" id="code-invitation" { (crate::friends::format_invite_code(&code)) }
+                p class="tiny muted" {
+                    "Valable jusqu'au " (date_courte(expiration)) "."
+                }
+                p class="tiny" {
+                    "Lien a envoyer : " code { (crate::friends::invite_url(&cercle.public_url, &code)) }
+                }
+                div class="actions" {
+                    button type="button" class="button ghost" data-copier="#code-invitation" { "Copier" }
+                }
+            } @else {
+                p { "Aucun code en cours." }
+            }
+            form method="post" action="/amis/invitation" {
+                button type="submit" class="button ghost" { "Generer un nouveau code" }
+            }
+        }
+
+        section class="card form" id="ajouter" {
+            h2 { "Ajouter un ami" }
+            form method="post" action="/amis/ajouter" {
+                label for="code" { "Code recu" }
+                input id="code" name="code" required autocomplete="off" autocapitalize="characters"
+                      placeholder="BCDF-GHJK" value=(query.code.clone().unwrap_or_default());
+                button type="submit" { "Ajouter" }
+            }
+        }
+
+        section class="panel" id="carte" {
+            div class="section-head" {
+                h2 { "Carte" }
+                span class="pill brand" { (en_direct) " en direct" }
+            }
+            p class="tiny muted" {
+                "Fond de carte OpenStreetMap. Les positions se rafraichissent toutes les "
+                "dix secondes, la trace s'affiche pendant la seance."
+            }
+            div id="carte-amis" class="carte-vue" data-carte="1" data-source="/amis.json"
+                data-periode="10000" data-zoom="13" {}
+            noscript {
+                p class="tiny muted" {
+                    "La carte demande JavaScript ; les positions et leurs liens restent "
+                    "lisibles dans la liste ci-dessous."
+                }
+            }
+            script src="/static/map.js" defer {}
+        }
+
+        section class="panel" id="cercle" {
+            div class="section-head" {
+                h2 { "Mon cercle" }
+                span class="pill" { (cercle.total) " ami(s)" }
+            }
+            @if cercle.friends.is_empty() {
+                section class="empty" {
+                    span class="icon icon-user" {}
+                    p { "Personne pour l'instant." }
+                    p class="tiny muted" {
+                        "Generez un code ci-dessus et envoyez-le : l'amitie se fait dans les "
+                        "deux sens, des le premier ajout."
+                    }
+                }
+            } @else {
+                @for ami in &cercle.friends {
+                    (friend_card(ami, cercle.now_ms))
+                }
+            }
+        }
+    }
+}
+
+/// Fiche d'un ami : etat, chiffres de la seance en cours et lien OpenStreetMap.
+fn friend_card(ami: &crate::friends::FriendView, now_ms: i64) -> Markup {
+    let (classe, libelle) = match ami.live.as_ref() {
+        Some(position) => match position.state.as_str() {
+            "pause" => ("brand", "en pause"),
+            "arm" => ("off", "pret"),
+            _ => ("on", "en direct"),
+        },
+        None if ami.sharing => ("off", "au repos"),
+        None => ("off", "ne partage pas"),
+    };
+    html! {
+        section class="card live-card" {
+            div class="section-head" {
+                h2 { (ami.name) }
+                div class="pill-group" {
+                    span class={ "pill " (classe) } { (libelle) }
+                    @if ami.live.is_some() {
+                        span class="pill" { (ami.live.as_ref().map(|p| p.device.clone()).unwrap_or_default()) }
+                    }
+                }
+            }
+            p class="tiny muted" { (ami.email) }
+            @if let Some(position) = ami.live.as_ref() {
+                div class="mini-cards" {
+                    (mini_card("Distance", &option_distance(position.distance_m)))
+                    (mini_card("Allure", &format_pace(position.pace_s_per_km)))
+                    (mini_card("Cardio", &option_bpm(position.heart_rate_bpm)))
+                    (mini_card("Batterie", &option_percent(position.battery_percent)))
+                    (mini_card("Tour", &position.lap.map(|tour| tour.to_string()).unwrap_or_else(|| "-".to_string())))
+                    (mini_card("Precision", &option_accuracy(position.accuracy_m)))
+                }
+                div class="live-foot" {
+                    p class="tiny muted" {
+                        "Derniere position " (since_label(now_ms - position.last_ms)) " - "
+                        (format!("{:.5}, {:.5}", position.lat, position.lon))
+                    }
+                    a class="button ghost" href=(osm_url(position.lat, position.lon))
+                      target="_blank" rel="noopener noreferrer" { "Voir sur OpenStreetMap" }
+                }
+            } @else if ami.sharing {
+                p class="tiny muted" { "Partage actif, aucune seance en cours." }
+            } @else {
+                p class="tiny muted" {
+                    "Cette personne a coupe le partage : aucune position n'est lue, meme par ses amis."
+                }
+            }
+            form method="post" action=(format!("/amis/{}/retirer", ami.id)) data-confirm="Retirer cet ami ? Aucune position ne circulera plus entre vous." {
+                button type="submit" class="button ghost danger" { "Retirer" }
+            }
+        }
+    }
+}
+
+/// Message de confirmation (code court dans l'URL, phrase ici).
+fn friends_ok_message(code: &str) -> &'static str {
+    match code {
+        "partage" => "Partage active : vos amis voient votre position pendant vos seances.",
+        "partage_coupe" => "Partage coupe : plus aucune position ne sort de votre compte.",
+        "ajout" => "Ami ajoute : vous partagez desormais vos positions en direct.",
+        "invitation" => "Nouveau code d'invitation genere.",
+        "retire" => "Ami retire : plus aucune position ne circule entre vous.",
+        _ => "C'est fait.",
+    }
+}
+
+/// Message d'erreur lisible pour un code court.
+fn friends_error_message(code: &str) -> &'static str {
+    match code {
+        "invalide" => "Ce code n'a pas la bonne forme : huit caracteres, du type BCDF-GHJK.",
+        "inconnu" => "Code inconnu ou deja utilise : demandez-en un nouveau a votre ami.",
+        "expire" => "Ce code a expire : demandez-en un nouveau a votre ami.",
+        "propre" => "C'est votre propre code : envoyez-le a la personne a ajouter.",
+        "plein" => "Votre cercle est plein.",
+        "generation" => "Impossible de generer un code pour l'instant : reessayez.",
+        _ => "L'operation a echoue.",
+    }
+}
+
+/// Date courte et locale pour l'expiration d'un code.
+fn date_courte(timestamp_ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(timestamp_ms)
+        .map(|instant| {
+            instant
+                .with_timezone(&chrono::Local)
+                .format("%d/%m a %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| "-".to_string())
+}
+
+#[cfg(test)]
+mod friends_web_tests {
+    use super::*;
+    use crate::friends::{FriendLive, FriendView};
+
+    fn cercle(live: Option<FriendLive>, sharing: bool) -> crate::friends::CirclePayload {
+        crate::friends::CirclePayload {
+            now_ms: 10_000,
+            public_url: "https://mpacer.test".to_string(),
+            share_live: true,
+            total: 1,
+            live: if live.is_some() { 1 } else { 0 },
+            me: None,
+            friends: vec![FriendView {
+                id: "u2".to_string(),
+                name: "Joseph".to_string(),
+                email: "joseph@example.org".to_string(),
+                picture_url: None,
+                since_ms: 1_000,
+                sharing,
+                live,
+            }],
+        }
+    }
+
+    fn position() -> FriendLive {
+        FriendLive {
+            device: "montre-a1b2".to_string(),
+            state: "run".to_string(),
+            lat: 48.85,
+            lon: 2.35,
+            accuracy_m: Some(4.0),
+            last_ms: 8_000,
+            age_s: 2,
+            distance_m: Some(1_200.0),
+            pace_s_per_km: Some(300.0),
+            heart_rate_bpm: Some(148),
+            battery_percent: Some(76),
+            lap: Some(2),
+            trace: vec![[48.85, 2.35]],
+        }
+    }
+
+    fn requete() -> FriendsQuery {
+        FriendsQuery {
+            code: None,
+            ok: None,
+            erreur: None,
+        }
+    }
+
+    #[test]
+    fn the_page_shows_the_circle_and_the_map() {
+        let markup =
+            friends_content(&cercle(Some(position()), true), None, &requete()).into_string();
+        assert!(markup.contains("Joseph"), "{markup}");
+        assert!(markup.contains("en direct"), "{markup}");
+        assert!(markup.contains("1.20 km"), "{markup}");
+        assert!(markup.contains("5:00"), "{markup}");
+        assert!(markup.contains("data-carte"), "{markup}");
+        assert!(markup.contains("/static/map.js"), "{markup}");
+        assert!(
+            markup.contains("openstreetmap.org/?mlat=48.850000"),
+            "{markup}"
+        );
+        assert!(
+            markup.contains("OpenStreetMap"),
+            "attribution exigee : {markup}"
+        );
+    }
+
+    #[test]
+    fn a_friend_who_does_not_share_is_shown_as_such() {
+        let markup = friends_content(&cercle(None, false), None, &requete()).into_string();
+        assert!(markup.contains("ne partage pas"), "{markup}");
+        assert!(!markup.contains("openstreetmap.org"), "{markup}");
+    }
+
+    #[test]
+    fn an_invitation_code_is_shown_with_its_link() {
+        let markup = friends_content(
+            &cercle(None, true),
+            Some((
+                "BCDFGHJK".to_string(),
+                10_000 + crate::friends::INVITE_TTL_MS,
+            )),
+            &requete(),
+        )
+        .into_string();
+        assert!(markup.contains("BCDF-GHJK"), "{markup}");
+        assert!(markup.contains("data-copier"), "{markup}");
+        assert!(markup.contains("/amis/invitation"), "{markup}");
+    }
+
+    #[test]
+    fn messages_are_written_in_plain_french() {
+        assert!(friends_ok_message("ajout").contains("Ami ajoute"));
+        assert!(friends_ok_message("inconnu").contains("C'est fait"));
+        assert!(friends_error_message("inconnu").contains("Code inconnu"));
+        assert!(friends_error_message("propre").contains("votre propre code"));
+    }
+}
+
 #[cfg(test)]
 mod music_web_tests {
     use super::*;
@@ -5657,8 +6458,11 @@ mod navigation_web_tests {
     fn the_header_tabs_include_settings_and_the_dropdown_is_gone() {
         // Reglages est un onglet comme les autres (docs/07 section 10.3) : plus
         // de menu deroulant, l'appairage et les jetons vivent sur /settings.
-        assert_eq!(NAV.len(), 8);
+        assert_eq!(NAV.len(), 9);
         assert!(NAV.iter().any(|(cle, ..)| *cle == "live"));
+        assert!(NAV
+            .iter()
+            .any(|(cle, libelle, ..)| *cle == "amis" && *libelle == "Amis"));
         assert!(NAV.iter().any(|(cle, ..)| *cle == "dashboards"));
         assert!(NAV
             .iter()
@@ -5673,6 +6477,7 @@ mod navigation_web_tests {
         let user = User {
             id: "u1".into(),
             google_sub: None,
+            share_live: true,
             email: "coureur@example.org".into(),
             name: Some("Coureur".into()),
             picture_url: None,
@@ -5837,5 +6642,228 @@ mod live_web_tests {
         let markup = live_content(&[], &MqttStatus::default(), &config(), 1_000).into_string();
         assert!(markup.contains("Aucune position recue"), "{markup}");
         assert!(!markup.contains("<polyline"), "{markup}");
+    }
+}
+
+/// Analyse de trace a la VisuGPX : carte, profil altimetrique, reglages.
+#[cfg(test)]
+mod workout_web_tests {
+    use super::*;
+    use mpacer_core::analysis::ElevationOptions;
+    use mpacer_core::best_distances::TrackPoint;
+
+    /// 10 km en pente reguliere de 2 %, un point tous les 25 m.
+    fn trace() -> Vec<TrackPoint> {
+        (0..=400)
+            .map(|i| {
+                let distance = i as f64 * 25.0;
+                TrackPoint {
+                    t_ms: i as i64 * 10_000,
+                    dist_m: distance,
+                    lat: 44.84 + distance / 200_000.0,
+                    lon: -0.57 + distance / 300_000.0,
+                    elevation_m: Some(10.0 + distance * 0.02),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_map_payload_marks_the_kilometres() {
+        let (trace, markers) = map_payload(&trace(), UnitSystem::Metric);
+        let trace: serde_json::Value = serde_json::from_str(&trace).unwrap();
+        assert_eq!(trace.as_array().unwrap().len(), 401);
+        let markers: serde_json::Value = serde_json::from_str(&markers).unwrap();
+        let markers = markers.as_array().unwrap();
+        // Depart, dix kilometres, arrivee.
+        assert_eq!(markers.len(), 12, "{markers:?}");
+        assert_eq!(markers[0]["nom"], "Depart");
+        assert_eq!(markers[1]["nom"], "1 km");
+        assert_eq!(markers[markers.len() - 1]["nom"], "Arrivee");
+        // Les coordonnees restent dans l'ordre latitude, longitude.
+        assert!((markers[1]["lat"].as_f64().unwrap() - 44.845).abs() < 0.001);
+    }
+
+    #[test]
+    fn a_track_without_gps_has_no_map_payload() {
+        let (trace, markers) = map_payload(&[], UnitSystem::Metric);
+        assert!(trace.is_empty() && markers.is_empty());
+    }
+
+    #[test]
+    fn elevation_options_are_clamped() {
+        let extremes = WorkoutQuery {
+            seuil: Some(500.0),
+            lissage: Some(0),
+        }
+        .elevation_options();
+        assert_eq!(extremes.threshold_m, 100.0);
+        assert_eq!(extremes.smoothing_points, 1);
+
+        let defaults = WorkoutQuery {
+            seuil: None,
+            lissage: None,
+        }
+        .elevation_options();
+        assert_eq!(defaults, ElevationOptions::default());
+        assert_eq!(defaults.threshold_m, 10.0);
+        assert_eq!(defaults.smoothing_points, 5);
+    }
+
+    #[test]
+    fn slope_classes_follow_the_grade() {
+        assert_eq!(slope_class(-0.10), "down2");
+        assert_eq!(slope_class(-0.03), "down1");
+        assert_eq!(slope_class(0.0), "flat");
+        assert_eq!(slope_class(0.04), "up1");
+        assert_eq!(slope_class(0.09), "up2");
+    }
+
+    #[test]
+    fn the_profile_chart_colours_the_slopes() {
+        let markup =
+            elevation_profile_chart(&trace(), ElevationOptions::default(), UnitSystem::Metric)
+                .into_string();
+        assert!(markup.contains("chart profile"), "{markup}");
+        // Une portion par intervalle de points, avec son infobulle.
+        assert!(markup.contains("slope up1"), "{markup}");
+        assert!(markup.contains("<title>"), "{markup}");
+        assert!(
+            markup.contains("2.00 %") || markup.contains("+2.0 %"),
+            "{markup}"
+        );
+    }
+
+    #[test]
+    fn speeds_are_formatted_per_unit_system() {
+        assert_eq!(format_speed(3.0, UnitSystem::Metric), "10.8 km/h");
+        assert_eq!(format_speed(3.0, UnitSystem::Imperial), "6.7 mi/h");
+    }
+
+    /// Seance complete : 10 km a 333 s/km, 2 % de pente, une pause de 30 s.
+    fn seance() -> mpacer_core::history::WorkoutSummary {
+        use mpacer_core::analysis::Pause;
+        use mpacer_core::cardio::HeartRateSample;
+        use mpacer_core::history::WorkoutSummary;
+        use mpacer_core::lap::Lap;
+
+        // Un point par seconde, 3 m par point : une trace de 10 km a 3 m/s.
+        let track: Vec<TrackPoint> = (0..=3333)
+            .map(|i| {
+                let distance = i as f64 * 3.0;
+                TrackPoint {
+                    t_ms: i as i64 * 1000,
+                    dist_m: distance,
+                    lat: 44.84 + distance / 200_000.0,
+                    lon: -0.57 + distance / 300_000.0,
+                    // 5 % de pente : les portions comptent pour le denivele horaire.
+                    elevation_m: Some(10.0 + distance * 0.05),
+                }
+            })
+            .collect();
+        WorkoutSummary {
+            id: "1700000000123".into(),
+            started_at_ms: 1_700_000_000_000,
+            duration_s: 3333.0,
+            distance_m: 9999.0,
+            average_pace_s_per_km: 333.3,
+            laps: (1..=10)
+                .map(|index| Lap {
+                    index,
+                    distance_m: 999.9,
+                    duration_s: 333.3,
+                    pace_s_per_km: 333.3,
+                })
+                .collect(),
+            best_efforts: vec![],
+            track,
+            unit_system: UnitSystem::Metric,
+            elapsed_s: 3363.0,
+            pauses: vec![Pause {
+                at_s: 1500.0,
+                at_distance_m: 4500.0,
+                duration_s: 30.0,
+                automatic: true,
+            }],
+            heart_rate: (0..40)
+                .map(|i| HeartRateSample {
+                    t_ms: (i as i64) * 90_000,
+                    bpm: 140 + (i % 5) as u16,
+                })
+                .collect(),
+            plan: None,
+        }
+    }
+
+    fn ligne_de_seance() -> crate::models::WorkoutRow {
+        crate::models::WorkoutRow {
+            id: "1700000000123".to_string(),
+            started_at_ms: 1_700_000_000_000,
+            duration_s: 3_333.0,
+            distance_m: 10_000.0,
+            average_pace_s_per_km: 333.3,
+            unit_system: "metric".to_string(),
+            uploaded_at_ms: 1_700_000_100_000,
+            comment: Some("Belle sortie".to_string()),
+        }
+    }
+
+    #[test]
+    fn the_workout_page_shows_the_visugpx_analysis() {
+        let markup = workout_content(
+            &ligne_de_seance(),
+            Some(seance()),
+            &WorkoutQuery {
+                seuil: Some(5.0),
+                lissage: Some(3),
+            },
+        )
+        .into_string();
+        // Carte interactive : trace et reperes de kilometre.
+        assert!(markup.contains("carte-seance"), "{markup}");
+        assert!(markup.contains("data-trace="), "{markup}");
+        assert!(markup.contains("data-reperes="), "{markup}");
+        assert!(markup.contains("/static/map.js"), "{markup}");
+        assert!(markup.contains("OpenStreetMap"), "{markup}");
+        // Profil altimetrique colore, aux reglages demandes.
+        assert!(markup.contains("chart profile"), "{markup}");
+        assert!(markup.contains("slope up1"), "{markup}");
+        assert!(
+            markup.contains("seuil de 5 m, lissage sur 3 points"),
+            "{markup}"
+        );
+        // Statistiques reprises de VisuGPX.
+        assert!(markup.contains("Vitesse max"), "{markup}");
+        assert!(markup.contains("Denivele + / -"), "{markup}");
+        assert!(markup.contains("Altitude min / max"), "{markup}");
+        assert!(markup.contains("Denivele horaire +"), "{markup}");
+        assert!(markup.contains("Denivele horaire des portions"), "{markup}");
+        assert!(markup.contains("Depart / arrivee"), "{markup}");
+        assert!(markup.contains("Points GPS"), "{markup}");
+        // La pause apparait dans le tableau des tours.
+        assert!(markup.contains("<th>Pause</th>"), "{markup}");
+        // Les deux exports sont proposes.
+        assert!(markup.contains("/workouts/1700000000123/gpx"), "{markup}");
+        assert!(markup.contains("/workouts/1700000000123/kml"), "{markup}");
+    }
+
+    #[test]
+    fn a_workout_without_altitude_keeps_the_page_readable() {
+        let mut seance = seance();
+        for point in &mut seance.track {
+            point.elevation_m = None;
+        }
+        let markup = workout_content(
+            &ligne_de_seance(),
+            Some(seance),
+            &WorkoutQuery {
+                seuil: None,
+                lissage: None,
+            },
+        )
+        .into_string();
+        assert!(markup.contains("Vitesse max"), "{markup}");
+        assert!(!markup.contains("Profil altimetrique"), "{markup}");
+        assert!(!markup.contains("Denivele horaire"), "{markup}");
     }
 }

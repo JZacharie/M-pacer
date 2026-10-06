@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
 /// Alphabet sans caracteres ambigus (pas de O/0, I/1, voyelles).
-const ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ23456789";
+/// Partage avec les codes d'invitation d'amis ([crate::friends]) : un seul
+/// alphabet dans tout le service, donc une seule habitude de lecture.
+pub(crate) const ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ23456789";
 
 /// Demande de code.
 #[derive(Debug, Clone, Deserialize)]

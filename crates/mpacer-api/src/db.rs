@@ -4,10 +4,11 @@
 //! valeur n'est concatenee dans le SQL, donc aucune injection possible.
 
 use crate::config::Config;
+use crate::friends::{InviteOutcome, MAX_FRIENDS};
 use crate::models::{
-    ApiToken, DeezerAccount, ImportedRaceMeta, MusicPlaylist, MusicPlaylistInput,
-    MusicPlaylistSummary, MusicTrack, MusicTrackInput, Race, RaceInput, RaceTask, SpotifyAccount,
-    User, WorkoutRow,
+    ApiToken, DeezerAccount, FriendRow, ImportedRaceMeta, LiveDeviceRow, MusicPlaylist,
+    MusicPlaylistInput, MusicPlaylistSummary, MusicTrack, MusicTrackInput, Race, RaceInput,
+    RaceTask, SpotifyAccount, User, WorkoutRow,
 };
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{PgPool, Row};
@@ -26,6 +27,8 @@ const SCHEMA_REFERENCES: &str = include_str!("../migrations/0004-references-et-c
 const SCHEMA_DASHBOARDS: &str = include_str!("../migrations/0005-tableaux-de-bord.sql");
 /// Sources musicales multiples : compte Deezer et identifiant Deezer des playlists.
 const SCHEMA_MUSIC_SOURCES: &str = include_str!("../migrations/0006-sources-musique.sql");
+/// Amis, invitations et appareils revendiques pour le partage en direct.
+const SCHEMA_FRIENDS: &str = include_str!("../migrations/0007-amis.sql");
 
 /// Ouvre le pool et applique le schema (idempotent).
 pub async fn connect(config: &Config) -> anyhow::Result<PgPool> {
@@ -46,6 +49,7 @@ pub async fn connect_with_options(options: PgConnectOptions) -> anyhow::Result<P
     sqlx::raw_sql(SCHEMA_REFERENCES).execute(&pool).await?;
     sqlx::raw_sql(SCHEMA_DASHBOARDS).execute(&pool).await?;
     sqlx::raw_sql(SCHEMA_MUSIC_SOURCES).execute(&pool).await?;
+    sqlx::raw_sql(SCHEMA_FRIENDS).execute(&pool).await?;
     Ok(pool)
 }
 
@@ -1531,4 +1535,269 @@ async fn touch_dashboard(
         .execute(tx)
         .await?;
     Ok(())
+}
+
+// ------------------------------------------------------------------ amis
+
+/// Amis d'un utilisateur, du plus recent au plus ancien.
+pub async fn list_friends(pool: &PgPool, user_id: &str) -> Result<Vec<FriendRow>, sqlx::Error> {
+    sqlx::query_as::<_, FriendRow>(
+        "SELECT u.id, u.name, u.email, u.picture_url, u.share_live,
+                f.created_at_ms AS since_ms
+           FROM friendships f
+           JOIN users u ON u.id = f.friend_id
+          WHERE f.user_id = $1
+          ORDER BY f.created_at_ms DESC, u.email",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Nombre d'amis (garde-fou avant d'en ajouter un).
+pub async fn count_friends(pool: &PgPool, user_id: &str) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT COUNT(*)::bigint FROM friendships WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+}
+
+/// Vrai si les deux comptes sont amis.
+pub async fn are_friends(pool: &PgPool, a: &str, b: &str) -> Result<bool, sqlx::Error> {
+    let existe: Option<i32> =
+        sqlx::query_scalar("SELECT 1 FROM friendships WHERE user_id = $1 AND friend_id = $2")
+            .bind(a)
+            .bind(b)
+            .fetch_optional(pool)
+            .await?;
+    Ok(existe.is_some())
+}
+
+/// Cree l'amitie dans les deux sens (sans erreur si elle existe deja).
+pub async fn add_friendship(
+    pool: &PgPool,
+    a: &str,
+    b: &str,
+    now_ms: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO friendships (user_id, friend_id, created_at_ms)
+         VALUES ($1, $2, $3), ($2, $1, $3)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(a)
+    .bind(b)
+    .bind(now_ms)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Retire un ami : les deux sens d'un coup. `true` si un lien existait.
+pub async fn remove_friendship(pool: &PgPool, a: &str, b: &str) -> Result<bool, sqlx::Error> {
+    let resultat = sqlx::query(
+        "DELETE FROM friendships
+          WHERE (user_id = $1 AND friend_id = $2) OR (user_id = $2 AND friend_id = $1)",
+    )
+    .bind(a)
+    .bind(b)
+    .execute(pool)
+    .await?;
+    Ok(resultat.rows_affected() > 0)
+}
+
+/// Regle l'interrupteur de partage d'un compte.
+pub async fn set_share_live(
+    pool: &PgPool,
+    user_id: &str,
+    partage: bool,
+) -> Result<bool, sqlx::Error> {
+    let resultat = sqlx::query("UPDATE users SET share_live = $1 WHERE id = $2")
+        .bind(partage)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(resultat.rows_affected() > 0)
+}
+
+/// Enregistre un code d'invitation (forme normalisee, sans tiret).
+///
+/// `false` si le code est deja pris : il est tire au hasard, il ne doit jamais
+/// ecraser celui d'un autre compte (l'appelant retire alors un nouveau code).
+pub async fn insert_friend_invite(
+    pool: &PgPool,
+    code: &str,
+    user_id: &str,
+    now_ms: i64,
+    expires_ms: i64,
+) -> Result<bool, sqlx::Error> {
+    let resultat = sqlx::query(
+        "INSERT INTO friend_invites (code, user_id, created_at_ms, expires_at_ms)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (code) DO NOTHING",
+    )
+    .bind(code)
+    .bind(user_id)
+    .bind(now_ms)
+    .bind(expires_ms)
+    .execute(pool)
+    .await?;
+    Ok(resultat.rows_affected() > 0)
+}
+
+/// Dernier code emis par un compte encore valide, s'il y en a un.
+///
+/// La page Amis reaffiche le code en cours plutot que d'en emettre un nouveau a
+/// chaque visite : l'utilisateur peut le laisser ouvert et l'envoyer plus tard.
+pub async fn current_friend_invite(
+    pool: &PgPool,
+    user_id: &str,
+    now_ms: i64,
+) -> Result<Option<(String, i64)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT code, expires_at_ms FROM friend_invites
+          WHERE user_id = $1 AND used_at_ms IS NULL AND expires_at_ms > $2
+          ORDER BY created_at_ms DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .bind(now_ms)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Accepte un code d'invitation : cree l'amitie dans les deux sens.
+///
+/// Tout se joue dans une transaction : un code ne peut pas etre consomme deux
+/// fois, et l'amitie n'existe jamais a moitie.
+pub async fn accept_friend_invite(
+    pool: &PgPool,
+    code: &str,
+    user_id: &str,
+    now_ms: i64,
+) -> Result<InviteOutcome, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let invitation: Option<(String, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT user_id, expires_at_ms, used_at_ms FROM friend_invites
+          WHERE REPLACE(code, '-', '') = $1
+          FOR UPDATE",
+    )
+    .bind(code)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some((proprietaire, expiration, consomme)) = invitation else {
+        tx.rollback().await?;
+        return Ok(InviteOutcome::Unknown);
+    };
+    if consomme.is_some() {
+        tx.rollback().await?;
+        return Ok(InviteOutcome::Unknown);
+    }
+    if expiration <= now_ms {
+        tx.rollback().await?;
+        return Ok(InviteOutcome::Expired);
+    }
+    if proprietaire == user_id {
+        tx.rollback().await?;
+        return Ok(InviteOutcome::SelfInvite);
+    }
+
+    let total: i64 =
+        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM friendships WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if total >= MAX_FRIENDS {
+        tx.rollback().await?;
+        return Ok(InviteOutcome::TooMany);
+    }
+
+    sqlx::query("UPDATE friend_invites SET used_by = $1, used_at_ms = $2 WHERE code = $3")
+        .bind(user_id)
+        .bind(now_ms)
+        .bind(code)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query(
+        "INSERT INTO friendships (user_id, friend_id, created_at_ms)
+         VALUES ($1, $2, $3), ($2, $1, $3)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(user_id)
+    .bind(&proprietaire)
+    .bind(now_ms)
+    .execute(&mut *tx)
+    .await?;
+
+    let ami = sqlx::query_as::<_, FriendRow>(
+        "SELECT u.id, u.name, u.email, u.picture_url, u.share_live,
+                f.created_at_ms AS since_ms
+           FROM friendships f
+           JOIN users u ON u.id = f.friend_id
+          WHERE f.user_id = $1 AND f.friend_id = $2",
+    )
+    .bind(user_id)
+    .bind(&proprietaire)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(InviteOutcome::Accepted(Box::new(ami)))
+}
+
+/// Revendique un appareil pour le partage en direct.
+///
+/// `false` si le nom appartient deja a un autre compte : la position d'un
+/// coureur ne doit jamais apparaitre dans le cercle de quelqu'un d'autre.
+pub async fn claim_live_device(
+    pool: &PgPool,
+    user_id: &str,
+    device: &str,
+    label: Option<&str>,
+    now_ms: i64,
+) -> Result<bool, sqlx::Error> {
+    let resultat = sqlx::query(
+        "INSERT INTO live_devices (device, user_id, label, first_seen_ms, last_seen_ms)
+         VALUES ($1, $2, $3, $4, $4)
+         ON CONFLICT (device) DO UPDATE
+            SET last_seen_ms = EXCLUDED.last_seen_ms,
+                label = COALESCE(EXCLUDED.label, live_devices.label)
+          WHERE live_devices.user_id = EXCLUDED.user_id",
+    )
+    .bind(device)
+    .bind(user_id)
+    .bind(label)
+    .bind(now_ms)
+    .execute(pool)
+    .await?;
+    Ok(resultat.rows_affected() > 0)
+}
+
+/// Oublie les appareils muets depuis plus de [SESSION_TTL] (mise au propre).
+pub async fn prune_live_devices(pool: &PgPool, before_ms: i64) -> Result<u64, sqlx::Error> {
+    let resultat = sqlx::query("DELETE FROM live_devices WHERE last_seen_ms < $1")
+        .bind(before_ms)
+        .execute(pool)
+        .await?;
+    Ok(resultat.rows_affected())
+}
+
+/// Appareils revendiques par une liste de comptes (amis d'un cercle).
+pub async fn list_live_devices(
+    pool: &PgPool,
+    user_ids: &[String],
+) -> Result<Vec<LiveDeviceRow>, sqlx::Error> {
+    if user_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    sqlx::query_as::<_, LiveDeviceRow>(
+        "SELECT device, user_id, label, last_seen_ms
+           FROM live_devices
+          WHERE user_id = ANY($1)
+          ORDER BY last_seen_ms DESC",
+    )
+    .bind(user_ids)
+    .fetch_all(pool)
+    .await
 }

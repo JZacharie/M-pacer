@@ -38,7 +38,14 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Mpacer">
+        android:theme="@style/Theme.Mpacer"
+        android:usesCleartextTraffic="true">
+        <!-- HTTP en clair autorise : le backend est auto-heberge et vit le plus
+             souvent sur le reseau local (la valeur par defaut est
+             http://10.0.2.2:8080). Depuis Android 9, sans cette autorisation, la
+             synchronisation, le suivi et la carte OpenStreetMap de l'onglet Amis
+             ne fonctionneraient que derriere HTTPS. Aucun secret ne transite :
+             mot de passe du broker et jeton d'appairage restent chiffres. -->
 
         <activity
             android:name=".MainActivity"

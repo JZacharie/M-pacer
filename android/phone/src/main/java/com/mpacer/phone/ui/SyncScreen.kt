@@ -46,7 +46,7 @@ import kotlinx.coroutines.launch
  * approbation. Le jeton reste chiffre dans le socle, jamais en clair.
  */
 @Composable
-fun SyncScreen() {
+fun SyncScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by SyncClient.state.collectAsState()
@@ -62,6 +62,7 @@ fun SyncScreen() {
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text("Synchronisation", fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = Palette.texte)
+        TextButton(onClick = onBack) { Text("Retour aux reglages") }
 
         Card(colors = CardDefaults.cardColors(containerColor = Palette.surface)) {
             Column(

@@ -60,6 +60,7 @@ fun SettingsScreen(
     probeState: ProbeState,
     onSettingsChange: (PhoneSettings) -> Unit,
     onTestLive: (LiveConfig) -> Unit,
+    onOuvrirSync: () -> Unit,
 ) {
     val context = LocalContext.current
     val scan by BleHeartRateScanner.state.collectAsState()
@@ -75,6 +76,25 @@ fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text("Reglages", fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = Palette.texte)
+
+        // ------------------------------------------------- compte et backend
+        Section("Compte et synchronisation") {
+            Text(
+                "Appairez l'appareil pour envoyer vos seances et partager votre position " +
+                    "avec vos amis (onglet Amis).",
+                color = Palette.muted,
+                fontSize = 12.sp,
+            )
+            Button(
+                onClick = onOuvrirSync,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Palette.orange,
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text("Synchronisation et backend")
+            }
+        }
 
         // ------------------------------------------------------------ assistant
         Section("Assistant de course") {

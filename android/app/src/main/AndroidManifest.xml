@@ -25,7 +25,12 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.DeviceDefault">
+        android:theme="@android:style/Theme.DeviceDefault"
+        android:usesCleartextTraffic="true">
+        <!-- HTTP en clair autorise : le backend auto-heberge vit souvent sur le
+             reseau local (valeur par defaut http://10.0.2.2:8080). Le suivi MQTT
+             utilise des sockets brutes, non concernees ; c'est la synchronisation
+             des seances qui exige cette autorisation. -->
 
         <uses-library
             android:name="com.google.android.wearable"

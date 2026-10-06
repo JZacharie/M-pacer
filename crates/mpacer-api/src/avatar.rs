@@ -231,6 +231,7 @@ mod tests {
         User {
             id: id.to_string(),
             google_sub: None,
+            share_live: true,
             email: email.to_string(),
             name: name.map(str::to_string),
             picture_url: None,

@@ -34,12 +34,19 @@ data class LiveConfig(
     /** Vrai si le suivi en direct est reellement actif. */
     val configured: Boolean get() = enabled && url.isNotBlank()
 
-    /** Sujet publie par la montre. */
+    /**
+     * Nom d'appareil effectivement publie : il apparait dans le sujet MQTT et
+     * c'est lui que l'application revendique aupres du backend pour le partage
+     * entre amis (voir [com.mpacer.core.social.FriendsClient]). Une seule
+     * definition, donc un sujet et une revendication toujours d'accord.
+     */
+    fun deviceName(deviceId: String): String =
+        device.trim().replace(' ', '-').ifBlank { deviceId }
+
+    /** Sujet publie par l'appareil. */
     fun topic(deviceId: String): String {
         val prefixe = topicPrefix.trim().trimEnd('/').ifBlank { "mpacer" }
-        val brut = device.trim().ifBlank { deviceId }
-        val nom = brut.trim().replace(' ', '-')
-        return prefixe + "/live/" + nom
+        return prefixe + "/live/" + deviceName(deviceId)
     }
 
     /** Periode effective, pause comprise, bornes appliquees. */

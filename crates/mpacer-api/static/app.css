@@ -1080,6 +1080,63 @@ hr { border: none; border-top: 1px solid var(--border); margin: 22px 0; }
 .chart .trace.cardio { stroke: var(--info); }
 .chart .trace.elevation { stroke: var(--muted); }
 
+/* Profil altimetrique : chaque portion porte la couleur de sa pente, comme le
+   profil de VisuGPX. Le trait garde une epaisseur constante malgre le viewBox. */
+.chart .slope {
+  fill: none;
+  stroke-width: 2.2;
+  vector-effect: non-scaling-stroke;
+}
+.chart .slope.down2 { stroke: #1c6fb8; }
+.chart .slope.down1 { stroke: #4a9fd8; }
+.chart .slope.flat { stroke: #8a9199; }
+.chart .slope.up1 { stroke: #e8a13a; }
+.chart .slope.up2 { stroke: #c2452d; }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 12.5px;
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.legend-item::before {
+  content: "";
+  width: 12px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--legend, var(--muted));
+}
+.legend-item.pace { --legend: var(--orange); }
+.legend-item.cardio { --legend: var(--info); }
+.legend-item.elevation { --legend: var(--muted); }
+.legend-item.slope-down2 { --legend: #1c6fb8; }
+.legend-item.slope-down1 { --legend: #4a9fd8; }
+.legend-item.slope-flat { --legend: #8a9199; }
+.legend-item.slope-up1 { --legend: #e8a13a; }
+.legend-item.slope-up2 { --legend: #c2452d; }
+
+/* Reglages de calcul du denivele, sur la fiche de seance. */
+.profile-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+  margin-top: 12px;
+}
+.profile-options label {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.profile-options input { width: 96px; }
+
 /* Les bandes de fond des graphiques multi-courbes restent des fonds : elles ne
    prennent ni la couleur des barres ni l'animation de croissance. */
 .chart rect.band {
@@ -1334,6 +1391,179 @@ hr { border: none; border-top: 1px solid var(--border); margin: 22px 0; }
 
 .live-foot p { margin: 0; }
 
+/* ---------------------------------------------------------------- amis */
+/* Carte OpenStreetMap maison (static/map.js) : tuiles, marqueurs, traces. */
 
+.code-invitation {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  color: var(--text);
+  margin: 6px 0 2px;
+}
 
+.pill-group {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
 
+.carte-vue {
+  position: relative;
+  height: 340px;
+  margin-top: 6px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+}
+
+.carte-vue.deplacement { cursor: grabbing; }
+
+.carte-fond,
+.carte-calque {
+  position: absolute;
+  inset: 0;
+}
+
+.carte-calque { pointer-events: none; }
+
+.carte-tuile {
+  position: absolute;
+  width: 256px;
+  height: 256px;
+  max-width: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.carte-marqueur {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.carte-point {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, .9);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .45);
+}
+
+.carte-marqueur.moi .carte-point {
+  width: 16px;
+  height: 16px;
+  border-color: #ffffff;
+}
+
+.carte-marqueur.immobile .carte-point { opacity: .55; }
+
+.carte-etiquette {
+  font-size: 11.5px;
+  line-height: 1.2;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(11, 13, 16, .82);
+  color: #f3f5f8;
+  border: 1px solid rgba(255, 255, 255, .12);
+}
+
+.carte-attribution {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  z-index: 3;
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 8px;
+  background: rgba(11, 13, 16, .78);
+  color: #d5dae2;
+}
+
+.carte-attribution a { color: #d5dae2; text-decoration: underline; }
+
+.carte-commandes {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.carte-commandes button {
+  width: 34px;
+  min-height: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 10px;
+  font-size: 16px;
+  line-height: 1;
+  background: rgba(11, 13, 16, .82);
+  color: #f3f5f8;
+  border: 1px solid rgba(255, 255, 255, .14);
+}
+
+.carte-message {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: rgba(11, 13, 16, .7);
+  padding: 6px 10px;
+  border-radius: 10px;
+  pointer-events: none;
+}
+
+.carte-message:empty { display: none; }
+
+/* Fiche de seance : la carte de la trace est plus haute, et les reperes de
+   distance restent lisibles sans masquer le trace. */
+.carte-seance { height: 420px; }
+
+.carte-repere {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.carte-repere-point {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #fc4c02;
+  border: 1.5px solid rgba(255, 255, 255, .9);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .4);
+}
+
+.carte-repere-nom {
+  font-size: 10px;
+  line-height: 1.1;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(11, 13, 16, .72);
+  color: #eef1f5;
+}
+
+@media (max-width: 520px) {
+  .carte-vue { height: 280px; }
+  .carte-seance { height: 320px; }
+  .code-invitation { font-size: 24px; }
+}

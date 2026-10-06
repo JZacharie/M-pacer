@@ -12,6 +12,45 @@ pub struct User {
     pub picture_url: Option<String>,
     pub created_at_ms: i64,
     pub last_seen_ms: i64,
+    /// Vrai si le compte partage sa position en direct avec ses amis.
+    #[serde(default = "default_share_live")]
+    pub share_live: bool,
+}
+
+/// Valeur par defaut d'un compte sans reglage explicite : le partage est actif
+/// des qu'un ami est ajoute, l'utilisateur peut le couper depuis la page Amis.
+fn default_share_live() -> bool {
+    true
+}
+
+/// Ami d'un utilisateur, avec l'anciennete de l'amitie.
+#[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
+pub struct FriendRow {
+    pub id: String,
+    pub name: Option<String>,
+    pub email: String,
+    pub picture_url: Option<String>,
+    pub share_live: bool,
+    pub since_ms: i64,
+}
+
+impl FriendRow {
+    /// Nom affichable : le nom Google, sinon l'adresse.
+    pub fn display_name(&self) -> String {
+        self.name
+            .clone()
+            .filter(|nom| !nom.trim().is_empty())
+            .unwrap_or_else(|| self.email.clone())
+    }
+}
+
+/// Appareil revendique par un compte pour publier sa position en direct.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct LiveDeviceRow {
+    pub device: String,
+    pub user_id: String,
+    pub label: Option<String>,
+    pub last_seen_ms: i64,
 }
 
 /// Jeton d'appareil (montre) tel qu'expose a l'interface.

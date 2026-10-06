@@ -588,6 +588,17 @@ async fn google_login_creates_a_session_and_dashboard() {
     assert_eq!(response.status(), StatusCode::OK);
     assert!(body_text(response).await.contains("</gpx>"));
 
+    // 3 bis. Le meme trace part en KML, pour Google Earth.
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/workouts/1700000000000/kml", &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let kml = body_text(response).await;
+    assert!(kml.contains("</kml>"), "{kml}");
+    assert!(kml.contains("<LineString>"), "{kml}");
+
     // 4. Les appareils appaires sont listes dans les reglages.
     let response = app
         .oneshot(get_with_cookie("/settings", &session))
@@ -1481,6 +1492,16 @@ async fn workout_page_shows_plan_cardio_pauses_and_acceleration() {
         "Pause 1",
         "Acceleration",
         "Reprise",
+        // Analyse de trace a la VisuGPX : carte, profil, statistiques.
+        "carte-seance",
+        "data-trace=",
+        "data-reperes=",
+        "Profil altimetrique",
+        "Altitude min / max",
+        "Vitesse max",
+        "Depart / arrivee",
+        "Points GPS",
+        "Denivele horaire des portions",
     ] {
         assert!(
             body.contains(expected),
@@ -1491,6 +1512,11 @@ async fn workout_page_shows_plan_cardio_pauses_and_acceleration() {
     assert!(body.contains("manuelle"), "{body}");
     // Le plan se compare au realise : cible 9:00 pour 1.8 km.
     assert!(body.contains("9:00"), "{body}");
+    // La pause du kilometre apparait dans le tableau des temps de passage.
+    assert!(body.contains("<th>Pause</th>"), "{body}");
+    // Les deux exports sont proposes depuis la fiche.
+    assert!(body.contains("/workouts/1700000000123/gpx"), "{body}");
+    assert!(body.contains("/workouts/1700000000123/kml"), "{body}");
 
     // L'API renvoie les memes donnees brutes.
     let response = app
@@ -3162,4 +3188,220 @@ async fn settings_gathers_profile_devices_pairing_and_logout() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert!(body_text(response).await.contains("Appairer une montre"));
+}
+
+// ------------------------------------------------------------------ amis
+
+/// Compte de test avec l'email donne (deux comptes distincts = deux emails).
+async fn compte(state: &AppState, email: &str) -> mpacer_api::models::User {
+    mpacer_api::db::upsert_user(&state.pool, None, email, Some(email), None, state.now_ms())
+        .await
+        .unwrap()
+}
+
+/// Requete JSON portant un jeton d'appareil.
+fn json_bearer(method: &str, uri: &str, payload: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(payload.to_string()))
+        .unwrap()
+}
+
+/// Point de suivi en direct, tel que la montre le publie sur le broker.
+fn point_live(lat: f64, lon: f64) -> String {
+    format!(
+        r#"{{"t":{},"lat":{lat},"lon":{lon},"acc":4.0,"dist":1200.0,"pace":300.0,"hr":148,"st":"run"}}"#,
+        chrono::Utc::now().timestamp_millis()
+    )
+}
+
+/// Amis : invitation, cercle, partage et position en direct de bout en bout.
+#[tokio::test]
+async fn friends_share_a_live_position_between_two_accounts() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let alice = compte(&state, "alice@example.org").await;
+    let bob = compte(&state, "bob@example.org").await;
+    let jeton_alice = device_token(&state, &alice.id).await;
+    let jeton_bob = device_token(&state, &bob.id).await;
+
+    // Bob genere un code, Alice le saisit : l'amitie se fait dans les deux sens.
+    let reponse = app
+        .clone()
+        .oneshot(json_bearer(
+            "POST",
+            "/api/v1/friends/invite",
+            "{}",
+            &jeton_bob,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(reponse.status(), StatusCode::OK);
+    let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+    let code = corps["code"].as_str().unwrap().to_string();
+    assert_eq!(code.len(), 9, "code lisible du type BCDF-GHJK : {code}");
+    assert!(
+        corps["url"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("?code={code}")),
+        "lien d'invitation : {corps}"
+    );
+
+    let correlation = format!(r#"{{"code":"{code}"}}"#);
+    let ajout = json_bearer("POST", "/api/v1/friends/accept", &correlation, &jeton_alice);
+    let reponse = app.clone().oneshot(ajout).await.unwrap();
+    assert_eq!(
+        reponse.status(),
+        StatusCode::OK,
+        "{}",
+        body_text(reponse).await
+    );
+
+    // Le code est a usage unique.
+    let rejoue = json_bearer("POST", "/api/v1/friends/accept", &correlation, &jeton_alice);
+    let reponse = app.clone().oneshot(rejoue).await.unwrap();
+    assert_eq!(reponse.status(), StatusCode::BAD_REQUEST);
+
+    // Alice voit Bob dans son cercle (et reciproquement).
+    let cercles = |jeton: String| json_bearer("GET", "/api/v1/friends", "", &jeton);
+    let reponse = app
+        .clone()
+        .oneshot(cercles(jeton_alice.clone()))
+        .await
+        .unwrap();
+    let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+    assert_eq!(corps["total"], 1, "{corps}");
+    assert_eq!(corps["friends"][0]["email"], "bob@example.org");
+    assert_eq!(corps["share_live"], true, "le partage est actif par defaut");
+
+    // Alice revendique son appareil puis publie une position.
+    let enregistrement = json_bearer(
+        "POST",
+        "/api/v1/live/register",
+        r#"{"device":"montre-alice","label":"Montre d'Alice"}"#,
+        &jeton_alice,
+    );
+    let reponse = app.clone().oneshot(enregistrement).await.unwrap();
+    assert_eq!(
+        reponse.status(),
+        StatusCode::OK,
+        "{}",
+        body_text(reponse).await
+    );
+    state
+        .live
+        .ingest(
+            "mpacer/live/montre-alice",
+            point_live(48.85, 2.35).as_bytes(),
+        )
+        .unwrap();
+
+    let reponse = app
+        .clone()
+        .oneshot(json_bearer(
+            "GET",
+            "/api/v1/friends/live?trace=1",
+            "",
+            &jeton_bob,
+        ))
+        .await
+        .unwrap();
+    let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+    assert_eq!(corps["live"], 1, "{corps}");
+    assert_eq!(corps["friends"][0]["live"]["lat"], 48.85, "{corps}");
+    assert_eq!(
+        corps["friends"][0]["live"]["heart_rate_bpm"], 148,
+        "{corps}"
+    );
+    assert_eq!(corps["friends"][0]["live"]["device"], "montre-alice");
+    assert_eq!(corps["friends"][0]["live"]["state"], "run");
+
+    // Un nom d'appareil deja revendique ne peut pas etre pris par un autre compte.
+    let vol = json_bearer(
+        "POST",
+        "/api/v1/live/register",
+        r#"{"device":"montre-alice"}"#,
+        &jeton_bob,
+    );
+    let reponse = app.clone().oneshot(vol).await.unwrap();
+    assert_eq!(reponse.status(), StatusCode::CONFLICT);
+
+    // Alice coupe le partage : plus aucune position ne sort, meme pour un ami.
+    let coupe = json_bearer(
+        "PUT",
+        "/api/v1/friends/share",
+        r#"{"share_live":false}"#,
+        &jeton_alice,
+    );
+    let reponse = app.clone().oneshot(coupe).await.unwrap();
+    assert_eq!(reponse.status(), StatusCode::OK);
+    let reponse = app
+        .clone()
+        .oneshot(json_bearer("GET", "/api/v1/friends/live", "", &jeton_bob))
+        .await
+        .unwrap();
+    let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+    assert_eq!(corps["live"], 0, "partage coupe : {corps}");
+    assert_eq!(corps["friends"][0]["sharing"], false);
+    assert!(corps["friends"][0]["live"].is_null(), "{corps}");
+
+    // Le retrait de l'amitie efface le cercle des deux cotes.
+    let retrait = Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/v1/friends/{}", bob.id))
+        .header(header::AUTHORIZATION, format!("Bearer {jeton_alice}"))
+        .body(Body::empty())
+        .unwrap();
+    let reponse = app.clone().oneshot(retrait).await.unwrap();
+    assert_eq!(reponse.status(), StatusCode::NO_CONTENT);
+    let reponse = app
+        .clone()
+        .oneshot(json_bearer("GET", "/api/v1/friends", "", &jeton_bob))
+        .await
+        .unwrap();
+    let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+    assert_eq!(corps["total"], 0, "{corps}");
+}
+
+/// La page Amis demande une session et affiche la carte et le code.
+#[tokio::test]
+async fn the_friends_page_shows_the_code_and_the_map() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (_user, session) = dev_user_session(&state).await;
+
+    // Sans session : redirection vers la connexion.
+    let reponse = app.clone().oneshot(get("/amis")).await.unwrap();
+    assert_eq!(reponse.status(), StatusCode::SEE_OTHER);
+
+    let reponse = app
+        .clone()
+        .oneshot(get_with_cookie("/amis", &session))
+        .await
+        .unwrap();
+    assert_eq!(reponse.status(), StatusCode::OK);
+    let page = body_text(reponse).await;
+    assert!(page.contains("Amis"), "{page}");
+    assert!(page.contains("Inviter un ami"), "{page}");
+    assert!(page.contains("data-carte"), "carte OpenStreetMap : {page}");
+    assert!(page.contains("/static/map.js"), "{page}");
+    assert!(page.contains("OpenStreetMap"), "attribution : {page}");
+
+    // Le JSON de la carte est servi a la session.
+    let reponse = app
+        .clone()
+        .oneshot(get_with_cookie("/amis.json", &session))
+        .await
+        .unwrap();
+    assert_eq!(reponse.status(), StatusCode::OK);
+    let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+    assert!(corps["friends"].is_array(), "{corps}");
+    assert!(corps["public_url"].is_string(), "{corps}");
+
+    // Le script de la carte est public (l'application telephone le charge).
+    let reponse = app.clone().oneshot(get("/static/map.js")).await.unwrap();
+    assert_eq!(reponse.status(), StatusCode::OK);
+    assert!(body_text(reponse).await.contains("MpacerCartes"));
 }

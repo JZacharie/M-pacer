@@ -32,6 +32,35 @@
     });
   }
 
+  // ------------------------------------------------ copie d'un code (page Amis)
+  // Le code d'invitation se dicte mal : un bouton le met dans le presse-papiers.
+  document.querySelectorAll("[data-copier]").forEach(function (bouton) {
+    bouton.addEventListener("click", function () {
+      var cible = document.querySelector(bouton.getAttribute("data-copier"));
+      if (!cible) return;
+      var texte = cible.textContent.trim();
+      var confirmer = function () {
+        var initial = bouton.textContent;
+        bouton.textContent = "Copie !";
+        window.setTimeout(function () { bouton.textContent = initial; }, 2000);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(texte).then(confirmer, confirmer);
+        return;
+      }
+      // Repli pour les navigateurs sans API presse-papiers (contexte non securise).
+      var zone = document.createElement("textarea");
+      zone.value = texte;
+      zone.setAttribute("readonly", "readonly");
+      zone.style.position = "absolute";
+      zone.style.left = "-9999px";
+      document.body.appendChild(zone);
+      zone.select();
+      try { document.execCommand("copy"); confirmer(); } catch (erreur) { /* rien */ }
+      document.body.removeChild(zone);
+    });
+  });
+
   // ------------------------------------------------ confirmation de suppression
   document.querySelectorAll("form[data-confirm]").forEach(function (form) {
     form.addEventListener("submit", function (event) {

@@ -62,6 +62,30 @@ pub async fn gpx_response(state: &AppState, user_id: &str, id: &str) -> AppResul
         .map_err(|error| AppError::internal(error.to_string()))
 }
 
+/// Export KML d'une seance, partage par l'API (jeton) et l'interface web.
+///
+/// Meme trace que le GPX, dans le format que lisent Google Earth et les
+/// applications de cartes hors ligne.
+pub async fn kml_response(state: &AppState, user_id: &str, id: &str) -> AppResult<Response> {
+    let (_workout, payload) = crate::db::get_workout(&state.pool, user_id, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let summary: mpacer_core::history::WorkoutSummary = serde_json::from_str(&payload)
+        .map_err(|error| AppError::internal(format!("seance illisible : {error}")))?;
+    let kml = mpacer_core::gpx::export_kml(&summary);
+    Response::builder()
+        .header(
+            header::CONTENT_TYPE,
+            "application/vnd.google-earth.kml+xml; charset=utf-8",
+        )
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{id}.kml\""),
+        )
+        .body(Body::from(kml))
+        .map_err(|error| AppError::internal(error.to_string()))
+}
+
 /// Manifeste de transfert d'une playlist, en piece jointe JSON.
 ///
 /// Partage par l'API (jeton) et l'interface web (session) : c'est exactement le

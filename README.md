@@ -23,10 +23,10 @@ avec vos séances synchronisées.
 |---|---|---|
 | **Cœur Rust** — [`crates/mpacer-core/`](crates/mpacer-core/) | Allure lissée 2 min, tours, machine à états de séance, assistant (4 modes) et shadow runner, cardio, voix FR/EN, analyse de séance, musique et tempo, GPX, format `.pac` | **Fait, testé** (182 tests) |
 | **Montre Wear OS** — [`android/app/`](android/app/) | GPS 1 Hz, fréquence cardiaque, écran rond, service de premier plan, voix, archive locale, synchronisation | **APK construit** ; validation terrain à faire |
-| **Course au téléphone** — [`android/phone/`](android/phone/) | Courir avec le téléphone seul : GPS 1 Hz, ceinture cardiaque Bluetooth LE, voix, musique, suivi MQTT, archive et synchronisation — sur le même socle [`android/core/`](android/core/) que la montre | **APK construit** ; validation terrain à faire |
+| **Course au téléphone** — [`android/phone/`](android/phone/) | Courir avec le téléphone seul : GPS 1 Hz, ceinture cardiaque Bluetooth LE, voix, musique, suivi MQTT, **onglet Amis (position des proches sur carte OpenStreetMap)**, archive et synchronisation — sur le même socle [`android/core/`](android/core/) que la montre | **APK construit** ; validation terrain à faire |
 | **Application téléphone d'appoint** — [`android/companion/`](android/companion/) | Connexion au backend, liste et détail des séances, import, envoi vers la montre (Data Layer) | **APK construit** ; à valider sur appareils réels |
 | **Montre Garmin** — [`garmin/`](garmin/) | Portage Connect IQ (Monkey C) du même cœur : GPS, cardio, FIT, vibrations, synchronisation identique | **Compilé** (SDK Connect IQ 9.2.0) ; à valider |
-| **Backend et site** — [`crates/mpacer-api/`](crates/mpacer-api/) | API JSON, OAuth Google, appairage montre, interface web (séances, analyse, tableaux de bord, courses, musique, suivi en direct) | **Fait, testé** |
+| **Backend et site** — [`crates/mpacer-api/`](crates/mpacer-api/) | API JSON, OAuth Google, appairage montre, interface web (séances, analyse, tableaux de bord, courses, musique, suivi en direct, **amis et partage de position sur carte OpenStreetMap**) | **Fait, testé** |
 | **Outils** — `mpacer-sim`, `mpacer-music` | Simulateur de séance ; appariement des MP3 et copie sur la montre par USB | **Fait, testé** |
 | **Déploiement** — [`charts/`](charts/), [`deploy/`](deploy/) | Chart Helm (application, PostgreSQL CloudNativePG, ingress, TLS), image conteneur, CI GitHub Actions | **Chart validé** ; déploiement sur jo3 en cours |
 
@@ -103,7 +103,7 @@ bande-son (playlists Spotify ou Deezer, BPM cible, manifeste à copier sur la mo
 | [`garmin/`](garmin/) | Application Connect IQ en Monkey C — voir [`garmin/README.md`](garmin/README.md) |
 | [`charts/`](charts/) | Chart Helm `mpacer` |
 | [`deploy/`](deploy/) | Dockerfile, script de construction d'image, notes GitOps — voir [`deploy/README.md`](deploy/README.md) |
-| [`docs/`](docs/) | Documentation technique (13 documents) — index : [`docs/README.md`](docs/README.md) |
+| [`docs/`](docs/) | Documentation technique (15 documents) — index : [`docs/README.md`](docs/README.md) |
 | [`site/`](site/) | Documentation illustrée publiée sur GitHub Pages |
 | [`examples/`](examples/) | Cas concrets reproductibles (pacer autour du parc de Parilly) |
 | [`simulations/`](simulations/) | Traces GPS synthétiques prêtes à importer |

@@ -232,6 +232,46 @@ pub fn export_points_gpx(name: &str, points: &[TrackPoint], started_at_ms: Optio
     out
 }
 
+/// Produit un KML 2.2 a partir d'une trace (Google Earth, cartes hors ligne).
+///
+/// Une LineString suffit a la plupart des visualiseurs : l'altitude est ecrite
+/// pour chaque point quand elle est connue, et le mode d'altitude suit.
+pub fn export_points_kml(name: &str, points: &[TrackPoint]) -> String {
+    let has_elevation = points.iter().any(|point| point.elevation_m.is_some());
+    let mut out = String::with_capacity(260 + points.len() * 36);
+    out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    out.push_str("<kml xmlns=\"http://www.opengis.net/kml/2.2\">\n  <Document>\n");
+    out.push_str(&format!("    <name>{}</name>\n", escape_xml(name)));
+    out.push_str("    <Placemark>\n");
+    out.push_str(&format!("      <name>{}</name>\n", escape_xml(name)));
+    out.push_str("      <LineString>\n");
+    out.push_str(&format!(
+        "        <altitudeMode>{}</altitudeMode>\n",
+        if has_elevation {
+            "absolute"
+        } else {
+            "clampToGround"
+        }
+    ));
+    out.push_str("        <coordinates>\n");
+    for point in points {
+        out.push_str(&format!(
+            "          {:.7},{:.7},{:.1}\n",
+            point.lon,
+            point.lat,
+            point.elevation_m.unwrap_or(0.0)
+        ));
+    }
+    out.push_str("        </coordinates>\n      </LineString>\n");
+    out.push_str("    </Placemark>\n  </Document>\n</kml>\n");
+    out
+}
+
+/// KML d'une seance complete.
+pub fn export_kml(workout: &WorkoutSummary) -> String {
+    export_points_kml(&workout.id, &workout.track)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,5 +428,89 @@ mod tests {
         let gpx = export_gpx(&workout);
         assert_eq!(gpx.matches("<gpxtpx:hr>").count(), 2, "{gpx}");
         assert!(gpx.contains("<gpxtpx:hr>150</gpxtpx:hr>"), "{gpx}");
+    }
+
+    #[test]
+    fn kml_export_writes_lon_lat_ele_and_escapes_the_name() {
+        let points = vec![
+            TrackPoint {
+                t_ms: 0,
+                dist_m: 0.0,
+                lat: 44.84,
+                lon: -0.57,
+                elevation_m: Some(10.0),
+            },
+            TrackPoint {
+                t_ms: 60_000,
+                dist_m: 200.0,
+                lat: 44.841,
+                lon: -0.571,
+                elevation_m: None,
+            },
+        ];
+        let kml = export_points_kml("Marathon & Cie", &points);
+        assert!(kml.starts_with("<?xml"), "{kml}");
+        assert!(kml.contains("<name>Marathon &amp; Cie</name>"), "{kml}");
+        assert!(
+            kml.contains("<altitudeMode>absolute</altitudeMode>"),
+            "{kml}"
+        );
+        // Coordonnees KML : longitude d'abord, altitude en troisieme position.
+        assert!(kml.contains("-0.5700000,44.8400000,10.0"), "{kml}");
+        assert!(kml.contains("-0.5710000,44.8410000,0.0"), "{kml}");
+        assert_eq!(kml.matches("<LineString>").count(), 1);
+    }
+
+    #[test]
+    fn kml_without_elevation_is_clamped_to_the_ground() {
+        let points = vec![TrackPoint {
+            t_ms: 0,
+            dist_m: 0.0,
+            lat: 45.0,
+            lon: 3.0,
+            elevation_m: None,
+        }];
+        let kml = export_points_kml("Trace", &points);
+        assert!(
+            kml.contains("<altitudeMode>clampToGround</altitudeMode>"),
+            "{kml}"
+        );
+    }
+
+    #[test]
+    fn the_workout_kml_contains_the_whole_track() {
+        let workout = WorkoutSummary {
+            id: "1700000000000".into(),
+            started_at_ms: 1_700_000_000_000,
+            duration_s: 60.0,
+            distance_m: 200.0,
+            average_pace_s_per_km: 300.0,
+            laps: vec![],
+            best_efforts: vec![],
+            track: vec![
+                TrackPoint {
+                    t_ms: 0,
+                    dist_m: 0.0,
+                    lat: 45.0,
+                    lon: 3.0,
+                    elevation_m: Some(300.0),
+                },
+                TrackPoint {
+                    t_ms: 60_000,
+                    dist_m: 200.0,
+                    lat: 45.001,
+                    lon: 3.001,
+                    elevation_m: Some(310.0),
+                },
+            ],
+            unit_system: UnitSystem::Metric,
+            elapsed_s: 60.0,
+            pauses: vec![],
+            heart_rate: vec![],
+            plan: None,
+        };
+        let kml = export_kml(&workout);
+        assert!(kml.contains("1700000000000"), "{kml}");
+        assert_eq!(kml.matches("3.0000000,45.0000000").count(), 1, "{kml}");
     }
 }

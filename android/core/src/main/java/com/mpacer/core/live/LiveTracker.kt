@@ -95,6 +95,14 @@ object LiveTracker {
         val deviceId = LiveSettings.deviceId(application)
         clientId = "mpacer-" + deviceId + "-" + (SystemClock.elapsedRealtime() % 1000000L)
         sujet = config.topic(deviceId)
+        // Partage entre amis : le backend doit savoir a qui appartient ce nom
+        // d'appareil avant de montrer quoi que ce soit. L'appel est fait au
+        // mieux : sans jeton ou sans reseau, la seance continue normalement.
+        com.mpacer.core.social.FriendsClient.registerDevice(
+            application,
+            config.deviceName(deviceId),
+            label = android.os.Build.MODEL,
+        )
         etat = etatInitial
         enPause = false
         dernierMs = 0L

@@ -267,7 +267,12 @@ une position d'il y a trois minutes n'intéresse personne.
   auto-signé n'est pas accepté — dans ce cas, gardez le broker sur le réseau
   interne du cluster, ce qui est la configuration recommandée.
 - **La page `/live` demande une session** (connexion Google) : elle n'est pas
-  publique. Un partage par lien sans compte reste à faire (§ 8).
+  publique.
+- **Partage entre amis** : le suivi peut être montré à un cercle fermé, et
+  seulement pendant la séance, via la page `/amis` (voir
+  [13 - Amis et partage de la position en direct](13-amis-partage-position.md)) :
+  l'appareil revendique alors son nom MQTT auprès du backend
+  (`POST /api/v1/live/register`), qui refuse deux comptes sous le même nom.
 - **Le broker ne doit pas être exposé sur Internet** sans mot de passe ni TLS :
   un sujet MQTT est lisible par quiconque peut s'abonner.
 
@@ -279,9 +284,9 @@ une position d'il y a trois minutes n'intéresse personne.
 |---|---|
 | **Garmin (Connect IQ)** ne publie pas en MQTT | Connect IQ n'expose aucune socket TCP, seulement `Communications.makeWebRequest` (HTTP). Un relais par le backend est possible plus tard, mais la trace complète vit déjà dans le FIT Garmin |
 | Aucun historique du suivi | choix assumé : la base reçoit la séance à la fin ; le direct est volatil |
-| Aucun lien de partage public | la page demande une session ; un jeton de partage en lecture seule est la suite logique |
+| Aucun lien de partage public | la page demande une session ; le cercle d'amis ([13](13-amis-partage-position.md)) répond au besoin sans lien ouvert |
 | Pas de « dernier point reçu » dans l'en-tête de la page de séance | la page `/live` suffit pour l'instant |
-| Pas de fond de carte | aucune donnée envoyée à un service tiers, comme le reste du projet |
+| Pas de fond de carte sur `/live` | la trace SVG suffit pour une séance ; la page `/amis` a un fond **OpenStreetMap** (tuiles publiques, [13](13-amis-partage-position.md)) |
 
 ---
 

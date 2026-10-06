@@ -23,9 +23,15 @@ Index des documents. Le point d'entrée reste le [README principal](../README.md
 | [Proposition de logo 1 — cible néon](images/logo-mpacer-cible-neon.jpg) | Logo alternatif : cible d'athlétisme et flèche d'allure, dégradé cyan/rose |
 | [Proposition de logo 2 — montre verte](images/logo-mpacer-montre-verte.jpg) | Logo alternatif : silhouette de montre et coureur sur courbe de progression, vert |
 | [Proposition de logo 3 — montre bleue](images/logo-mpacer-montre-bleue.jpg) | Logo alternatif : montre et flèche de progression, bleu/orange |
+| [Tableau de bord « Pace Control »](images/dashboards/pace-control.png) | Écran de course composé dans l'interface web : allure, tours, meilleures distances |
+| [Tableau de bord « Analyse de séance »](images/dashboards/analyse.png) | Résumé, carte GPS, tours, cardio et meilleures distances |
+| [Création d'un tableau de bord](images/dashboards/nouveau.png) | Constructeur : nom, gabarit, cases à cocher |
 
 La vue d'ensemble est également reprise en tête de
-[02 - Architecture Rust / Wear OS](02-architecture-rust-wearos.md).
+[02 - Architecture Rust / Wear OS](02-architecture-rust-wearos.md). Toutes ces images
+sont publiées dans la [galerie interactive](https://jzacharie.github.io/M-pacer/galerie/)
+du site (visionneuse plein écran) et reprises par
+[08 - Tableaux de bord](08-tableaux-de-bord.md).
 
 ## Parcours conseillés
 

@@ -148,7 +148,31 @@ Trois gabarits recréent en un clic les écrans de l'application de référence 
 séances récentes, prochaines courses). Tout le constructeur fonctionne sans
 JavaScript : des formulaires, des redirections, rien d'autre.
 
-![Tableau de bord « Pace Control »]({{ '/assets/images/dashboards/pace-control.png' | relative_url }})
+<div class="tabs" data-tabs>
+  <section class="onglet" data-title="Pace Control">
+    <figure>
+      <img src="{{ '/assets/images/dashboards/pace-control.png' | relative_url }}" alt="Tableau de bord Pace Control : allure du dernier tour, temps de passage, meilleures distances">
+      <figcaption>Allure, tours et meilleures distances : l'écran de course.</figcaption>
+    </figure>
+  </section>
+  <section class="onglet" data-title="Analyse de séance">
+    <figure>
+      <img src="{{ '/assets/images/dashboards/analyse.png' | relative_url }}" alt="Tableau de bord Analyse de séance : résumé, carte GPS, tours et zones cardiaques">
+      <figcaption>Résumé, carte GPS, tours, cardio et meilleures distances.</figcaption>
+    </figure>
+  </section>
+  <section class="onglet" data-title="Création">
+    <figure>
+      <img src="{{ '/assets/images/dashboards/nouveau.png' | relative_url }}" alt="Formulaire de création d'un tableau de bord : nom, gabarit, cases à cocher">
+      <figcaption>Nom, gabarit et cases à cocher — sans JavaScript.</figcaption>
+    </figure>
+  </section>
+</div>
+
+<div class="note">
+<p>Envie d'essayer sans installer ? Le <a href="{{ '/composeur/' | relative_url }}">composeur</a>
+reproduit le constructeur dans la page : cochez les widgets, ordonnez-les, partez d'un gabarit.</p>
+</div>
 
 ## Statistiques
 

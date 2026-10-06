@@ -10,9 +10,19 @@
     <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)">
     <link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
     <link rel="icon" type="image/svg+xml" href="{{ '/assets/favicon.svg' | relative_url }}">
+    <script>
+      // Le theme choisi est applique avant le premier rendu : aucun clignotement.
+      (function () {
+        try {
+          var theme = localStorage.getItem("mpacer-theme");
+          if (theme) document.documentElement.setAttribute("data-theme", theme);
+        } catch (e) { /* navigation privee : le theme du systeme s'applique */ }
+      })();
+    </script>
   </head>
   <body>
     <a class="skip" href="#contenu">Aller au contenu</a>
+    <div class="progress" data-progress aria-hidden="true"></div>
 
     <header class="topbar">
       <div class="wrap topbar-in">
@@ -25,12 +35,17 @@
           <a href="{{ item.url | relative_url }}"{% if page.url == item.url %} class="active" aria-current="page"{% endif %}>{{ item.title }}</a>
           {%- endfor %}
           <a class="ghost" href="https://github.com/JZacharie/M-pacer">GitHub</a>
+          <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">Thème clair</button>
         </nav>
       </div>
     </header>
 
     <main id="contenu" class="wrap">
+      <details class="toc-box" data-toc hidden>
+        <summary>Sur cette page</summary>
+      </details>
       {{ content }}
+      <button type="button" class="haut" data-top hidden aria-label="Revenir en haut">&#8593;</button>
     </main>
 
     <footer class="footer">
@@ -43,5 +58,7 @@
         </p>
       </div>
     </footer>
+
+    <script src="{{ '/assets/js/docs.js' | relative_url }}" defer></script>
   </body>
 </html>

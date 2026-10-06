@@ -15,6 +15,16 @@ dans un cœur Rust testable partout, et aucun secret tiers ne descend sur le poi
 
 ## Vue d'ensemble
 
+<figure>
+  <img src="{{ '/assets/images/architecture-mpacer.jpg' | relative_url }}" alt="Vue d'ensemble dessinée de l'architecture M-pacer : montre Wear OS, cœur Rust, API Axum, PostgreSQL" loading="lazy">
+  <figcaption>
+    Vue d'ensemble dessinée : client Wear OS et cœur métier natif, moteur
+    <code>mpacer-core</code>, service API Axum, cluster PostgreSQL exposé par Ingress.
+    <a href="{{ '/galerie/' | relative_url }}">Agrandir</a> ou voir
+    <a href="{{ '/galerie/' | relative_url }}">toute la galerie</a>.
+  </figcaption>
+</figure>
+
 <div class="schema">
   <div class="box"><strong>Montre Wear OS</strong><span>Kotlin, Wear Compose<br>GPS 1 Hz, TTS, écran rond</span></div>
   <div class="box"><strong>Cœur Rust</strong><span>mpacer-core<br>allure, tours, assistant, voix</span></div>

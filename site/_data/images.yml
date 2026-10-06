@@ -1,0 +1,55 @@
+# ---------------------------------------------------------------------------
+# Images de la documentation, publiees depuis docs/images (voir
+# site/assets/images). Ce fichier alimente la galerie interactive et les
+# vignettes : une seule liste, donc aucune image oubliee.
+#
+# file    : chemin relatif a site/assets/images
+# title   : titre affiche dans la legende et la visionneuse
+# caption : une phrase de contexte
+# group   : filtre de la galerie (Architecture, Écrans web, Logos)
+#
+# Les valeurs sont entre guillemets : plusieurs contiennent « : » ou « — », que
+# YAML interpreterait sinon comme un nouveau couple cle/valeur.
+# ---------------------------------------------------------------------------
+
+- file: "architecture-mpacer.jpg"
+  title: "Vue d'ensemble de l'architecture"
+  caption: "Montre Wear OS et cœur Rust embarqué, API Axum, cluster PostgreSQL."
+  group: "Architecture"
+  alt: "Schéma dessiné de l'architecture M-pacer"
+
+- file: "dashboards/pace-control.png"
+  title: "Tableau de bord « Pace Control »"
+  caption: "Allure, tours et meilleures distances, composés par l'utilisateur."
+  group: "Écrans web"
+  alt: "Tableau de bord web avec l'allure du dernier tour, les temps de passage et les meilleures distances"
+
+- file: "dashboards/analyse.png"
+  title: "Tableau de bord « Analyse de séance »"
+  caption: "Résumé, carte GPS, temps de passage, cardio et meilleures distances."
+  group: "Écrans web"
+  alt: "Tableau de bord web avec le résumé de séance, la trace GPS, les tours et les zones cardiaques"
+
+- file: "dashboards/nouveau.png"
+  title: "Création d'un tableau de bord"
+  caption: "Nom, gabarit et cases à cocher — le constructeur fonctionne sans JavaScript."
+  group: "Écrans web"
+  alt: "Formulaire de création d'un tableau de bord avec la liste des widgets disponibles"
+
+- file: "logo-mpacer-cible-neon.jpg"
+  title: "Logo — cible néon"
+  caption: "Cible d'athlétisme et flèche d'allure, dégradé cyan et rose."
+  group: "Logos"
+  alt: "Proposition de logo avec une cible néon"
+
+- file: "logo-mpacer-montre-bleue.jpg"
+  title: "Logo — montre bleue"
+  caption: "Silhouette de montre et coureur, dominante bleue."
+  group: "Logos"
+  alt: "Proposition de logo avec une montre bleue"
+
+- file: "logo-mpacer-montre-verte.jpg"
+  title: "Logo — montre verte"
+  caption: "Même silhouette, dominante verte."
+  group: "Logos"
+  alt: "Proposition de logo avec une montre verte"

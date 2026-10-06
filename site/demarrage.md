@@ -117,7 +117,19 @@ modification du dossier <code>site/</code>. Il faut l'activer une fois dans le d
 
 <p>
 En local, une simple lecture des fichiers Markdown de <code>site/</code> suffit pour relire le
-contenu ; Jekyll ne sert qu'à appliquer la mise en page commune.
+contenu ; Jekyll ne sert qu'à appliquer la mise en page commune. Quatre dossiers comptent :
+<code>site/*.md</code> (les pages), <code>site/_data/</code> (navigation, liste des images et
+catalogue des widgets), <code>site/_layouts/</code> (la mise en page) et
+<code>site/assets/</code> (feuille de style, <code>js/docs.js</code> et images optimisées).
+</p>
+
+<p>
+Les images d'origine restent dans <code>docs/images/</code> : le site en publie une version
+allégée dans <code>site/assets/images/</code>. La page <code>/galerie/</code> les réunit à partir
+de <code>_data/images.yml</code> (visionneuse plein écran, filtres), et
+<code>/composeur/</code> démontre le constructeur de tableaux de bord à partir de
+<code>_data/widgets.yml</code> — deux fichiers à mettre à jour quand une image ou un widget
+s'ajoute.
 </p>
 
 ## Pour aller plus loin

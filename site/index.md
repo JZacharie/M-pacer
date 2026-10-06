@@ -128,6 +128,8 @@ documentation publique.</p>
   <li><a href="{{ '/montre/' | relative_url }}">L'application montre</a> : écrans, modes d'assistant, voix, synchronisation.</li>
   <li><a href="{{ '/site-web/' | relative_url }}">Le site web</a> : pages, analyse de séance, courses, API.</li>
   <li><a href="{{ '/architecture/' | relative_url }}">Architecture</a> : cœur Rust partagé, pont JNI, idempotence, sécurité.</li>
+  <li><a href="{{ '/galerie/' | relative_url }}">Galerie</a> : architecture, écrans du site et propositions de logo, agrandissables.</li>
+  <li><a href="{{ '/composeur/' | relative_url }}">Composeur</a> : essayez le constructeur de tableaux de bord, en interactif.</li>
   <li><a href="{{ '/demarrage/' | relative_url }}">Démarrage</a> : essayer le cœur, lancer le backend, déployer.</li>
   <li><a href="https://github.com/JZacharie/M-pacer">Le dépôt</a> : code, README, documentation technique détaillée.</li>
 </ul>

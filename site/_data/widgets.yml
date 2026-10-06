@@ -1,0 +1,53 @@
+# ---------------------------------------------------------------------------
+# Catalogue des widgets de tableau de bord (site web M-pacer).
+#
+# Il reprend exactement les cles persistees par l'application
+# (crates/mpacer-api/src/dashboards.rs) : la page /composeur/ en fait une
+# demonstration interactive, le produit les enregistre en base.
+#
+# Les valeurs sont entre guillemets : plusieurs contiennent « : » ou « — », que
+# YAML interpreterait sinon comme un nouveau couple cle/valeur.
+# ---------------------------------------------------------------------------
+
+widgets:
+  - key: "allure"
+    label: "Allure"
+    description: "Allure du dernier tour, du tour précédent et allure moyenne."
+  - key: "resume"
+    label: "Résumé de séance"
+    description: "Distance, temps, allure, vitesse et date de la séance."
+  - key: "carte"
+    label: "Carte GPS"
+    description: "Le tracé GPS de la dernière séance, sans les chiffres."
+  - key: "tours"
+    label: "Tours"
+    description: "Graphique des allures et tableau des temps de passage."
+  - key: "meilleures-distances"
+    label: "Meilleures distances"
+    description: "Meilleurs temps sur 1 km, 5 km, 10 km et semi."
+  - key: "cardio"
+    label: "Cardio"
+    description: "FC moyenne et max, temps passé dans chaque zone."
+  - key: "historique"
+    label: "Historique"
+    description: "Vos dernières séances, prêtes à ouvrir."
+  - key: "statistiques"
+    label: "Statistiques"
+    description: "Volume des 30 derniers jours et 12 semaines."
+  - key: "courses"
+    label: "Courses"
+    description: "Prochaines courses et dernières courses courues."
+
+templates:
+  - key: "pace-control"
+    name: "Pace Control"
+    description: "L'écran de course — allure, tours, meilleures distances."
+    widgets: ["allure", "tours", "meilleures-distances"]
+  - key: "analyse"
+    name: "Analyse de séance"
+    description: "Résumé, carte, tours, cardio et meilleures distances."
+    widgets: ["resume", "carte", "tours", "cardio", "meilleures-distances"]
+  - key: "historique"
+    name: "Historique"
+    description: "Volume, séances récentes et prochaines courses."
+    widgets: ["statistiques", "historique", "courses"]

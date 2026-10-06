@@ -10,8 +10,7 @@
 	{
 		"commands" : 
 		[
-			"add_library",
-			"target_link_libraries"
+			"add_library"
 		],
 		"files" : 
 		[
@@ -25,13 +24,7 @@
 			{
 				"command" : 0,
 				"file" : 0,
-				"line" : 16,
-				"parent" : 0
-			},
-			{
-				"command" : 1,
-				"file" : 0,
-				"line" : 17,
+				"line" : 22,
 				"parent" : 0
 			}
 		]
@@ -72,8 +65,11 @@
 				"role" : "flags"
 			},
 			{
-				"backtrace" : 2,
-				"fragment" : "E:\\git\\JZacharie\\M-pacer\\android\\app\\src\\main\\cpp\\..\\jniLibs\\x86_64\\libmpacer_ffi.so",
+				"fragment" : "-LE:\\git\\JZacharie\\M-pacer\\android\\app\\src\\main\\cpp\\..\\jniLibs\\x86_64",
+				"role" : "libraryPath"
+			},
+			{
+				"fragment" : "-lmpacer_ffi",
 				"role" : "libraries"
 			},
 			{

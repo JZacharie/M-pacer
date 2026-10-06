@@ -21,9 +21,7 @@
       "artifactName": "mpacer_jni",
       "abi": "x86_64",
       "output": "E:\\git\\JZacharie\\M-pacer\\android\\app\\build\\intermediates\\cxx\\Debug\\5t73216i\\obj\\x86_64\\libmpacer_jni.so",
-      "runtimeFiles": [
-        "E:\\git\\JZacharie\\M-pacer\\android\\app\\src\\main\\jniLibs\\x86_64\\libmpacer_ffi.so"
-      ]
+      "runtimeFiles": []
     }
   }
 }

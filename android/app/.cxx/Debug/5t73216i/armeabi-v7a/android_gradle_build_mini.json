@@ -21,9 +21,7 @@
       "artifactName": "mpacer_jni",
       "abi": "armeabi-v7a",
       "output": "E:\\git\\JZacharie\\M-pacer\\android\\app\\build\\intermediates\\cxx\\Debug\\5t73216i\\obj\\armeabi-v7a\\libmpacer_jni.so",
-      "runtimeFiles": [
-        "E:\\git\\JZacharie\\M-pacer\\android\\app\\src\\main\\jniLibs\\armeabi-v7a\\libmpacer_ffi.so"
-      ]
+      "runtimeFiles": []
     }
   }
 }

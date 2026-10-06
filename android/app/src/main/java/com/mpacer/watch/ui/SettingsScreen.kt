@@ -10,6 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.ChipDefaults
@@ -33,6 +34,7 @@ fun SettingsScreen(
     onSettingsChange: (WatchSettings) -> Unit,
     onBack: () -> Unit,
     onMusic: () -> Unit,
+    onLive: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -91,9 +93,9 @@ fun SettingsScreen(
         }
         Chip(label = { Text("Ouvrir la bibliotheque") }, onClick = onMusic)
 
-        // Suivi en direct : la position part sur le broker MQTT choisi. L'adresse
-        // du broker se saisit sur un ecran plus confortable (voir android/README :
-        // reglages persistants, surchargeable par adb) ; ici on regle l'essentiel.
+        // Suivi en direct : la position part sur le broker MQTT choisi. Tout se
+        // regle desormais sur la montre (adresse, identifiants, sujet) : l'ecran
+        // dedie ouvre un clavier et teste la connexion avant d'enregistrer.
         Text("Suivi en direct")
         Text(liveState.resume)
         Chip(
@@ -118,11 +120,19 @@ fun SettingsScreen(
                 },
             )
         }
-        if (settings.live.url.isBlank()) {
-            Text("Broker non configure : mqtt_url")
-        } else {
-            Text(settings.live.url)
-        }
+        Chip(
+            label = { Text("Broker MQTT") },
+            onClick = onLive,
+            colors = if (settings.live.url.isBlank()) {
+                ChipDefaults.secondaryChipColors()
+            } else {
+                ChipDefaults.primaryChipColors()
+            },
+        )
+        Text(
+            if (settings.live.url.isBlank()) "Broker non configure" else settings.live.url,
+            fontSize = 11.sp,
+        )
 
         Button(onClick = onBack) { Text("Retour") }
     }

@@ -51,6 +51,8 @@ android/
       live/MqttCodec.kt                       paquets MQTT 3.1.1 (CONNECT, PUBLISH, PINGREQ)
       live/LiveTracker.kt                     fil de fond : file bornee, reconnexion, compteurs
       live/LiveSettings.kt                    persistance (mot de passe chiffre)
+      live/LiveProbe.kt                       test de connexion au broker (CONNACK + point de test)
+      ui/LiveSettingsScreen.kt                menu MQTT : clavier, presse-papiers, test, enregistrement
     src/test/java/com/mpacer/watch/live/      tests unitaires JVM (paquets, cadence, charge utile)
   companion/                                 module telephone
     build.gradle.kts                         Material 3, Compose, OkHttp, Wearable
@@ -154,6 +156,46 @@ APK : `companion/build/outputs/apk/debug/companion-debug.apk`.
 ./gradlew assembleDebug        # :app + :companion
 ```
 
+### 4. APK release signe (a deployer sur la montre)
+
+Le build release exige une cle : sans `android/keystore.properties`,
+`assembleRelease` produit un APK non signe que la montre refuse. Le magasin de
+cles local (`android/mpacer-release.jks`, RSA 4096, validite 10 ans) et son mot de
+passe vivent dans ces deux fichiers **non versionnes** (`android/.gitignore`) :
+sauvegardez-les, ils signeront toutes les mises a jour.
+
+```powershell
+# Montre seule, avec l URL du backend inscrite dans l APK :
+pwsh ./local-ci.ps1 -Release -ApiUrl https://mpacer.p.zacharie.org
+
+# Equivalent direct, en reutilisant les .so Rust deja construits :
+cd android
+.gradlew.bat :app:assembleRelease '-Pmpacer.buildRust=false' '-Pmpacer.apiUrl=https://mpacer.p.zacharie.org'
+```
+
+APK : `app/build/outputs/apk/release/app-release.apk` (~33 Mo, trois ABI :
+arm64-v8a, armeabi-v7a, x86_64).
+
+Installation (USB ou adb sans fil) :
+
+```powershell
+adb install -r android/app/build/outputs/apk/release/app-release.apk
+# Si une version de debug (autre cle) est deja installee, la desinstaller d abord :
+adb uninstall com.mpacer.watch
+```
+
+Le module telephone se signe avec **la meme cle** (`:companion:assembleRelease`) :
+c est la condition du Data Layer Wear OS. Une montre en release et un telephone en
+debug ne communiquent pas. L URL du backend reste surchargeable au lancement, sans
+recompiler :
+
+```powershell
+adb shell am start -n com.mpacer.watch/.MainActivity --es api_url http://192.168.0.152:8080
+```
+
+Aucun secret n entre dans l APK : l adresse du broker MQTT se saisit sur la montre
+(menu Broker MQTT) et le mot de passe est chiffre sur l appareil, pas dans le binaire.
+
 Sans SDK Android ni cargo-ndk, **aucune de ces commandes n a ete executee ici**.
 
 ## Flux d appairage (RFC 8628 simplifie)
@@ -232,13 +274,26 @@ de ressources et limites : [docs/10](../docs/10-suivi-temps-reel.md).
 
 - **Desactive par defaut** : sans adresse de broker, `LiveTracker.start` ne cree
   ni fil ni connexion — le suivi ne coute rien tant qu'il n'est pas configure.
-- **Reglages** : ecran Reglages de la montre (activation, cadence) ; l'adresse du
-  broker se saisit par `adb` ou par l'extra d'intent, plus confortable qu'un
-  clavier sur un ecran rond :
+- **Reglages sur la montre** : Reglages ▸ **Broker MQTT** (`ui/LiveSettingsScreen.kt`)
+  saisit au clavier l'adresse (`mqtt://hote:1883`), l'utilisateur, le mot de passe,
+  le prefixe de sujet, le nom de la montre et les cadences ; « Coller l'adresse »
+  reprend le presse-papiers et « Tester la connexion » verifie le brouillon avant
+  enregistrement (`live/LiveProbe.kt` : CONNACK puis point de test sur
+  `<prefixe>/test/<montre>`, hors du filtre `<prefixe>/live/+` du backend, donc
+  invisible sur `/live`). Le mot de passe part dans
+  `EncryptedSharedPreferences` ; les reglages s'appliquent a la seance suivante.
+  L'ecran Reglages garde l'activation, la cadence et l'etat de la liaison.
+
+  Le reglage par `adb` reste utile en test (il ecrase l'adresse enregistree) :
 
   ```powershell
-  adb shell am start -n com.mpacer.watch/.MainActivity --es mqtt_url "mqtt://mosquitto.mpacer.svc:1883"
+  # Identifiants dans l'URL si le broker en demande (analyses par la montre) :
+  adb shell am start -n com.mpacer.watch/.MainActivity `
+    --es mqtt_url "mqtt://joseph:motdepasse@192.168.0.115:1883"
   ```
+
+  Les valeurs locales (broker, identifiants) vivent dans un fichier `.env`
+  **non versionne** — gabarit sans valeur : [`.env.example`](../.env.example).
 
 - **Cadence** : 10 s en course, 60 s en pause (auto-pause comprise, l'etat vient
   du moteur) ; un point dont la precision GPS depasse 50 m n'est pas publie.
@@ -408,3 +463,7 @@ intents soient resolus.
     avec et sans `mqtt_url` (`adb shell dumpsys batterystats`, voir docs/10 § 5.3).
     Les identifiants du broker sont ranges dans `EncryptedSharedPreferences`, comme
     le jeton d'appairage.
+13. **Menu MQTT sur la montre** : le clavier Wear, le collage depuis le
+    presse-papiers et le bouton « Tester la connexion » se verifient sur une vraie
+    montre ronde (`ui/LiveSettingsScreen.kt`, `live/LiveProbe.kt`) ; l'APK release
+    est signe par `android/keystore.properties` (non versionne).

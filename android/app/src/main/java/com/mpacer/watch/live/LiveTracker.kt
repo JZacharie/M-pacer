@@ -277,13 +277,9 @@ object LiveTracker {
             }
             flux.soTimeout = READ_TIMEOUT_MS
             val sortieFlux = flux.getOutputStream()
+            val identifiants = adresse.credentials(config)
             sortieFlux.write(
-                MqttCodec.connect(
-                    clientId,
-                    config.username.takeIf { it.isNotBlank() },
-                    config.password.takeIf { it.isNotBlank() },
-                    KEEP_ALIVE_S,
-                )
+                MqttCodec.connect(clientId, identifiants.first, identifiants.second, KEEP_ALIVE_S)
             )
             sortieFlux.flush()
             val reponse = MqttCodec.readPacket(flux.getInputStream())

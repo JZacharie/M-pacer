@@ -46,7 +46,7 @@ expressions sont alignées sur celles des autres applications du cluster.
 
 | Secret Kubernetes | ClusterSecretStore | Clé `remoteRef` | Chemin Vault réel | Contenu |
 |---|---|---|---|---|
-| `mpacer-secrets` | `vault-apps` | `mpacer` | `apps/data/mpacer` | `MPACER_SESSION_SECRET`, `MPACER_GOOGLE_CLIENT_ID`, `MPACER_GOOGLE_CLIENT_SECRET` — et, si Spotify est active, `MPACER_SPOTIFY_CLIENT_ID`, `MPACER_SPOTIFY_CLIENT_SECRET` ; si Deezer est active, `MPACER_DEEZER_APP_ID`, `MPACER_DEEZER_APP_SECRET` |
+| `mpacer-secrets` | `vault-apps` | `mpacer` | `apps/data/mpacer` | `MPACER_SESSION_SECRET`, `MPACER_GOOGLE_CLIENT_ID`, `MPACER_GOOGLE_CLIENT_SECRET` — et, si Spotify est active, `MPACER_SPOTIFY_CLIENT_ID`, `MPACER_SPOTIFY_CLIENT_SECRET` ; si Deezer est active, `MPACER_DEEZER_APP_ID`, `MPACER_DEEZER_APP_SECRET` ; si le broker MQTT du suivi en direct demande un mot de passe, `MPACER_MQTT_PASSWORD` |
 
 > **Attention au piège** : dans un `ClusterSecretStore`, `provider.vault.path` désigne le
 > **montage** KV, pas un préfixe de chemin. Sur jo3, `vault-apps` est monté sur `apps/`
@@ -69,8 +69,17 @@ vault kv put apps/mpacer \
   MPACER_SPOTIFY_CLIENT_ID="<id Spotify>" \
   MPACER_SPOTIFY_CLIENT_SECRET="<secret Spotify>" \
   MPACER_DEEZER_APP_ID="<Application ID Deezer>" \
-  MPACER_DEEZER_APP_SECRET="<Secret Key Deezer>"
+  MPACER_DEEZER_APP_SECRET="<Secret Key Deezer>" \
+  MPACER_MQTT_PASSWORD="<mot de passe du broker MQTT>"
 ```
+
+> **Suivi en direct (MQTT).** `MPACER_MQTT_PASSWORD` n'est utile que si le broker
+> demande une authentification ; l'adresse et l'identifiant vivent dans les
+> valeurs non sensibles (`config.mqttUrl`, `config.mqttUsername`). Reportez la
+> meme cle dans `externalSecrets.keys.mqttPassword: MPACER_MQTT_PASSWORD` : un
+> `remoteRef` qui pointe vers une propriete absente fait echouer la
+> synchronisation de l'ExternalSecret. Sur un broker interne sans mot de passe,
+> laissez la cle vide des deux cotes. Detail : [docs/10](../docs/10-suivi-temps-reel.md).
 
 > **Spotify et Deezer sont optionnels.** Si les deux cles d'un service ne sont pas
 > scellees dans Vault, laisser les cles correspondantes **vides** dans les valeurs

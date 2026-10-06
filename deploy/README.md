@@ -237,6 +237,15 @@ explique simplement comment l'activer.
 
 > `auth.mqttPassword` (optionnel) est range dans le Secret, jamais dans le
 > ConfigMap.
+>
+> Pour ne pas laisser un mot de passe dans l'historique du shell, ecrivez-le dans
+> un fichier local **ignore par git** (`charts/mpacer/values-local.yaml`) et
+> cumulez les fichiers de valeurs :
+>
+> ```bash
+> helm upgrade mpacer charts/mpacer -n mpacer \\
+>   -f charts/mpacer/values-jo3.yaml -f charts/mpacer/values-local.yaml
+> ```
 
 Un broker minimal dans le cluster (aucun stockage, aucun compte : le suivi en
 direct est volatil) :

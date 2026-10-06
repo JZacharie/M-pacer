@@ -1,6 +1,7 @@
 package com.mpacer.watch
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -12,10 +13,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.mpacer.watch.live.LiveConfig
+import com.mpacer.watch.live.LiveProbe
 import com.mpacer.watch.live.LiveSettings
 import com.mpacer.watch.live.LiveTracker
 import com.mpacer.watch.music.MusicConfig
 import com.mpacer.watch.music.MusicSession
+import com.mpacer.watch.ui.LiveSettingsScreen
 import com.mpacer.watch.ui.MainScreen
 import com.mpacer.watch.ui.MusicScreen
 import com.mpacer.watch.ui.SettingsScreen
@@ -25,6 +28,11 @@ class MainActivity : ComponentActivity() {
 
     private val requestPermissions = registerResultLauncher()
 
+    // Le lint Android exige androidx.fragment >= 1.3.0 des qu'il voit
+    // registerForActivityResult ; l'application n'embarque aucun Fragment (elle
+    // herite de ComponentActivity, cas ou le controle ne s'applique pas). On
+    // supprime donc ce seul faux positif, sans desactiver le reste du lint release.
+    @SuppressLint("InvalidFragmentVersionForActivityResult")
     private fun registerResultLauncher() = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ -> /* l ecran principal reflete l etat GPS renvoye par le moteur */ }
@@ -45,6 +53,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val state by TrackingService.state.collectAsState()
             var showSettings by remember { mutableStateOf(false) }
+            var showLive by remember { mutableStateOf(false) }
             var showSync by remember { mutableStateOf(false) }
             var showMusic by remember { mutableStateOf(false) }
             // Les reglages persistent entre deux lancements : musique (deja
@@ -53,6 +62,7 @@ class MainActivity : ComponentActivity() {
                 mutableStateOf(WatchSettings(live = LiveSettings.load(this)))
             }
             val liveState by LiveTracker.state.collectAsState()
+            val probeState by LiveProbe.state.collectAsState()
 
             // Les reglages musique partent tout de suite au moteur (ou sont gardes
             // par MusicSession si la seance n'a pas encore demarre).
@@ -73,6 +83,20 @@ class MainActivity : ComponentActivity() {
                         showSettings = false
                         showMusic = true
                     },
+                    onLive = {
+                        showSettings = false
+                        showLive = true
+                    },
+                )
+                // Parametres MQTT saisis sur la montre : l'enregistrement persiste
+                // (mot de passe chiffre) et l'ecran peut tester la connexion.
+                showLive -> LiveSettingsScreen(
+                    config = settings.live,
+                    liveState = liveState,
+                    probeState = probeState,
+                    onSave = { nouveau -> updateSettings(settings.copy(live = nouveau)) },
+                    onTest = { LiveProbe.test(it) },
+                    onBack = { showLive = false },
                 )
                 showSync -> SyncScreen(onBack = { showSync = false })
                 showMusic -> MusicScreen(onBack = { showMusic = false })

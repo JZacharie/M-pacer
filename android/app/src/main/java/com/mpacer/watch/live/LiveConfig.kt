@@ -73,8 +73,32 @@ data class LiveConfig(
     }
 }
 
-/** Adresse de broker analysee : hote, port et TLS. */
-internal data class BrokerAddress(val host: String, val port: Int, val tls: Boolean) {
+/**
+ * Adresse de broker analysee : hote, port, TLS et identifiants eventuels.
+ *
+ * Le couple utilisateur/mot de passe peut venir de l'URL
+ * (`mqtt://joseph:secret@192.168.0.115:1883`) : c'est le moyen le plus simple de
+ * configurer la montre depuis `adb`, sans clavier. Les reglages explicites
+ * (LiveConfig.username / password) restent prioritaires.
+ */
+internal data class BrokerAddress(
+    val host: String,
+    val port: Int,
+    val tls: Boolean,
+    val username: String? = null,
+    val password: String? = null,
+) {
+
+    /**
+     * Identifiants effectifs : les reglages explicites de la montre priment sur
+     * ceux trouves dans l'URL. On peut ainsi coller une URL complete
+     * (`mqtt://joseph:secret@hote:1883`) et corriger le seul mot de passe sans
+     * retaper l'adresse.
+     */
+    fun credentials(config: LiveConfig): Pair<String?, String?> = Pair(
+        config.username.takeIf { it.isNotBlank() } ?: username,
+        config.password.takeIf { it.isNotBlank() } ?: password,
+    )
 
     companion object {
         /**
@@ -98,8 +122,9 @@ internal data class BrokerAddress(val host: String, val port: Int, val tls: Bool
                 tls = false
                 reste = brut
             }
-            // Identifiants eventuels dans l'URL : ils sont ignores ici (les
-            // reglages de la montre portent le couple utilisateur/mot de passe).
+            // Identifiants eventuels dans l'URL (le mot de passe peut contenir
+            // un '@' encode en %40 : on coupe au dernier '@').
+            val identifiants = if (reste.contains('@')) reste.substringBeforeLast('@') else ""
             val apresIdentifiants = reste.substringAfterLast('@', reste).trimEnd('/')
             if (apresIdentifiants.isEmpty()) return null
             val deuxPoints = apresIdentifiants.lastIndexOf(':')
@@ -114,7 +139,42 @@ internal data class BrokerAddress(val host: String, val port: Int, val tls: Bool
                 host = apresIdentifiants
             }
             if (host.isBlank()) return null
-            return BrokerAddress(host, port, tls)
+            val utilisateur: String?
+            val motDePasse: String?
+            if (identifiants.isEmpty()) {
+                utilisateur = null
+                motDePasse = null
+            } else {
+                val coupe = identifiants.indexOf(':')
+                if (coupe < 0) {
+                    utilisateur = percentDecode(identifiants).takeIf { it.isNotBlank() }
+                    motDePasse = null
+                } else {
+                    utilisateur = percentDecode(identifiants.substring(0, coupe)).takeIf { it.isNotBlank() }
+                    motDePasse = percentDecode(identifiants.substring(coupe + 1)).takeIf { it.isNotEmpty() }
+                }
+            }
+            return BrokerAddress(host, port, tls, utilisateur, motDePasse)
         }
     }
+}
+/** Decodage des caracteres encodes dans une URL (RFC 3986). */
+private fun percentDecode(value: String): String {
+    if (!value.contains('%')) return value
+    val octets = java.io.ByteArrayOutputStream(value.length)
+    var index = 0
+    while (index < value.length) {
+        val caractere = value[index]
+        if (caractere == '%' && index + 2 < value.length) {
+            val octet = value.substring(index + 1, index + 3).toIntOrNull(16)
+            if (octet != null) {
+                octets.write(octet)
+                index += 3
+                continue
+            }
+        }
+        octets.write(caractere.code and 0xFF)
+        index++
+    }
+    return String(octets.toByteArray(), Charsets.UTF_8)
 }

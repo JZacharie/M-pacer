@@ -17,10 +17,35 @@ android/app/src/main/jniLibs/
 *.apk
 *.aab
 
+# Binaires compiles : jamais versionnes, toujours regeneres par cargo, Gradle,
+# CMake ou Connect IQ. Le wrapper Gradle (gradle-wrapper.jar) reste versionne :
+# c'est un outil de build, pas un produit compile.
+*.o
+*.obj
+*.so
+*.a
+*.rlib
+*.rmeta
+*.class
+*.dex
+*.exe
+*.dll
+*.pdb
+*.hprof
+*.prg
+.cxx/
+
 # Garmin Connect IQ
 garmin/build/
 garmin/developer_key.der
 garmin/developer_key.pem
+
+# Secrets locaux : jamais versionnes (valeurs par defaut dans .env.example)
+.env
+.env.*
+!.env.example
+charts/mpacer/values-local.yaml
+*.secrets.yaml
 
 # Sorties du simulateur
 *.gpx

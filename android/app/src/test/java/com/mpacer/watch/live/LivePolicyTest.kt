@@ -118,13 +118,56 @@ class LivePolicyTest {
         assertEquals("192.168.0.10", sansSchema?.host)
         assertEquals(1884, sansSchema?.port)
 
+        // Les identifiants peuvent voyager dans l'URL : c'est ainsi qu'on
+        // configure la montre depuis adb, sans clavier.
         val avecIdentifiants = BrokerAddress.parse("mqtt://coureur:secret@broker.local:1883")
         assertEquals("broker.local", avecIdentifiants?.host)
+        assertEquals("coureur", avecIdentifiants?.username)
+        assertEquals("secret", avecIdentifiants?.password)
+
+        // Les identifiants sont decodes (%40 = '@', %3A = ':').
+        val encodes = BrokerAddress.parse("mqtt://joseph:mo%40t%3Ade%20passe@192.168.0.115:1883")
+        assertEquals("joseph", encodes?.username)
+        assertEquals("mo@t:de passe", encodes?.password)
+        assertEquals("192.168.0.115", encodes?.host)
+
+        // Un utilisateur sans mot de passe reste exploitable.
+        val sansMotDePasse = BrokerAddress.parse("mqtt://coureur@broker.local")
+        assertEquals("coureur", sansMotDePasse?.username)
+        assertNull(sansMotDePasse?.password)
 
         assertNull(BrokerAddress.parse(""))
         assertNull(BrokerAddress.parse("   "))
         assertNull(BrokerAddress.parse("http://broker.local"))
         assertNull(BrokerAddress.parse("mqtt://broker.local:port"))
         assertNull(BrokerAddress.parse("mqtt://broker.local:0"))
+    }
+
+    @Test
+    fun explicitCredentialsWinOverTheUrl() {
+        val adresse = BrokerAddress.parse("mqtt://url-user:url-secret@broker.local:1883")!!
+
+        // Reglages explicites : ils priment, on peut corriger un seul mot de passe
+        // sans retaper l'adresse.
+        assertEquals(
+            Pair("montre", "explicite"),
+            adresse.credentials(LiveConfig(username = "montre", password = "explicite")),
+        )
+        // Sans reglage explicite, l'URL prend le relais.
+        assertEquals(Pair("url-user", "url-secret"), adresse.credentials(LiveConfig()))
+        // Un utilisateur explicite seul laisse le mot de passe de l'URL.
+        assertEquals(Pair("montre", "url-secret"), adresse.credentials(LiveConfig(username = "montre")))
+    }
+
+    @Test
+    fun theProbeTopicStaysOutOfTheLiveSubscription() {
+        // Le backend s'abonne a <prefixe>/live/+ : un point de test ne doit
+        // jamais apparaitre sur la page /live.
+        assertEquals("mpacer/test/probe", LiveProbe.testTopic(LiveConfig(device = "probe")))
+        assertEquals(
+            "course/test/Fenix-7",
+            LiveProbe.testTopic(LiveConfig(topicPrefix = "course/", device = "Fenix 7")),
+        )
+        assertEquals("mpacer/test/probe", LiveProbe.testTopic(LiveConfig()))
     }
 }

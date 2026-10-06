@@ -105,8 +105,10 @@ alors « séance terminée » et cesse de se rafraîchir.
 | `.../watch/live/MqttCodec.kt` | sérialisation MQTT 3.1.1 (CONNECT, PUBLISH, PINGREQ, DISCONNECT) |
 | `.../watch/live/LiveTracker.kt` | un fil de fond : file bornée, connexion, reconnexion, compteurs |
 | `.../watch/live/LiveSettings.kt` | persistance (mot de passe en `EncryptedSharedPreferences`) |
+| `.../watch/live/LiveProbe.kt` | **test de connexion** demandé depuis la montre (CONNACK + point de test) |
 | `.../watch/TrackingService.kt` | branche le suivi au départ et à l'arrêt, tend chaque position |
-| `.../watch/ui/SettingsScreen.kt` | activation, cadence, état de la liaison |
+| `.../watch/ui/SettingsScreen.kt` | activation, cadence, état de la liaison, accès au menu MQTT |
+| `.../watch/ui/LiveSettingsScreen.kt` | **menu MQTT** : adresse, identifiants, sujet, cadence, test |
 
 Règles tenues :
 
@@ -124,7 +126,7 @@ Règles tenues :
 
 | Réglage | Défaut | Effet |
 |---|---|---|
-| URL du broker | vide | vide = suivi **désactivé**, coût nul |
+| URL du broker | vide | vide = suivi **désactivé**, coût nul. Les identifiants peuvent y figurer : `mqtt://joseph:secret@192.168.0.115:1883` |
 | Préfixe de sujet | `mpacer` | sujet publié : `<préfixe>/live/<montre>` |
 | Nom de la montre | `ANDROID_ID` (8 car.) | dernier segment du sujet |
 | Identifiant / mot de passe | vide | authentification du broker (facultative) |
@@ -132,13 +134,38 @@ Règles tenues :
 | Cadence en pause | 60 s | la montre ne bouge plus |
 | Précision minimale | 50 m | en dessous, le point n'est pas publié |
 
-L'URL et les identifiants se saisissent par `adb` (le clavier d'une montre ronde
-n'est pas un clavier) :
+Tout se règle **depuis la montre** : Réglages ▸ *Broker MQTT*. L'écran ouvre le
+clavier Wear pour l'adresse (`mqtt://hote:1883`), l'utilisateur, le mot de passe,
+le préfixe de sujet et le nom de la montre, et propose la cadence en course comme
+en pause. Deux commodités pour un écran rond :
+
+- **Coller l'adresse** reprend le presse-papiers : une URL complète
+  (`mqtt://joseph:secret@192.168.0.115:1883`) peut ainsi arriver du téléphone,
+  et les identifiants qu'elle contient sont analysés (y compris encodés :
+  `%40` pour `@`) ;
+- **Tester la connexion** ouvre une connexion avec les valeurs affichées —
+  brouillon non enregistré — vérifie le `CONNACK` puis publie un point de test
+  sur `<préfixe>/test/<montre>`, **hors** du filtre `<préfixe>/live/+` souscrit
+  par le service : la page `/live` n'est jamais polluée par un essai de réglages.
+  Le message d'erreur distingue une adresse illisible, un broker injoignable et
+  un refus d'authentification (codes 1 à 5 du CONNACK).
+
+Le mot de passe est enregistré dans `EncryptedSharedPreferences` (clé AES256-GCM
+du Keystore Android), jamais en clair, et les réglages prennent effet **à la
+prochaine séance** : la séance en cours garde la configuration avec laquelle elle
+a démarré.
+
+Le réglage par `adb` reste disponible pour les tests automatisés ; l'adresse
+transmise écrase celle enregistrée :
 
 ```bash
-adb shell am start -n com.mpacer.watch/.MainActivity \
-  --es mqtt_url "mqtt://mosquitto.mpacer.svc:1883"
+adb shell am start -n com.mpacer.watch/.MainActivity --es mqtt_url "mqtt://joseph:motdepasse@192.168.0.115:1883"
 ```
+
+Les réglages explicites de l'écran MQTT restent prioritaires sur les identifiants
+de l'URL, ce qui permet de corriger un seul mot de passe sans retaper l'adresse.
+Les valeurs locales vivent dans un fichier `.env` **non versionné** (gabarit :
+[`.env.example`](../.env.example)).
 
 ---
 
@@ -288,3 +315,16 @@ mosquitto_pub -h 127.0.0.1 -t mpacer/live/montre-test -r \
 # 4. La page
 #    http://localhost:8080/live  (session ouverte) doit afficher la trace
 ```
+
+Avec un broker deja en place, le meme controle se rejoue depuis le depot, sans
+qu'aucun identifiant n'entre dans le code (les valeurs viennent de
+l'environnement, par exemple du fichier `.env` non versionne) :
+
+```bash
+MPACER_MQTT_TEST_URL="mqtt://utilisateur:motdepasse@192.168.0.115:1883" \\
+  cargo test -p mpacer-api --test mqtt_live -- --ignored --nocapture
+```
+
+Le test se connecte avec le client de production, s'abonne a un sujet de test,
+y publie une position au format de la montre, verifie qu'elle revient intacte,
+puis efface le message retenu.

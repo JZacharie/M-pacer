@@ -158,6 +158,9 @@ externalSecrets:
     # MPACER_DEEZER_APP_SECRET ne sont pas scelles dans Vault.
     deezerAppId: ""
     deezerAppSecret: ""
+    # Idem pour le mot de passe du broker MQTT du suivi en direct (docs/10) :
+    # vide tant que MPACER_MQTT_PASSWORD n'est pas scelle dans Vault.
+    mqttPassword: ""
   # NB : le cluster jo3 provisionne deja 'regcred' (et 'tls-zacharie-org') dans chaque
   # namespace via ses propres ExternalSecrets. On ne les recree donc pas ici, pour
   # eviter un conflit de propriete sur un secret existant.

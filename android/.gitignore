@@ -9,3 +9,5 @@ local.properties
 build/
 .gradle/
 app/src/main/jniLibs/
+# Intermediaires CMake du shim JNI (regeneres par Gradle/AGP)
+.cxx/

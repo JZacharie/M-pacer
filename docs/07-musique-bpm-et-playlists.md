@@ -362,3 +362,131 @@ Ecarts au contrat, tous documentes :
 * le transfert USB reel n'a pas pu etre exerce dans cette session (aucune montre
   branchee) : `adb push`, `df` et `--prune` sont couverts par les primitives, les
   tests et le mode `--target-dir`, pas par un branchement physique.
+## 10. v3 - gestion de la musique, validation de la duree, reglages et identite visuelle
+
+> Ajout au contrat v2 (tout le reste est inchange). Trois chantiers en parallele :
+> coeur (calcul de couverture), backend/interface (page Musique, onglet Reglages),
+> design (logo, icones, habillage des nouveaux blocs).
+
+### 10.1 Coeur : couverture musicale d'une course
+
+```rust
+/// Marge de securite par defaut appliquee a la duree de course (5 %).
+pub const MUSIC_MARGIN_RATIO: f64 = 0.05;
+
+pub struct MusicCoverage {
+    pub playlist_duration_s: f64,
+    pub race_duration_s: Option<f64>,
+    pub margin_s: Option<f64>,          // playlist - course (negatif si insuffisant)
+    pub sufficient: Option<bool>,
+    pub tracks_needed: Option<u32>,     // titres necessaires pour couvrir la course
+    pub average_bpm: Option<f64>,
+    pub target_bpm: Option<f64>,
+    pub bpm_delta: Option<f64>,         // moyenne - cible
+    pub tempo_ok: Option<bool>,
+}
+
+/// Somme des durees valides (finies et > 0) d'une playlist.
+pub fn playlist_duration_s(tracks: &[Track]) -> f64;
+
+/// Duree de course : le temps cible s'il est fourni (> 0), sinon distance x allure.
+pub fn race_duration_s(
+    distance_m: Option<f64>,
+    target_time_s: Option<f64>,
+    target_pace_s_per_km: Option<f64>,
+) -> Option<f64>;
+
+/// Validation : la playlist couvre-t-elle la course, et a quel tempo ?
+pub fn music_coverage(
+    tracks: &[Track],
+    race_duration_s: Option<f64>,
+    target_pace_s_per_km: Option<f64>,
+    cfg: &MusicConfig,
+    margin_ratio: f64,
+) -> MusicCoverage;
+```
+
+Regles (testables) :
+
+* `sufficient = playlist_duration_s >= race_duration_s * (1 + margin_ratio)` ;
+  `None` si la duree de course est inconnue (le verdict n'est jamais invente) ;
+* `tracks_needed = ceil(course * (1 + margin) / duree_moyenne_des_titres)`, `None` si
+  la playlist est vide ou de duree moyenne nulle ;
+* `average_bpm` = moyenne des BPM renseignes (`None` si aucun) ; `target_bpm` =
+  `target_bpm_for_pace(pace)` si l'allure est connue ; `tempo_ok` = ecart inferieur ou
+  egal a `MusicConfig::switch_threshold_bpm` (`None` si l'un des deux manque) ;
+* une duree non finie, nulle ou negative est ignoree ; aucune division par zero, aucun
+  panic sur une playlist vide.
+
+### 10.2 Page `/music` : gestion et validation
+
+La page passe a **cinq blocs** :
+
+```text
++------------------------------------------------------------------------------+
+| 1. Source Spotify (facultatif)                                               |
+| 2. Playlists preparees   [ jouer ] [ renommer ] [ x ]                        |
+| 3. Titres de la playlist selectionnee  (BPM : [tapper] [saisir])             |
+| 4. Transfert vers la montre (USB)   [ Telecharger le manifeste ]             |
+| 5. Assez de musique pour la course ?                                         |
+|    Course [ 10 km de Bordeaux v ]  ou  distance [10] km  allure [5:00] /km   |
+|    -> 1 h 12 min de musique pour 1 h 05 de course : OK, +7 min de marge      |
+|       BPM moyen 148 vs cible 170 : tempo trop lent (il manque 22 bpm)        |
+|       [ Valider ]                                                            |
++------------------------------------------------------------------------------+
+```
+
+Regles d'interface :
+
+* le bloc 5 est un formulaire **GET** `?playlist=<id>&race=<id>&distance_km=&allure=&temps=`,
+  pre-rempli depuis la fiche de course selectionnee (`distance_m`, `goal_time_s`) ;
+  l'allure est acceptee en `m:ss` (par km) ou en secondes ; le temps en `h:mm:ss` ;
+* la reponse affiche : duree de la playlist, duree estimee de la course, marge
+  signee, verdict (`.coverage-ok` / `.coverage-warn` / `.coverage-bad`), nombre de
+  titres manquants, BPM moyen et BPM cible ;
+* la gestion des playlists s'ajoute : **renommer** (`POST /music/playlists/{id}/rename`,
+  champ `name`) et **supprimer** (existant) ; le total des durees est affiche dans la
+  liste ;
+* classes CSS a utiliser exactement (fournies par le chantier design) : `.coverage`,
+  `.coverage-verdict`, `.coverage-ok`, `.coverage-warn`, `.coverage-bad`,
+  `.coverage-gauge`, `.coverage-gauge-fill`, `.coverage-metrics`, `.bpm-gauge`,
+  `.bpm-gauge-marker`, `.illustration-usb`, `.logo`.
+
+### 10.3 Menu : un onglet Reglages
+
+* `NAV` gagne une entree `("reglages", "Reglages", "icon-settings", "/settings")` ;
+* le menu deroulant `settings_menu` (capture d'ecran : « Appairer | Jetons |
+  Deconnexion ») est **supprime** de l'en-tete ;
+* `/settings` reunit desormais, dans cet ordre : profil, **appareils appaires**
+  (jetons : liste + revocation), **appairer une montre** (code d'appairage, lien
+  `/link`, rappel de la procedure), et **deconnexion** ;
+* la route `/link` reste servie (la montre y renvoie l'utilisateur) mais ne figure
+  plus dans la navigation ;
+* la barre d'onglets mobile suit `NAV`, donc Reglages y apparait aussi.
+
+### 10.4 Identite visuelle
+
+Livrables du chantier design (fichiers) :
+
+| Fichier | Contenu |
+|---|---|
+| `static/logo.svg` | logo complet : marque (montre + trace d'allure dans un carre arrondi orange #fc4c02) + mot-cle "M-pacer" |
+| `static/logo-mark.svg` | la marque seule (carre arrondi), reutilisee en favicon et en petit format |
+| `static/illustration-usb.svg` | schema `playlist -> cable USB -> montre` du bloc 4 |
+| `static/app.css` | icones `icon-usb`, `icon-playlist`, `icon-tempo`, `icon-headphones`, `icon-check-circle` ; habillage `.coverage*`, `.bpm-gauge*`, `.logo`, `.illustration-usb` |
+
+Regles : SVG sans dependance externe, `currentColor` pour les icones, contraste
+verifie en theme clair et sombre (le site a les deux), aucune image bitmap.
+`assets.rs` expose les nouveaux fichiers (`include_str!`) et `web.rs` les sert sur
+`/static/logo.svg`, `/static/logo-mark.svg`, `/static/illustration-usb.svg`.
+L'en-tete affiche `static/logo.svg` (hauteur ~28 px, lien vers `/`) et le favicon
+du `layout` pointe sur `/static/logo-mark.svg`.
+### 10.5 Etat d'implementation (v3, 6 octobre 2026)
+
+| Chantier | Livre | Preuve |
+|---|---|---|
+| Coeur | `MUSIC_MARGIN_RATIO`, `MusicCoverage`, `playlist_duration_s`, `race_duration_s`, `music_coverage` | `cargo test -p mpacer-core` : **182 tests** (18 nouveaux) ; clippy et fmt propres |
+| Page `/music` | bloc 5 « Assez de musique pour la course ? » (verdict + jauge + BPM), renommage, totaux de duree, illustrations | verifie en service : playlist de 3 titres (10:30) pour 10 km a 5:00/km -> « insuffisant, il manque 39 min », 15 titres necessaires, « BPM moyen 125 vs cible 170 » |
+| Menu | `NAV` a 7 onglets avec **Reglages** ; menu deroulant supprime ; `/settings` = profil + appareils appaires + appairage + deconnexion | rendu verifie : Seances, Tableaux, Courses, Planning, Statistiques, Musique, Reglages |
+| Identite visuelle | `static/logo.svg`, `logo-mark.svg`, `illustration-usb.svg`, 5 icones et habillage `.coverage*`/`.bpm-gauge*` en clair et sombre | 200 HTTP sur les 4 fichiers (tailles identiques), contraste WCAG >= 4.4, 28 SVG bien formes |
+| Qualite | — | `cargo test --workspace` vert, `cargo clippy --workspace --all-targets -- -D warnings` propre, `cargo fmt --all --check` propre, `cargo test -p mpacer-api --test api` : 29 verts / 1 ignore |

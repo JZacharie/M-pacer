@@ -76,7 +76,12 @@ puis vous **téléchargez le manifeste**, et l'application locale
 [`mpacer-music`](crates/mpacer-music/) apparie les MP3 de **votre** dossier à ce
 manifeste et les **copie sur la montre par USB** (`adb push`). La montre joue
 ensuite **en local, hors ligne**, sans téléphone ni serveur ; M-pacer ne pilote
-pas Spotify et ne stocke aucun fichier audio. Détail et contrat d'interface :
+pas Spotify et ne stocke aucun fichier audio. La page `/music` **gère** les
+playlists (renommer, supprimer, corriger chaque BPM) et **valide la durée** : dites
+la course (ou la distance) et l'allure visée, elle répond « 1 h 12 de musique pour
+1 h 05 de course : OK, +7 min de marge » — ou « il manque 39 min, environ 15
+titres » — en comparant aussi le **BPM moyen de la playlist** au tempo cible de
+l'allure. Détail et contrat d'interface :
 [docs/07](docs/07-musique-bpm-et-playlists.md).
 
 **La montre.** Elle enregistre la séance sans le téléphone (GPS 1 Hz dans un service de
@@ -170,7 +175,7 @@ par le Data Layer Wear OS (message sous 90 Ko, sinon `DataClient` + `Asset`).
 | `src/routes/web.rs` | Pages web (maud) : accueil, tableau de bord, **analyse de séance**, statistiques, appairage, jetons, **fiches de course, planning et suivi**, **page `/music`** (playlists, import Spotify, téléversement, tap-tempo, envoi vers la montre), connexion OAuth Google et Spotify, **pastille de compte** (photo Google) dans l'en-tête |
 | `src/dashboards.rs` | **Tableaux de bord** : catalogue des widgets, gabarits (Pace Control, Analyse, Historique), chargement des données et rendu des écrans composés |
 | `src/routes/mod.rs` | Routeur global, sondes `/healthz` et `/readyz` |
-| `src/assets.rs` + `static/` | CSS et JS embarqués dans le binaire |
+| `src/assets.rs` + `static/` | CSS, JS et identité visuelle embarqués dans le binaire : `logo.svg`, `logo-mark.svg` (favicon), `illustration-usb.svg` |
 | `migrations/0001_init.sql` | Schéma initial : utilisateurs, jetons d'appareil, codes d'appairage, séances, états OAuth (idempotent, rejoué au démarrage) |
 | `migrations/0002_races.sql` | Courses à venir et suivi de préparation (idempotent aussi) |
 | `migrations/0003_music.sql` | Musique : playlists, pistes (BPM, origine, fichier), plans de téléchargement vers la montre, comptes Spotify liés (idempotent aussi) |

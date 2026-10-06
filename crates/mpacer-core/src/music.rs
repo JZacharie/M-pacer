@@ -913,6 +913,159 @@ impl MusicDirector {
     }
 }
 
+// ------------------------------------------- couverture musicale (v3 10.1)
+
+/// Marge de securite par defaut appliquee a la duree de course (5 %).
+pub const MUSIC_MARGIN_RATIO: f64 = 0.05;
+
+/// Tolerance relative qui absorbe les arrondis flottants sur les bornes : une
+/// playlist exactement a la marge reste suffisante, et un rapport entier de
+/// tracks_needed n'est pas pousse a l'entier superieur par du bruit numerique.
+const COVERAGE_EPSILON_RATIO: f64 = 1e-9;
+
+/// Validation de la couverture musicale d'une course : la playlist dure-t-elle
+/// assez longtemps, et a quel tempo ?
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct MusicCoverage {
+    /// Somme des durees valides de la playlist (s).
+    pub playlist_duration_s: f64,
+    /// Duree estimee de la course (s), si elle est connue.
+    pub race_duration_s: Option<f64>,
+    /// Marge brute playlist - course (negatif si insuffisant).
+    pub margin_s: Option<f64>,
+    /// Vrai si la playlist couvre la course avec la marge demandee.
+    pub sufficient: Option<bool>,
+    /// Titres necessaires pour couvrir la course avec la marge.
+    pub tracks_needed: Option<u32>,
+    /// BPM moyen des titres renseignes.
+    pub average_bpm: Option<f64>,
+    /// BPM cible deduit de l'allure cible.
+    pub target_bpm: Option<f64>,
+    /// Ecart BPM moyen - BPM cible.
+    pub bpm_delta: Option<f64>,
+    /// Vrai si l'ecart tient dans MusicConfig::switch_threshold_bpm.
+    pub tempo_ok: Option<bool>,
+}
+
+/// Somme des durees valides (finies et strictement positives) d'une playlist.
+///
+/// Une duree absente, non finie, nulle ou negative est ignoree : une playlist
+/// vide vaut 0 s, sans panic.
+pub fn playlist_duration_s(tracks: &[Track]) -> f64 {
+    tracks
+        .iter()
+        .map(|track| track.duration_s)
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .sum()
+}
+
+/// Duree de course (s) : le temps cible s'il est fourni (> 0), sinon
+/// distance x allure. None si l'information manque ou est invalide.
+pub fn race_duration_s(
+    distance_m: Option<f64>,
+    target_time_s: Option<f64>,
+    target_pace_s_per_km: Option<f64>,
+) -> Option<f64> {
+    if let Some(time) = target_time_s.filter(|time| time.is_finite() && *time > 0.0) {
+        return Some(time);
+    }
+    let distance = distance_m.filter(|distance| distance.is_finite() && *distance > 0.0)?;
+    let pace = target_pace_s_per_km.filter(|pace| pace.is_finite() && *pace > 0.0)?;
+    Some(distance / 1000.0 * pace)
+}
+
+/// Validation : la playlist couvre-t-elle la course, et a quel tempo ?
+///
+/// Le verdict n'est jamais invente : sans duree de course connue, sufficient,
+/// margin_s et tracks_needed restent None. Aucune division par zero et aucun
+/// panic sur une playlist vide.
+pub fn music_coverage(
+    tracks: &[Track],
+    race_duration_s: Option<f64>,
+    target_pace_s_per_km: Option<f64>,
+    cfg: &MusicConfig,
+    margin_ratio: f64,
+) -> MusicCoverage {
+    let playlist_duration = playlist_duration_s(tracks);
+    let race = race_duration_s.filter(|duration| duration.is_finite() && *duration > 0.0);
+    let margin_ratio = if margin_ratio.is_finite() {
+        margin_ratio
+    } else {
+        0.0
+    };
+    let safety = 1.0 + margin_ratio;
+
+    let sufficient = race.map(|race| {
+        let required = race * safety;
+        let tolerance = required.abs().max(1.0) * COVERAGE_EPSILON_RATIO;
+        playlist_duration + tolerance >= required
+    });
+    let tracks_needed = match (race, average_track_duration_s(tracks)) {
+        (Some(race), Some(average)) => {
+            let raw = race * safety / average;
+            let tolerance = raw.abs().max(1.0) * COVERAGE_EPSILON_RATIO;
+            Some((raw - tolerance).ceil().max(1.0) as u32)
+        }
+        _ => None,
+    };
+
+    let average_bpm = average_bpm(tracks);
+    let target_bpm = target_pace_s_per_km
+        .filter(|pace| pace.is_finite() && *pace > 0.0)
+        .map(|pace| target_bpm_for_pace(pace, cfg));
+    let bpm_delta = average_bpm
+        .zip(target_bpm)
+        .map(|(average, target)| average - target);
+    let tempo_ok = bpm_delta.map(|delta| delta.abs() <= cfg.switch_threshold_bpm);
+
+    MusicCoverage {
+        playlist_duration_s: playlist_duration,
+        race_duration_s: race,
+        margin_s: race.map(|race| playlist_duration - race),
+        sufficient,
+        tracks_needed,
+        average_bpm,
+        target_bpm,
+        bpm_delta,
+        tempo_ok,
+    }
+}
+
+/// Duree moyenne des titres dont la duree est valide (s) ; None si aucun.
+fn average_track_duration_s(tracks: &[Track]) -> Option<f64> {
+    let mut total = 0.0;
+    let mut count = 0u32;
+    for track in tracks {
+        if track.duration_s.is_finite() && track.duration_s > 0.0 {
+            total += track.duration_s;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return None;
+    }
+    let average = total / f64::from(count);
+    (average.is_finite() && average > 0.0).then_some(average)
+}
+
+/// Moyenne des BPM renseignes (finis et strictement positifs) ; None si aucun.
+fn average_bpm(tracks: &[Track]) -> Option<f64> {
+    let mut total = 0.0;
+    let mut count = 0u32;
+    for bpm in tracks
+        .iter()
+        .filter_map(|track| track.bpm)
+        .filter(|bpm| bpm.is_finite() && *bpm > 0.0)
+    {
+        total += bpm;
+        count += 1;
+    }
+    if count == 0 {
+        return None;
+    }
+    Some(total / f64::from(count))
+}
+
 // ------------------------------------------- appariement fichiers <-> pistes
 
 /// Extensions audio reconnues par l'appariement (contrat, section 3.1).
@@ -2056,5 +2209,274 @@ mod match_tests {
 
         unsafe_title.title = "   ".to_string();
         assert_eq!(suggested_file_name(&unsafe_title, "mp3"), "12 - Titre.mp3");
+    }
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+
+    fn cfg() -> MusicConfig {
+        MusicConfig::default()
+    }
+
+    fn with_duration(id: &str, duration_s: f64, bpm: Option<f64>) -> Track {
+        Track {
+            id: id.to_string(),
+            title: format!("Titre {id}"),
+            artist: None,
+            duration_s,
+            bpm,
+            position: 0,
+        }
+    }
+
+    fn with_durations(duration_s: f64, count: usize) -> Vec<Track> {
+        (0..count)
+            .map(|index| with_duration(&format!("t{index}"), duration_s, None))
+            .collect()
+    }
+
+    // ------------------------------------------------------------ durees
+
+    #[test]
+    fn playlist_duration_ignores_invalid_durations() {
+        let tracks = vec![
+            with_duration("a", 200.0, None),
+            with_duration("b", f64::NAN, None),
+            with_duration("c", -5.0, None),
+            with_duration("d", 0.0, None),
+            with_duration("e", f64::INFINITY, None),
+            with_duration("f", 100.0, None),
+        ];
+        assert!((playlist_duration_s(&tracks) - 300.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn playlist_duration_of_an_empty_playlist_is_zero() {
+        assert_eq!(playlist_duration_s(&[]), 0.0);
+    }
+
+    #[test]
+    fn race_duration_prefers_the_target_time() {
+        assert_eq!(
+            race_duration_s(Some(10_000.0), Some(3000.0), Some(300.0)),
+            Some(3000.0)
+        );
+    }
+
+    #[test]
+    fn race_duration_falls_back_to_distance_times_pace() {
+        assert_eq!(
+            race_duration_s(Some(10_000.0), None, Some(300.0)),
+            Some(3000.0)
+        );
+        // Un temps cible nul ou negatif est ignore au profit du couple distance x allure.
+        assert_eq!(
+            race_duration_s(Some(5000.0), Some(0.0), Some(300.0)),
+            Some(1500.0)
+        );
+        assert_eq!(
+            race_duration_s(Some(5000.0), Some(-10.0), Some(300.0)),
+            Some(1500.0)
+        );
+    }
+
+    #[test]
+    fn race_duration_is_unknown_without_valid_inputs() {
+        assert_eq!(race_duration_s(None, None, None), None);
+        assert_eq!(race_duration_s(Some(10_000.0), None, None), None);
+        assert_eq!(race_duration_s(None, None, Some(300.0)), None);
+        assert_eq!(race_duration_s(Some(10_000.0), None, Some(0.0)), None);
+        assert_eq!(
+            race_duration_s(Some(f64::NAN), Some(f64::NAN), Some(300.0)),
+            None
+        );
+        assert_eq!(
+            race_duration_s(Some(10_000.0), None, Some(f64::INFINITY)),
+            None
+        );
+    }
+
+    // --------------------------------------------------------- couverture
+
+    #[test]
+    fn a_sufficient_playlist_reports_a_positive_margin() {
+        let tracks = with_durations(120.0, 10); // 1200 s
+        let coverage = music_coverage(&tracks, Some(1000.0), None, &cfg(), MUSIC_MARGIN_RATIO);
+        assert_eq!(coverage.playlist_duration_s, 1200.0);
+        assert_eq!(coverage.race_duration_s, Some(1000.0));
+        assert_eq!(coverage.margin_s, Some(200.0));
+        assert_eq!(coverage.sufficient, Some(true));
+    }
+
+    #[test]
+    fn an_insufficient_playlist_reports_a_negative_margin() {
+        let tracks = with_durations(200.0, 2); // 400 s
+        let coverage = music_coverage(&tracks, Some(1000.0), None, &cfg(), MUSIC_MARGIN_RATIO);
+        assert_eq!(coverage.margin_s, Some(-600.0));
+        assert_eq!(coverage.sufficient, Some(false));
+    }
+
+    #[test]
+    fn the_margin_boundary_is_inclusive() {
+        // 5 x 210 s = 1050 s, soit exactement 1000 s x 1.05.
+        let at_margin = with_durations(210.0, 5);
+        let coverage = music_coverage(&at_margin, Some(1000.0), None, &cfg(), MUSIC_MARGIN_RATIO);
+        assert_eq!(coverage.sufficient, Some(true));
+
+        // Un cheveu sous la marge : insuffisant.
+        let below = vec![with_duration("a", 1049.0, None)];
+        let coverage = music_coverage(&below, Some(1000.0), None, &cfg(), MUSIC_MARGIN_RATIO);
+        assert_eq!(coverage.sufficient, Some(false));
+    }
+
+    #[test]
+    fn a_zero_margin_accepts_an_exact_match() {
+        let tracks = with_durations(200.0, 5); // 1000 s
+        let coverage = music_coverage(&tracks, Some(1000.0), None, &cfg(), 0.0);
+        assert_eq!(coverage.sufficient, Some(true));
+        assert_eq!(coverage.margin_s, Some(0.0));
+    }
+
+    #[test]
+    fn tracks_needed_rounds_up() {
+        // 2 titres de 210 s : 600 x 1.05 / 210 = 3 exactement (pas 4).
+        let tracks = with_durations(210.0, 2);
+        let coverage = music_coverage(&tracks, Some(600.0), None, &cfg(), MUSIC_MARGIN_RATIO);
+        assert_eq!(coverage.tracks_needed, Some(3));
+
+        // 5 titres de 200 s : 1000 x 1.05 / 200 = 5.25 -> 6.
+        let tracks = with_durations(200.0, 5);
+        let coverage = music_coverage(&tracks, Some(1000.0), None, &cfg(), MUSIC_MARGIN_RATIO);
+        assert_eq!(coverage.tracks_needed, Some(6));
+    }
+
+    #[test]
+    fn tracks_needed_is_none_without_a_race_or_a_duration() {
+        let tracks = with_durations(210.0, 2);
+        let coverage = music_coverage(&tracks, None, None, &cfg(), MUSIC_MARGIN_RATIO);
+        assert_eq!(coverage.tracks_needed, None);
+        assert_eq!(coverage.sufficient, None);
+        assert_eq!(coverage.margin_s, None);
+
+        let empty: Vec<Track> = Vec::new();
+        let coverage = music_coverage(&empty, Some(600.0), None, &cfg(), MUSIC_MARGIN_RATIO);
+        assert_eq!(coverage.playlist_duration_s, 0.0);
+        assert_eq!(coverage.sufficient, Some(false));
+        assert_eq!(coverage.tracks_needed, None);
+
+        let invalid = vec![
+            with_duration("a", f64::NAN, None),
+            with_duration("b", 0.0, None),
+        ];
+        let coverage = music_coverage(&invalid, Some(600.0), None, &cfg(), MUSIC_MARGIN_RATIO);
+        assert_eq!(coverage.tracks_needed, None);
+    }
+
+    #[test]
+    fn an_invalid_race_duration_gives_no_verdict() {
+        for race in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
+            let tracks = with_durations(210.0, 2);
+            let coverage = music_coverage(&tracks, Some(race), None, &cfg(), MUSIC_MARGIN_RATIO);
+            assert_eq!(coverage.race_duration_s, None, "race = {race}");
+            assert_eq!(coverage.sufficient, None);
+            assert_eq!(coverage.margin_s, None);
+            assert_eq!(coverage.tracks_needed, None);
+        }
+    }
+
+    // ----------------------------------------------------------- tempo
+
+    #[test]
+    fn average_bpm_is_none_without_any_bpm() {
+        let tracks = with_durations(200.0, 3);
+        let coverage = music_coverage(
+            &tracks,
+            Some(1000.0),
+            Some(300.0),
+            &cfg(),
+            MUSIC_MARGIN_RATIO,
+        );
+        assert_eq!(coverage.average_bpm, None);
+        assert_eq!(coverage.target_bpm, Some(170.0));
+        assert_eq!(coverage.bpm_delta, None);
+        assert_eq!(coverage.tempo_ok, None);
+    }
+
+    #[test]
+    fn average_bpm_and_delta_use_only_valid_values() {
+        let tracks = vec![
+            with_duration("a", 200.0, Some(168.0)),
+            with_duration("b", 200.0, Some(172.0)),
+            with_duration("c", 200.0, Some(f64::NAN)),
+            with_duration("d", 200.0, Some(0.0)),
+            with_duration("e", 200.0, None),
+        ];
+        let coverage = music_coverage(
+            &tracks,
+            Some(1000.0),
+            Some(300.0),
+            &cfg(),
+            MUSIC_MARGIN_RATIO,
+        );
+        assert_eq!(coverage.average_bpm, Some(170.0));
+        assert_eq!(coverage.target_bpm, Some(170.0));
+        assert_eq!(coverage.bpm_delta, Some(0.0));
+        assert_eq!(coverage.tempo_ok, Some(true));
+    }
+
+    #[test]
+    fn tempo_ok_is_false_when_the_gap_exceeds_the_threshold() {
+        let tracks = vec![
+            with_duration("a", 200.0, Some(160.0)),
+            with_duration("b", 200.0, Some(160.0)),
+        ];
+        let coverage = music_coverage(
+            &tracks,
+            Some(1000.0),
+            Some(300.0),
+            &cfg(),
+            MUSIC_MARGIN_RATIO,
+        );
+        assert_eq!(coverage.average_bpm, Some(160.0));
+        assert_eq!(coverage.bpm_delta, Some(-10.0));
+        assert_eq!(coverage.tempo_ok, Some(false));
+    }
+
+    #[test]
+    fn tempo_ok_accepts_the_threshold_exactly() {
+        // Cible 170, moyenne 162 : ecart de 8 = switch_threshold_bpm.
+        let tracks = vec![with_duration("a", 200.0, Some(162.0))];
+        let coverage = music_coverage(
+            &tracks,
+            Some(1000.0),
+            Some(300.0),
+            &cfg(),
+            MUSIC_MARGIN_RATIO,
+        );
+        assert_eq!(coverage.bpm_delta, Some(-8.0));
+        assert_eq!(coverage.tempo_ok, Some(true));
+    }
+
+    #[test]
+    fn tempo_ok_is_none_without_a_target_pace() {
+        let tracks = vec![with_duration("a", 200.0, Some(170.0))];
+        let coverage = music_coverage(&tracks, Some(1000.0), None, &cfg(), MUSIC_MARGIN_RATIO);
+        assert_eq!(coverage.average_bpm, Some(170.0));
+        assert_eq!(coverage.target_bpm, None);
+        assert_eq!(coverage.bpm_delta, None);
+        assert_eq!(coverage.tempo_ok, None);
+    }
+
+    #[test]
+    fn an_empty_playlist_never_panics() {
+        let coverage = music_coverage(&[], Some(1000.0), Some(300.0), &cfg(), MUSIC_MARGIN_RATIO);
+        assert_eq!(coverage.playlist_duration_s, 0.0);
+        assert_eq!(coverage.margin_s, Some(-1000.0));
+        assert_eq!(coverage.sufficient, Some(false));
+        assert_eq!(coverage.tracks_needed, None);
+        assert_eq!(coverage.average_bpm, None);
+        assert_eq!(coverage.target_bpm, Some(170.0));
     }
 }

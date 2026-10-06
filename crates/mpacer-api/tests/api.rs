@@ -588,13 +588,13 @@ async fn google_login_creates_a_session_and_dashboard() {
     assert_eq!(response.status(), StatusCode::OK);
     assert!(body_text(response).await.contains("</gpx>"));
 
-    // 4. Les jetons d'appareil sont listes dans les reglages.
+    // 4. Les appareils appaires sont listes dans les reglages.
     let response = app
         .oneshot(get_with_cookie("/settings", &session))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(body_text(response).await.contains("Jetons d'appareil"));
+    assert!(body_text(response).await.contains("Appareils appaires"));
 }
 
 #[tokio::test]
@@ -1741,12 +1741,12 @@ async fn music_api_publishes_playlists_and_the_transfer_manifest() {
 }
 
 #[tokio::test]
-async fn music_page_has_four_blocks_and_downloads_the_manifest() {
+async fn music_page_has_five_blocks_and_downloads_the_manifest() {
     let (app, state) = app_or_skip!(test_app(true).await);
     let (_user, session) = dev_user_session(&state).await;
 
-    // La page vide presente les quatre blocs de la maquette 6.1 et ne propose
-    // plus aucun televersement.
+    // La page vide presente les cinq blocs de la maquette v3 (docs/07 10.2) et
+    // ne propose plus aucun televersement.
     let body = body_text(
         app.clone()
             .oneshot(get_with_cookie("/music", &session))
@@ -1759,6 +1759,7 @@ async fn music_page_has_four_blocks_and_downloads_the_manifest() {
         "2. Playlists preparees",
         "3. Titres (playlist selectionnee)",
         "4. Transfert vers la montre (USB)",
+        "5. Assez de musique pour la course ?",
         "Spotify n'est pas configure",
         "Aucune playlist pour l'instant",
         "Selectionnez une playlist dans le bloc 2",
@@ -1771,7 +1772,7 @@ async fn music_page_has_four_blocks_and_downloads_the_manifest() {
     assert!(!body.contains("multipart/form-data"), "{body}");
     assert!(!body.contains("Envoyer sur la montre"), "{body}");
 
-    // Une playlist importee alimente les blocs 2 a 4.
+    // Une playlist importee alimente les blocs 2 a 5.
     let playlist = mpacer_api::db::insert_music_playlist(
         &state.pool,
         &_user.id,
@@ -1820,13 +1821,18 @@ async fn music_page_has_four_blocks_and_downloads_the_manifest() {
         "inconnu",
         "tapper",
         "saisir",
-        "Manifeste",
+        "Ouvrir",
+        "Renommer",
         "Telecharger le manifeste",
         "run-170.json",
         "mpacer-music transfer",
         "Brancher la montre en USB",
         "Importer (USB)",
         "BPM cible",
+        // Bloc 5 : sans duree de course, le verdict reste en attente.
+        "coverage-warn",
+        "coverage-gauge-fill",
+        "Duree playlist",
     ] {
         assert!(body.contains(expected), "« {expected} » absent : {body}");
     }
@@ -2884,4 +2890,230 @@ async fn a_dashboard_belongs_to_its_owner() {
     let response = app.clone().oneshot(get("/dashboards")).await.unwrap();
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert_eq!(response.headers()[header::LOCATION], "/login");
+}
+
+// ------------------------------------------------------------------ musique v3
+
+#[tokio::test]
+async fn music_page_validates_the_coverage_and_renames_a_playlist() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (_user, session) = dev_user_session(&state).await;
+
+    // Une playlist confortable : 20 titres de 5 min (1 h 40) a 150 BPM.
+    let playlist = mpacer_api::db::insert_music_playlist(
+        &state.pool,
+        &_user.id,
+        &mpacer_api::models::MusicPlaylistInput {
+            name: "Run 170".into(),
+            source: "spotify".into(),
+            spotify_id: None,
+            cover_url: None,
+            target_bpm: Some(170.0),
+        },
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+    for position in 0..20 {
+        mpacer_api::db::insert_music_track(
+            &state.pool,
+            &_user.id,
+            &playlist.id,
+            &mpacer_api::models::MusicTrackInput {
+                position,
+                title: format!("Titre {position}"),
+                artist: Some("Artiste".into()),
+                album: None,
+                duration_s: Some(300.0),
+                bpm: Some(150.0),
+                bpm_source: Some("manual".into()),
+                spotify_uri: None,
+            },
+            state.now_ms(),
+        )
+        .await
+        .unwrap();
+    }
+
+    // Course de 10 km a 5:00/km (50 min) : la musique couvre largement.
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie(
+                &format!("/music?playlist={}&distance_km=10&allure=5:00", playlist.id),
+                &session,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        body.contains("5. Assez de musique pour la course ?"),
+        "{body}"
+    );
+    assert!(body.contains("coverage-ok"), "{body}");
+    assert!(body.contains("OK,"), "{body}");
+    assert!(body.contains("coverage-gauge-fill"), "{body}");
+    assert!(body.contains("bpm-gauge-marker"), "{body}");
+    assert!(body.contains("1:40:00"), "{body}");
+    assert!(body.contains("BPM moyen 150"), "{body}");
+    // Le formulaire est pre-rempli avec ce qui a ete soumis.
+    assert!(body.contains(r#"value="10""#), "{body}");
+
+    // Une playlist trop courte ne couvre pas un marathon.
+    let short = mpacer_api::db::insert_music_playlist(
+        &state.pool,
+        &_user.id,
+        &mpacer_api::models::MusicPlaylistInput {
+            name: "Courte".into(),
+            source: "manual".into(),
+            spotify_id: None,
+            cover_url: None,
+            target_bpm: None,
+        },
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+    mpacer_api::db::insert_music_track(
+        &state.pool,
+        &_user.id,
+        &short.id,
+        &mpacer_api::models::MusicTrackInput {
+            position: 0,
+            title: "Unique".into(),
+            artist: None,
+            album: None,
+            duration_s: Some(300.0),
+            bpm: None,
+            bpm_source: None,
+            spotify_uri: None,
+        },
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie(
+                &format!(
+                    "/music?playlist={}&distance_km=42.195&allure=5:00",
+                    short.id
+                ),
+                &session,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("coverage-bad"), "{body}");
+    assert!(body.contains("insuffisant"), "{body}");
+
+    // Le total des durees est affiche dans la liste des playlists.
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie("/music", &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("Total"), "{body}");
+    assert!(body.contains("Ouvrir"), "{body}");
+    assert!(body.contains("Renommer"), "{body}");
+
+    // Renommage d'une playlist.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/music/playlists/{}/rename", playlist.id),
+            "name=Sortie+longue",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let renamed = mpacer_api::db::get_music_playlist(&state.pool, &_user.id, &playlist.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(renamed.name, "Sortie longue");
+
+    // Un nom vide est refuse sans rien changer.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/music/playlists/{}/rename", playlist.id),
+            "name=",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert!(response.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .contains("erreur=nom_invalide"));
+    assert_eq!(
+        mpacer_api::db::get_music_playlist(&state.pool, &_user.id, &playlist.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .name,
+        "Sortie longue"
+    );
+}
+
+#[tokio::test]
+async fn settings_gathers_profile_devices_pairing_and_logout() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (user, session) = dev_user_session(&state).await;
+
+    // Un appareil appaire, pour verifier la liste et la revocation.
+    let token = mpacer_api::auth::new_device_token();
+    mpacer_api::db::insert_api_token(
+        &state.pool,
+        &user.id,
+        &mpacer_api::auth::hash_token(&token),
+        "Pixel Watch",
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/settings", &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_text(response).await;
+    for expected in [
+        "Reglages",
+        "Profil",
+        "Appareils appaires",
+        "Pixel Watch",
+        "Revoquer",
+        "Appairer une montre",
+        "BCDF-GHJK",
+        "action=\"/link\"",
+        "Deconnexion",
+        "action=\"/logout\"",
+    ] {
+        assert!(
+            body.contains(expected),
+            "« {expected} » absent de /settings : {body}"
+        );
+    }
+    // Reglages est un onglet de la navigation, et le menu deroulant a disparu.
+    assert!(body.contains("href=\"/settings\""), "{body}");
+    assert!(!body.contains("menu-panel"), "{body}");
+
+    // La route /link reste servie, meme si elle quitte la navigation.
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie("/link", &session))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(body_text(response).await.contains("Appairer une montre"));
 }

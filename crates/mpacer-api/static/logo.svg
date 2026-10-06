@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="mp-logo" viewBox="0 0 136 36" role="img" aria-labelledby="mpacer-logo-title">
+  <title id="mpacer-logo-title">M-pacer</title>
+  <style>
+    /* Autonome charge en image et en SVG inline : le mot-cle suit le theme. */
+    svg.mp-logo { color: #f3f5f8; }
+    .mp-logo-wordmark { fill: currentColor; }
+    @media (prefers-color-scheme: light) {
+      svg.mp-logo { color: #14161a; }
+    }
+  </style>
+  <svg x="0" y="1" width="34" height="34" viewBox="0 0 32 32">
+    <rect width="32" height="32" rx="9" fill="#fc4c02"/>
+    <path d="M6 17h4l2.4-6 3 12 2.6-7 1.6 3H26" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+  <text class="mp-logo-wordmark" x="44" y="25.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="22" font-weight="750" letter-spacing="-0.4" textLength="88" lengthAdjust="spacingAndGlyphs">M-pacer</text>
+</svg>

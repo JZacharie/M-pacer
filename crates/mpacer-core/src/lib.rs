@@ -44,10 +44,11 @@ pub use cardio::{HeartRateSample, HeartRateSummary, HeartRateZones, ZoneMethod};
 pub use engine::{EngineConfig, EngineOutput, PacerEngine};
 pub use gps::{GpsMonitor, GpsSample, GpsStatus, StatusLight};
 pub use music::{
-    bpm_from_tags, cadence_from_speed, match_tracks, normalize_label, parse_manifest,
-    suggested_file_name, tap_tempo, target_bpm_for_pace, target_cadence_spm, BpmSource,
-    DirectiveReason, FileMatch, LocalFile, MusicConfig, MusicDirective, MusicDirector, MusicInput,
-    MusicState, NowPlaying, Playlist, Track, TransferManifest, WantedTrack,
+    bpm_from_tags, cadence_from_speed, match_tracks, music_coverage, normalize_label,
+    parse_manifest, playlist_duration_s, race_duration_s, suggested_file_name, tap_tempo,
+    target_bpm_for_pace, target_cadence_spm, BpmSource, DirectiveReason, FileMatch, LocalFile,
+    MusicConfig, MusicCoverage, MusicDirective, MusicDirector, MusicInput, MusicState, NowPlaying,
+    Playlist, Track, TransferManifest, WantedTrack, MUSIC_MARGIN_RATIO,
 };
 pub use pace::PaceEngine;
 pub use race_import::{import_race, ImportError, ImportSource, ImportedRace};

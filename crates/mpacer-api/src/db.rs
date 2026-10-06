@@ -943,6 +943,28 @@ pub async fn set_music_playlist_target(
     Ok(result.rows_affected() > 0)
 }
 
+/// Renomme une playlist (le nom est nettoye par l'appelant).
+///
+/// Renvoie `false` si la playlist n'appartient pas a l'utilisateur.
+pub async fn rename_music_playlist(
+    pool: &PgPool,
+    user_id: &str,
+    id: &str,
+    name: &str,
+    now_ms: i64,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE music_playlists SET name = $1, updated_at_ms = $2 WHERE id = $3 AND user_id = $4",
+    )
+    .bind(name)
+    .bind(now_ms)
+    .bind(id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 /// Marque une playlist comme modifiee (tri de la liste).
 pub async fn touch_music_playlist(
     pool: &PgPool,

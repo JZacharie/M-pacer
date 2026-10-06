@@ -7,7 +7,8 @@ use crate::auth::device;
 use crate::auth::{AuthUser, OptionalUser, SESSION_COOKIE};
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    MusicPlaylistInput, MusicTrackInput, Race, RaceInput, RaceTask, SpotifyAccount, User,
+    MusicPlaylistInput, MusicTrack, MusicTrackInput, Race, RaceInput, RaceTask, SpotifyAccount,
+    User,
 };
 use crate::state::AppState;
 use axum::body::Body;
@@ -17,8 +18,11 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Form, Router};
 use cookie::{Cookie, SameSite};
-use maud::{html, Markup, DOCTYPE};
+use maud::{html, Markup, PreEscaped, DOCTYPE};
 use mpacer_core::cardio::HeartRateZones;
+use mpacer_core::music::{
+    music_coverage, race_duration_s, MusicConfig, Track as MusicTrackCore, MUSIC_MARGIN_RATIO,
+};
 use mpacer_core::units::{format_duration, format_pace, UnitSystem};
 use serde::Deserialize;
 
@@ -105,9 +109,14 @@ pub fn router() -> Router<AppState> {
         .route("/music/playlists/{id}/manifest", get(music_manifest))
         .route("/music/playlists/{id}/track-bpm", post(music_track_bpm))
         .route("/music/playlists/{id}/target", post(music_target))
+        .route("/music/playlists/{id}/rename", post(music_rename))
         .route("/music/playlists/{id}/delete", post(music_delete))
         .route("/static/app.css", get(stylesheet))
         .route("/static/app.js", get(script))
+        // Identite visuelle (docs/07 section 10.4) : SVG embarques.
+        .route("/static/logo.svg", get(logo))
+        .route("/static/logo-mark.svg", get(logo_mark))
+        .route("/static/illustration-usb.svg", get(illustration_usb))
 }
 
 // ------------------------------------------------------------------ ressources
@@ -132,6 +141,34 @@ async fn script() -> Response {
             HeaderValue::from_static("application/javascript; charset=utf-8"),
         )],
         crate::assets::APP_JS,
+    )
+        .into_response()
+}
+
+/// Logo complet (marque + mot-cle "M-pacer").
+async fn logo() -> Response {
+    svg_response(crate::assets::LOGO_SVG)
+}
+
+/// Marque seule, utilisee en favicon et en petit format.
+async fn logo_mark() -> Response {
+    svg_response(crate::assets::LOGO_MARK_SVG)
+}
+
+/// Schema "playlist -> cable USB -> montre" du bloc 4.
+async fn illustration_usb() -> Response {
+    svg_response(crate::assets::ILLUSTRATION_USB_SVG)
+}
+
+/// Reponse SVG inline : aucun fichier n'est lu sur le disque.
+fn svg_response(body: &'static str) -> Response {
+    (
+        StatusCode::OK,
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("image/svg+xml; charset=utf-8"),
+        )],
+        body,
     )
         .into_response()
 }
@@ -1111,12 +1148,19 @@ async fn settings_page(
         return Ok(Redirect::to("/login").into_response());
     };
     let tokens = crate::db::list_tokens(&state.pool, &user.id).await?;
+    let active_tokens = tokens
+        .iter()
+        .filter(|token| token.revoked_at_ms.is_none())
+        .count();
 
     let content = html! {
         section class="hero" {
-            h1 { "Jetons d'appareil" }
-            p class="muted" { "Chaque montre appairee possede son propre jeton. Revoquez-le si vous perdez l'appareil." }
+            h1 { "Reglages" }
+            p class="muted" { "Votre compte, vos montres appairees et l'appairage d'un nouvel appareil." }
         }
+
+        // ------------------------------------------------ profil
+        div class="section-head" { h2 { "Profil" } }
         section class="card profile" {
             img class="avatar avatar-large" src="/avatar" alt="" width="64" height="64" decoding="async";
             div class="profile-identite" {
@@ -1131,7 +1175,15 @@ async fn settings_page(
                 }
             }
         }
-        section {
+
+        // ------------------------------------------------ appareils appaires
+        div class="section-head" {
+            h2 { "Appareils appaires" }
+            span class="muted" { (active_tokens) " actif(s) sur " (tokens.len()) }
+        }
+        @if tokens.is_empty() {
+            p class="muted" { "Aucune montre appairee pour l'instant." }
+        } @else {
             div class="table-wrap" {
             table {
                 thead { tr { th { "Appareil" } th { "Cree le" } th { "Dernier envoi" } th { "Etat" } th {} } }
@@ -1158,8 +1210,37 @@ async fn settings_page(
             }
             }
         }
+
+        // ------------------------------------------------ appairer une montre
+        div class="section-head" { h2 { "Appairer une montre" } }
+        section class="panel" {
+            p class="muted" {
+                "Sur la montre, ouvrez M-pacer et lancez la synchronisation : un code du type "
+                code { "BCDF-GHJK" }
+                " s'affiche. Saisissez-le ici : chaque montre appairee recoit son propre jeton."
+            }
+            form class="split" method="post" action="/link" {
+                input type="text" name="user_code" required autocomplete="off" autocapitalize="characters"
+                      maxlength="9" placeholder="BCDF-GHJK";
+                button type="submit" { "Appairer" }
+            }
+            p class="tiny muted" {
+                "La page " a href="/link" { "Appairer une montre" } " detaille la procedure."
+            }
+        }
+
+        // ------------------------------------------------ deconnexion
+        div class="section-head" { h2 { "Deconnexion" } }
+        section class="panel" {
+            p class="muted" {
+                "Fermer la session sur ce navigateur. Vos seances et vos playlists restent sur le serveur."
+            }
+            form method="post" action="/logout" {
+                button class="ghost danger" type="submit" { "Se deconnecter" }
+            }
+        }
     };
-    Ok(page(layout("Jetons", "settings", Some(&user), content)))
+    Ok(page(layout("Reglages", "reglages", Some(&user), content)))
 }
 
 async fn revoke_token(
@@ -1587,54 +1668,18 @@ fn page(markup: Markup) -> Response {
 
 /// Sections de navigation : cle interne, libelle, icone, chemin.
 ///
-/// L'appairage et les jetons n'y figurent plus : ce sont des reglages, pas des
-/// ecrans de consultation. Ils vivent dans le menu unique `settings_menu`.
-const NAV: [(&str, &str, &str, &str); 6] = [
+/// Reglages est un onglet comme les autres (docs/07 section 10.3) : l'appairage
+/// d'une montre, les jetons et la deconnexion vivent sur `/settings`, et le menu
+/// deroulant de l'en-tete a disparu.
+const NAV: [(&str, &str, &str, &str); 7] = [
     ("seances", "Seances", "icon-activity", "/"),
     ("dashboards", "Tableaux", "icon-grid", "/dashboards"),
     ("courses", "Courses", "icon-route", "/courses"),
     ("planning", "Planning", "icon-clock", "/courses/planning"),
     ("stats", "Statistiques", "icon-stats", "/stats"),
     ("music", "Musique", "icon-music", "/music"),
+    ("reglages", "Reglages", "icon-settings", "/settings"),
 ];
-
-/// Entrees du menu des reglages : cle interne, libelle, icone, chemin.
-const SETTINGS_NAV: [(&str, &str, &str, &str); 2] = [
-    ("link", "Appairer", "icon-watch", "/link"),
-    ("settings", "Jetons", "icon-key", "/settings"),
-];
-
-/// Menu des reglages : appairage, jetons et deconnexion derriere une seule
-/// entree. Un `details` natif fonctionne sans JavaScript ; le script ne fait
-/// que refermer le menu quand on clique ailleurs.
-fn settings_menu(active: &str) -> Markup {
-    let open = SETTINGS_NAV.iter().any(|(cle, ..)| *cle == active);
-    html! {
-        details class="menu" {
-            summary class=(if open { "active" } else { "" }) {
-                span class="icon icon-settings" {}
-                span { "Reglages" }
-            }
-            div class="menu-panel" {
-                @for (cle, libelle, icone, chemin) in SETTINGS_NAV {
-                    a class="menu-item" href=(chemin) {
-                        span class={ "icon " (icone) } {}
-                        span { (libelle) }
-                        @if cle == active {
-                            span class="menu-current muted" { "actuel" }
-                        }
-                    }
-                }
-                form method="post" action="/logout" {
-                    button class="menu-item danger" type="submit" {
-                        span class="icon icon-logout" {}
-                        span { "Deconnexion" }
-                    }
-                }
-            }
-        }
-    }
-}
 
 fn layout(title: &str, active: &str, user: Option<&User>, content: Markup) -> Markup {
     html! {
@@ -1653,11 +1698,13 @@ fn layout(title: &str, active: &str, user: Option<&User>, content: Markup) -> Ma
                 meta name="description" content="Suivi de course auto-heberge : seances, analyse, export GPX.";
                 title { (title) " - M-pacer" }
                 link rel="stylesheet" href="/static/app.css";
-                link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23fc4c02'/%3E%3Cpath d='M6 17h4l2.4-6 3 12 2.6-7 1.6 3H26' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E";
+                // Favicon : la marque seule, servie par le service (aucune image externe).
+                link rel="icon" type="image/svg+xml" href="/static/logo-mark.svg";
             }
             body {
                 header class="site" {
-                    a class="brand" href="/" { "M-pacer" }
+                    // Logo complet (marque + mot-cle) fourni par le chantier design.
+                    a class="brand logo" href="/" { (PreEscaped(crate::assets::LOGO_SVG)) }
                     nav {
                         @if user.is_some() {
                             @for (cle, libelle, icone, chemin) in NAV {
@@ -1677,9 +1724,6 @@ fn layout(title: &str, active: &str, user: Option<&User>, content: Markup) -> Ma
                             img class="avatar" src="/avatar" alt="" width="32" height="32" decoding="async";
                             span class="who" { (user.name.clone().unwrap_or_else(|| user.email.clone())) }
                         }
-                        // Hors du `nav` : les reglages restent accessibles sur
-                        // telephone, ou la navigation par onglets prend le relais.
-                        (settings_menu(active))
                     }
                 }
                 main { (content) }
@@ -3428,6 +3472,18 @@ struct MusicQuery {
     /// Terme de recherche Spotify.
     #[serde(default)]
     q: Option<String>,
+    /// Bloc 5 : course dont on verifie la couverture.
+    #[serde(default)]
+    race: Option<String>,
+    /// Bloc 5 : distance saisie (km), prioritaire sur la fiche de course.
+    #[serde(default)]
+    distance_km: Option<String>,
+    /// Bloc 5 : allure (m:ss au km, ou secondes).
+    #[serde(default)]
+    allure: Option<String>,
+    /// Bloc 5 : temps vise (h:mm:ss).
+    #[serde(default)]
+    temps: Option<String>,
     #[serde(default)]
     erreur: Option<String>,
     #[serde(default)]
@@ -3442,6 +3498,7 @@ fn music_error_message(code: &str) -> String {
         "spotify_ref_invalide" => "La reference de playlist Spotify est illisible : collez un lien open.spotify.com ou un identifiant.".to_string(),
         "spotify_non_connecte" => "Connectez votre compte Spotify avant d'importer une playlist.".to_string(),
         "playlist_inconnue" => "Cette playlist n'existe plus.".to_string(),
+        "nom_invalide" => "Le nom de la playlist ne peut pas etre vide.".to_string(),
         "bpm_invalide" => "Le BPM doit etre un nombre entre 30 et 300.".to_string(),
         other => format!("Operation impossible ({other})."),
     }
@@ -3454,6 +3511,7 @@ fn music_ok_message(code: &str) -> String {
         "spotify_deconnecte" => "Compte Spotify deconnecte.".to_string(),
         "playlist_importee" => "Playlist Spotify importee.".to_string(),
         "bpm_enregistre" => "BPM enregistre.".to_string(),
+        "playlist_renommee" => "Playlist renommee.".to_string(),
         "playlist_supprimee" => "Playlist supprimee.".to_string(),
         other => format!("Operation effectuee ({other})."),
     }
@@ -3465,6 +3523,230 @@ fn music_ok_message(code: &str) -> String {
 /// sien, celui ou sont ranges ses fichiers audio.
 fn transfer_command(manifest_name: &str) -> String {
     format!("mpacer-music transfer --manifest {manifest_name} --folder \"D:\\Musique\\Course\"")
+}
+
+/// Analyse une allure saisie : "5:00" (minutes:secondes par km), "5:00/km" ou
+/// un nombre de secondes. `None` si la valeur est vide ou illisible.
+fn parse_pace_input(text: &str) -> Option<f64> {
+    let cleaned = text
+        .trim()
+        .trim_end_matches("/km")
+        .trim_end_matches("km")
+        .trim();
+    if cleaned.is_empty() {
+        return None;
+    }
+    let seconds = match cleaned.split_once(':') {
+        Some((minutes, seconds)) => {
+            let minutes: f64 = minutes.trim().replace(',', ".").parse().ok()?;
+            let seconds: f64 = seconds.trim().replace(',', ".").parse().ok()?;
+            minutes * 60.0 + seconds
+        }
+        None => cleaned.replace(',', ".").parse().ok()?,
+    };
+    (seconds.is_finite() && seconds > 0.0).then_some(seconds)
+}
+
+/// Duree en mots, pour la phrase du verdict ("1 h 05", "45 min").
+fn human_duration(seconds: f64) -> String {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return "0 min".to_string();
+    }
+    let total = seconds.round() as i64;
+    let (hours, minutes) = (total / 3600, (total % 3600) / 60);
+    match (hours, minutes) {
+        (0, minutes) => format!("{} min", minutes.max(1)),
+        (hours, 0) => format!("{hours} h"),
+        (hours, minutes) => format!("{hours} h {minutes:02}"),
+    }
+}
+
+/// Duree signee en mots ("+7 min", "-3 min"), pour la marge.
+fn signed_minutes(seconds: f64) -> String {
+    if !seconds.is_finite() || seconds.abs() < 30.0 {
+        return "0 min".to_string();
+    }
+    format!(
+        "{}{}",
+        if seconds > 0.0 { "+" } else { "-" },
+        human_duration(seconds.abs())
+    )
+}
+
+/// Bloc 5 pret a afficher : verdict, jauges et valeurs du formulaire.
+struct CoverageView {
+    /// `coverage-ok` | `coverage-warn` | `coverage-bad`.
+    verdict_class: &'static str,
+    verdict: String,
+    playlist_duration: String,
+    race_duration: String,
+    margin: String,
+    tracks_needed: String,
+    average_bpm: String,
+    target_bpm: String,
+    tempo: String,
+    gauge_percent: f64,
+    bpm_marker_percent: Option<f64>,
+    race_id: String,
+    distance_km: String,
+    allure: String,
+    temps: String,
+}
+
+/// Construit le bloc 5 : la playlist couvre-t-elle la course visee ?
+///
+/// Les valeurs saisies dans le formulaire priment sur la fiche de course ; une
+/// duree inconnue reste inconnue, le verdict n'est jamais invente.
+fn coverage_view(tracks: &[MusicTrack], races: &[Race], query: &MusicQuery) -> CoverageView {
+    let race = query
+        .race
+        .as_deref()
+        .and_then(|id| races.iter().find(|race| race.id == id));
+
+    let distance_km = query
+        .distance_km
+        .clone()
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_else(|| {
+            race.and_then(|race| race.distance_m)
+                .map(|meters| format!("{:.2}", meters / 1000.0))
+                .unwrap_or_default()
+        });
+    let distance_m = distance_km
+        .trim()
+        .replace(',', ".")
+        .parse::<f64>()
+        .ok()
+        .filter(|km| km.is_finite() && *km > 0.0)
+        .map(|km| km * 1000.0)
+        .or_else(|| race.and_then(|race| race.distance_m));
+
+    let temps = query
+        .temps
+        .clone()
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_else(|| {
+            race.and_then(|race| race.goal_time_s)
+                .map(format_duration)
+                .unwrap_or_default()
+        });
+    let target_time_s = parse_duration(&temps).ok().flatten();
+    let allure = query.allure.clone().unwrap_or_default();
+    let pace_s_per_km = parse_pace_input(&allure);
+
+    let estimated_race_s = race_duration_s(distance_m, target_time_s, pace_s_per_km);
+    let core_tracks: Vec<MusicTrackCore> = tracks
+        .iter()
+        .map(|track| MusicTrackCore {
+            id: track.id.clone(),
+            title: track.title.clone(),
+            artist: track.artist.clone(),
+            duration_s: track.duration_s.unwrap_or(0.0),
+            bpm: track.bpm,
+            position: track.position.max(0) as u32,
+        })
+        .collect();
+    let config = MusicConfig::default();
+    let coverage = music_coverage(
+        &core_tracks,
+        estimated_race_s,
+        pace_s_per_km,
+        &config,
+        MUSIC_MARGIN_RATIO,
+    );
+
+    let verdict_class = match coverage.sufficient {
+        Some(true) => "coverage-ok",
+        Some(false) => "coverage-bad",
+        None => "coverage-warn",
+    };
+    let verdict = match (
+        coverage.sufficient,
+        coverage.race_duration_s,
+        coverage.margin_s,
+    ) {
+        (Some(true), Some(race_s), Some(margin)) => format!(
+            "{} de musique pour {} de course : OK, +{} de marge",
+            human_duration(coverage.playlist_duration_s),
+            human_duration(race_s),
+            human_duration(margin)
+        ),
+        (Some(false), Some(race_s), Some(margin)) => format!(
+            "{} de musique pour {} de course : insuffisant, il manque {}",
+            human_duration(coverage.playlist_duration_s),
+            human_duration(race_s),
+            human_duration(margin.abs())
+        ),
+        _ => format!(
+            "{} de musique : duree de course inconnue, impossible de conclure",
+            human_duration(coverage.playlist_duration_s)
+        ),
+    };
+
+    let tempo = match (coverage.average_bpm, coverage.target_bpm) {
+        (Some(average), Some(target)) => {
+            let delta = coverage.bpm_delta.unwrap_or(average - target);
+            if coverage.tempo_ok == Some(true) {
+                format!("BPM moyen {average:.0} vs cible {target:.0} : tempo coherent.")
+            } else if delta < 0.0 {
+                format!(
+                    "BPM moyen {average:.0} vs cible {target:.0} : tempo trop lent (il manque {:.0} bpm).",
+                    delta.abs()
+                )
+            } else {
+                format!(
+                    "BPM moyen {average:.0} vs cible {target:.0} : tempo trop rapide ({delta:.0} bpm de trop)."
+                )
+            }
+        }
+        (None, _) => "BPM moyen inconnu : renseignez le tempo des titres.".to_string(),
+        (_, None) => "BPM cible inconnu : renseignez une allure pour l'obtenir.".to_string(),
+    };
+
+    let gauge_percent = match coverage.race_duration_s {
+        Some(race_s) if race_s > 0.0 => {
+            let target = race_s * (1.0 + MUSIC_MARGIN_RATIO);
+            (coverage.playlist_duration_s / target * 100.0).clamp(0.0, 100.0)
+        }
+        _ => 0.0,
+    };
+    let bpm_marker_percent = coverage.average_bpm.map(|bpm| {
+        let span = (config.max_bpm - config.min_bpm).max(1.0);
+        ((bpm - config.min_bpm) / span * 100.0).clamp(2.0, 98.0)
+    });
+
+    CoverageView {
+        verdict_class,
+        verdict,
+        playlist_duration: format_duration(coverage.playlist_duration_s),
+        race_duration: coverage
+            .race_duration_s
+            .map(format_duration)
+            .unwrap_or_else(|| "-".to_string()),
+        margin: coverage
+            .margin_s
+            .map(signed_minutes)
+            .unwrap_or_else(|| "-".to_string()),
+        tracks_needed: coverage
+            .tracks_needed
+            .map(|needed| format!("{needed} titres"))
+            .unwrap_or_else(|| "-".to_string()),
+        average_bpm: coverage
+            .average_bpm
+            .map(|bpm| format!("{bpm:.0}"))
+            .unwrap_or_else(|| "-".to_string()),
+        target_bpm: coverage
+            .target_bpm
+            .map(|bpm| format!("{bpm:.0}"))
+            .unwrap_or_else(|| "-".to_string()),
+        tempo,
+        gauge_percent,
+        bpm_marker_percent,
+        race_id: race.map(|race| race.id.clone()).unwrap_or_default(),
+        distance_km,
+        allure,
+        temps,
+    }
 }
 
 /// Jeton d'acces Spotify valide, rafraichi si necessaire.
@@ -3569,6 +3851,14 @@ async fn music_page(
             }
         }
     }
+
+    // Courses a venir : elles alimentent le formulaire de couverture (bloc 5).
+    let races = crate::db::list_upcoming_races(&state.pool, &user.id, state.now_ms()).await?;
+    let coverage = coverage_view(&tracks, &races, &query);
+
+    // Le total des durees est affiche dans la liste des playlists.
+    let total_duration_s: f64 = playlists.iter().map(|playlist| playlist.duration_s).sum();
+    let total_tracks: i64 = playlists.iter().map(|playlist| playlist.track_count).sum();
 
     let target_label = selected_summary
         .and_then(|playlist| playlist.target_bpm)
@@ -3701,14 +3991,34 @@ async fn music_page(
                                 }
                                 td {
                                     div class="actions" {
-                                        a class="button small ghost" href={ "/music/playlists/" (playlist.id) "/manifest" } { "Manifeste" }
+                                        a class="button small ghost" href={ "/music?playlist=" (playlist.id) } {
+                                            span class="icon icon-playlist" {}
+                                            "Ouvrir"
+                                        }
+                                        form class="inline-form" method="post"
+                                             action={ "/music/playlists/" (playlist.id) "/rename" } {
+                                            input type="text" name="name" value=(playlist.name) required maxlength="200"
+                                                  aria-label="Nouveau nom de la playlist";
+                                            button class="small ghost" type="submit" { "Renommer" }
+                                        }
                                         form method="post" action={ "/music/playlists/" (playlist.id) "/delete" }
                                              data-confirm="Supprimer cette playlist et ses metadonnees ?" {
-                                            button class="ghost danger small" type="submit" { "x" }
+                                            button class="ghost danger small" type="submit"
+                                                   aria-label="Supprimer la playlist" { "Supprimer" }
                                         }
                                     }
                                 }
                             }
+                        }
+                    }
+                    tfoot {
+                        tr {
+                            td { "Total" }
+                            td {}
+                            td { (total_tracks) }
+                            td { (format_duration(total_duration_s)) }
+                            td {}
+                            td {}
                         }
                     }
                 }
@@ -3780,6 +4090,7 @@ async fn music_page(
             (&selected_playlist, &manifest_name, &manifest_command)
         {
             div class="panel" {
+                div class="illustration-usb" { (PreEscaped(crate::assets::ILLUSTRATION_USB_SVG)) }
                 ol class="usb-steps" {
                     li {
                         a class="button" href={ "/music/playlists/" (playlist.id) "/manifest" } {
@@ -3806,6 +4117,53 @@ async fn music_page(
             }
         } @else {
             p class="muted" { "Selectionnez une playlist dans le bloc 2 pour preparer son transfert." }
+        }
+
+        // ------------------------------------------------ 5. couverture musicale
+        div class="section-head" { h2 { "5. Assez de musique pour la course ?" } }
+        @if let Some(playlist) = &selected_playlist {
+            form class="coverage-form" method="get" action="/music" {
+                input type="hidden" name="playlist" value=(playlist.id);
+                div class="grid-2" {
+                    div class="field" {
+                        label for="race" { "Course" }
+                        select id="race" name="race" {
+                            option value="" { "Aucune course" }
+                            @for race in &races {
+                                option value=(race.id) selected[coverage.race_id == race.id] { (race.name) }
+                            }
+                        }
+                    }
+                    (text_field("distance_km", "ou distance (km)", &coverage.distance_km, "text", "10"))
+                    (text_field("allure", "Allure (min/km ou secondes)", &coverage.allure, "text", "5:00"))
+                    (text_field("temps", "Temps vise (h:mm:ss)", &coverage.temps, "text", "1:00:00"))
+                }
+                div class="actions" {
+                    button type="submit" { "Valider" }
+                }
+            }
+            section class="coverage" {
+                div class={ "coverage-verdict " (coverage.verdict_class) } { (coverage.verdict) }
+                div class="coverage-gauge" {
+                    div class="coverage-gauge-fill" style=(format!("width: {:.0}%", coverage.gauge_percent)) {}
+                }
+                div class="coverage-metrics" {
+                    (mini_card("Duree playlist", &coverage.playlist_duration))
+                    (mini_card("Duree course", &coverage.race_duration))
+                    (mini_card("Marge", &coverage.margin))
+                    (mini_card("Titres necessaires", &coverage.tracks_needed))
+                    (mini_card("BPM moyen", &coverage.average_bpm))
+                    (mini_card("BPM cible", &coverage.target_bpm))
+                }
+                p class="muted" { (coverage.tempo) }
+                @if let Some(marker) = coverage.bpm_marker_percent {
+                    div class="bpm-gauge" {
+                        div class="bpm-gauge-marker" style=(format!("left: {marker:.0}%")) {}
+                    }
+                }
+            }
+        } @else {
+            p class="muted" { "Selectionnez une playlist dans le bloc 2 pour verifier sa couverture." }
         }
     };
 
@@ -4140,6 +4498,31 @@ async fn music_track_bpm(
     Ok(Redirect::to(&format!("/music?playlist={id}&ok=bpm_enregistre")).into_response())
 }
 
+#[derive(Debug, Deserialize)]
+struct MusicRenameForm {
+    #[serde(default)]
+    name: String,
+}
+
+/// Renomme une playlist (le nom est nettoye et borne a 200 caracteres).
+async fn music_rename(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Form(form): Form<MusicRenameForm>,
+) -> AppResult<Response> {
+    let name = form.name.trim();
+    if name.is_empty() {
+        return Ok(Redirect::to("/music?erreur=nom_invalide").into_response());
+    }
+    let name: String = name.chars().take(200).collect();
+    if !crate::db::rename_music_playlist(&state.pool, &user.id, &id, &name, state.now_ms()).await? {
+        return Ok(Redirect::to("/music?erreur=playlist_inconnue").into_response());
+    }
+    tracing::info!(user = %user.email, playlist = %id, "playlist renommee");
+    Ok(Redirect::to(&format!("/music?playlist={id}&ok=playlist_renommee")).into_response())
+}
+
 /// Supprime une playlist (ses metadonnees ; aucun audio n'est stocke ici).
 async fn music_delete(
     State(state): State<AppState>,
@@ -4178,10 +4561,105 @@ mod music_web_tests {
     fn music_messages_are_explicit() {
         assert!(music_error_message("spotify_non_configure").contains("MPACER_SPOTIFY_CLIENT_ID"));
         assert!(music_error_message("bpm_invalide").contains("30"));
+        assert!(music_error_message("nom_invalide").contains("vide"));
         assert!(music_ok_message("playlist_supprimee").contains("supprimee"));
+        assert!(music_ok_message("playlist_renommee").contains("renommee"));
         // Un code inconnu reste lisible plutot que vide.
         assert!(music_error_message("inconnu").contains("inconnu"));
         assert!(music_ok_message("inconnu").contains("inconnu"));
+    }
+
+    #[test]
+    fn paces_and_durations_are_read_as_written() {
+        assert_eq!(parse_pace_input("5:00"), Some(300.0));
+        assert_eq!(parse_pace_input("5:00/km"), Some(300.0));
+        assert_eq!(parse_pace_input("4:30"), Some(270.0));
+        assert_eq!(parse_pace_input("300"), Some(300.0));
+        assert_eq!(parse_pace_input(""), None);
+        assert_eq!(parse_pace_input("vite"), None);
+        assert_eq!(parse_pace_input("0"), None);
+
+        assert_eq!(human_duration(3600.0), "1 h");
+        assert_eq!(human_duration(3900.0), "1 h 05");
+        assert_eq!(human_duration(2700.0), "45 min");
+        assert_eq!(human_duration(0.0), "0 min");
+        assert_eq!(signed_minutes(420.0), "+7 min");
+        assert_eq!(signed_minutes(-420.0), "-7 min");
+        assert_eq!(signed_minutes(5.0), "0 min");
+    }
+
+    /// Piste minimale, telle que la base la renvoie.
+    fn music_track(duration_s: Option<f64>, bpm: Option<f64>) -> MusicTrack {
+        MusicTrack {
+            id: "t1".into(),
+            playlist_id: "p1".into(),
+            user_id: "u1".into(),
+            position: 0,
+            title: "Titre".into(),
+            artist: Some("Artiste".into()),
+            album: None,
+            duration_s,
+            bpm,
+            bpm_source: None,
+            spotify_uri: None,
+            mime: None,
+            size_bytes: None,
+            storage_path: None,
+            created_at_ms: 0,
+            downloaded_at_ms: None,
+        }
+    }
+
+    /// Formulaire du bloc 5, sans course selectionnee.
+    fn coverage_query(distance_km: &str, allure: &str) -> MusicQuery {
+        MusicQuery {
+            playlist: Some("p1".into()),
+            q: None,
+            race: None,
+            distance_km: Some(distance_km.into()),
+            allure: Some(allure.into()),
+            temps: None,
+            erreur: None,
+            ok: None,
+        }
+    }
+
+    #[test]
+    fn the_coverage_verdict_follows_the_playlist_duration() {
+        let tracks = vec![
+            music_track(Some(3600.0), Some(150.0)),
+            music_track(Some(3600.0), Some(150.0)),
+        ];
+        // 10 km a 5:00/km = 50 min de course ; 2 h de musique : large marge.
+        let view = coverage_view(&tracks, &[], &coverage_query("10", "5:00"));
+        assert_eq!(view.verdict_class, "coverage-ok");
+        assert!(view.verdict.contains("OK"), "{}", view.verdict);
+        assert_eq!(view.playlist_duration, "2:00:00");
+        assert_eq!(view.average_bpm, "150");
+        // Le BPM cible vient de la calibration du coeur (170 a 5:00/km).
+        assert_eq!(view.target_bpm, "170");
+        assert!(view.gauge_percent > 99.0, "{}", view.gauge_percent);
+        assert!(view.bpm_marker_percent.is_some());
+
+        // Une seule piste de 10 min ne couvre pas 50 min de course.
+        let short = coverage_view(
+            &[music_track(Some(600.0), None)],
+            &[],
+            &coverage_query("10", "5:00"),
+        );
+        assert_eq!(short.verdict_class, "coverage-bad");
+        assert!(short.verdict.contains("insuffisant"), "{}", short.verdict);
+        // Sans BPM renseigne, aucun tempo n'est invente.
+        assert_eq!(short.average_bpm, "-");
+        assert_eq!(short.bpm_marker_percent, None);
+        assert!(short.margin.starts_with('-'), "{}", short.margin);
+
+        // Sans duree de course, le verdict reste en attente.
+        let unknown = coverage_view(&tracks, &[], &coverage_query("", ""));
+        assert!(unknown.distance_km.is_empty());
+        assert_eq!(unknown.verdict_class, "coverage-warn");
+        assert!(unknown.verdict.contains("inconnue"), "{}", unknown.verdict);
+        assert_eq!(unknown.race_duration, "-");
     }
 }
 
@@ -4190,25 +4668,37 @@ mod navigation_web_tests {
     use super::*;
 
     #[test]
-    fn the_header_keeps_six_tabs_and_gathers_settings_in_a_menu() {
-        // Les ecrans de consultation restent des onglets ; l'appairage, les
-        // jetons et la deconnexion vivent dans le menu des reglages.
-        assert_eq!(NAV.len(), 6);
-        // Les tableaux de bord se consultent : ils ont leur onglet.
+    fn the_header_tabs_include_settings_and_the_dropdown_is_gone() {
+        // Reglages est un onglet comme les autres (docs/07 section 10.3) : plus
+        // de menu deroulant, l'appairage et les jetons vivent sur /settings.
+        assert_eq!(NAV.len(), 7);
         assert!(NAV.iter().any(|(cle, ..)| *cle == "dashboards"));
-        assert!(!NAV
+        assert!(NAV
             .iter()
-            .any(|(cle, ..)| *cle == "link" || *cle == "settings"));
+            .any(|(cle, libelle, icone, chemin)| *cle == "reglages"
+                && *libelle == "Reglages"
+                && *icone == "icon-settings"
+                && *chemin == "/settings"));
+        // /link reste servi (la montre y renvoie l'utilisateur) mais n'est plus
+        // dans la navigation.
+        assert!(!NAV.iter().any(|(cle, ..)| *cle == "link"));
 
-        let menu = settings_menu("settings").into_string();
-        assert!(menu.contains("class=\"menu\""), "{menu}");
-        assert!(menu.contains("Appairer"), "{menu}");
-        assert!(menu.contains("Jetons"), "{menu}");
-        assert!(menu.contains("Deconnexion"), "{menu}");
-        assert!(menu.contains("action=\"/logout\""), "{menu}");
-        // La page courante est signalee dans le menu, pas ailleurs.
-        assert!(menu.contains("actuel"), "{menu}");
-        assert!(!settings_menu("seances").into_string().contains("actuel"));
-        assert!(!settings_menu("courses").into_string().contains("actuel"));
+        let user = User {
+            id: "u1".into(),
+            google_sub: None,
+            email: "coureur@example.org".into(),
+            name: Some("Coureur".into()),
+            picture_url: None,
+            created_at_ms: 0,
+            last_seen_ms: 0,
+        };
+        let markup = layout("Reglages", "reglages", Some(&user), html! {}).into_string();
+        assert!(markup.contains("href=\"/settings\""), "{markup}");
+        assert!(markup.contains("Reglages"), "{markup}");
+        // Le logo du chantier design remplace le simple texte de marque.
+        assert!(markup.contains("class=\"brand logo\""), "{markup}");
+        // Plus de menu deroulant ni de deconnexion dans l'en-tete.
+        assert!(!markup.contains("menu-panel"), "{markup}");
+        assert!(!markup.contains("action=\"/logout\""), "{markup}");
     }
 }

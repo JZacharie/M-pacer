@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="mpacer-mark-title">
+  <title id="mpacer-mark-title">M-pacer</title>
+  <rect width="64" height="64" rx="17" fill="#fc4c02"/>
+  <path d="M12 34h8l4.8-12 6 24 5.2-14 3.2 6H52" fill="none" stroke="#ffffff" stroke-width="5.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

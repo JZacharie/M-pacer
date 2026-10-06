@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 132" role="img" aria-labelledby="mpacer-usb-title">
+  <title id="mpacer-usb-title">Playlist, cable USB, montre</title>
+  <style>
+    /* Contraste verifie dans les deux themes (le SVG est aussi autonome, charge
+       en image). Classes prefixees : en SVG inline rien ne fuit vers la page. */
+    .mp-usb-trace { stroke: #a7b0bd; }
+    .mp-usb-accent { stroke: #fc4c02; }
+    .mp-usb-label { fill: #a7b0bd; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 12.5px; font-weight: 600; }
+    @media (prefers-color-scheme: light) {
+      .mp-usb-trace { stroke: #667085; }
+      .mp-usb-label { fill: #5d6673; }
+    }
+  </style>
+  <g fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 1. Playlist -->
+    <rect class="mp-usb-trace" x="10" y="28" width="86" height="68" rx="15"/>
+    <circle class="mp-usb-trace" cx="44" cy="80" r="6"/>
+    <circle class="mp-usb-trace" cx="66" cy="76" r="6"/>
+    <path class="mp-usb-trace" d="M50 80V54l22-4v26"/>
+    <!-- 2. Fleche -->
+    <path class="mp-usb-accent" d="M104 62h10M110 56l6 6-6 6"/>
+    <!-- 3. Cable USB -->
+    <rect class="mp-usb-trace" x="122" y="54" width="16" height="16" rx="4"/>
+    <path class="mp-usb-trace" d="M126 59h5M126 65h5"/>
+    <path class="mp-usb-trace" d="M138 62c14-18 28 18 42 0"/>
+    <rect class="mp-usb-trace" x="180" y="54" width="14" height="16" rx="4"/>
+    <!-- 4. Montre : le trace d'allure reprend la marque -->
+    <rect class="mp-usb-trace" x="200" y="30" width="76" height="68" rx="18"/>
+    <path class="mp-usb-trace" d="M226 30V14h24v16M226 98v16h24V98"/>
+    <path class="mp-usb-accent" d="M214 64h10l6-13 7 25 6-15 5 8h16"/>
+  </g>
+  <text class="mp-usb-label" x="53" y="126" text-anchor="middle" textLength="52" lengthAdjust="spacingAndGlyphs">Playlist</text>
+  <text class="mp-usb-label" x="158" y="126" text-anchor="middle" textLength="72" lengthAdjust="spacingAndGlyphs">Cable USB</text>
+  <text class="mp-usb-label" x="238" y="126" text-anchor="middle" textLength="50" lengthAdjust="spacingAndGlyphs">Montre</text>
+</svg>

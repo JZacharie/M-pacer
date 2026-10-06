@@ -209,7 +209,7 @@ cargo run -p mpacer-sim -- --mode plan --distance 10000 --time 3000 --gpx trace.
 
 # Bibliotheque Android (necessite le NDK)
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
-cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o android/app/src/main/jniLibs build --release -p mpacer-ffi
+cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o android/core/src/main/jniLibs build --release -p mpacer-ffi
 
 # Application montre (necessite le SDK Android)
 cd android && ./gradlew :app:assembleDebug

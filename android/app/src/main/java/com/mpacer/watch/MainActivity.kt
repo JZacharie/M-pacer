@@ -12,12 +12,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import com.mpacer.watch.live.LiveConfig
-import com.mpacer.watch.live.LiveProbe
-import com.mpacer.watch.live.LiveSettings
-import com.mpacer.watch.live.LiveTracker
-import com.mpacer.watch.music.MusicConfig
-import com.mpacer.watch.music.MusicSession
+import com.mpacer.core.AssistantConfig
+import com.mpacer.core.AssistantMode
+import com.mpacer.core.SessionConfig
+import com.mpacer.core.SyncClient
+import com.mpacer.core.TrackingService
+import com.mpacer.core.VoiceCoach
+import com.mpacer.core.VoiceConfig
+import com.mpacer.core.live.LiveConfig
+import com.mpacer.core.live.LiveProbe
+import com.mpacer.core.live.LiveSettings
+import com.mpacer.core.live.LiveTracker
+import com.mpacer.core.music.MusicConfig
+import com.mpacer.core.music.MusicSession
 import com.mpacer.watch.ui.LiveSettingsScreen
 import com.mpacer.watch.ui.MainScreen
 import com.mpacer.watch.ui.MusicScreen
@@ -39,6 +46,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Identite de l'appareil : le socle ne connait aucun nom d'ecran.
+        SyncClient.pairingLabel = BuildConfig.PAIRING_LABEL
+        LiveSettings.deviceFallback = "montre"
         VoiceCoach.initialise(this)
         applyApiUrl(intent)
         requestPermissions.launch(
@@ -68,6 +78,17 @@ class MainActivity : ComponentActivity() {
             // par MusicSession si la seance n'a pas encore demarre).
             val updateSettings: (WatchSettings) -> Unit = { nouveau ->
                 settings = nouveau
+                // L'assistant et la voix partent au moteur ; sans seance en cours,
+                // SessionConfig les garde pour le depart.
+                SessionConfig.setAssistant(
+                    AssistantConfig(
+                        mode = nouveau.mode,
+                        raceDistanceM = nouveau.raceDistanceM,
+                        plannedTimeS = nouveau.plannedTimeS,
+                        negativeSplitRatio = nouveau.negativeSplitRatio,
+                    )
+                )
+                SessionConfig.setVoice(nouveau.voice)
                 MusicSession.setConfig(nouveau.music)
                 LiveSettings.save(this, nouveau.live)
                 LiveTracker.refresh(this)

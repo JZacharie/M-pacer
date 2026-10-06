@@ -1,9 +1,9 @@
-package com.mpacer.watch
+package com.mpacer.core
 
-import com.mpacer.watch.music.MusicConfig
-import com.mpacer.watch.music.MusicPlaylist
-import com.mpacer.watch.music.MusicState
-import com.mpacer.watch.music.NowPlaying
+import com.mpacer.core.music.MusicConfig
+import com.mpacer.core.music.MusicPlaylist
+import com.mpacer.core.music.MusicState
+import com.mpacer.core.music.NowPlaying
 import org.json.JSONArray
 import org.json.JSONObject
 

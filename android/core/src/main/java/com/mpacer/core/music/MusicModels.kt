@@ -1,4 +1,4 @@
-package com.mpacer.watch.music
+package com.mpacer.core.music
 
 import org.json.JSONArray
 import org.json.JSONObject

@@ -1,4 +1,4 @@
-package com.mpacer.watch.live
+package com.mpacer.core.live
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -11,7 +11,7 @@ import androidx.security.crypto.MasterKey
  *
  * Le mot de passe du broker, s'il y en a un, est range dans
  * EncryptedSharedPreferences (cle AES256-GCM du Keystore Android), comme le
- * jeton d'appairage de [com.mpacer.watch.SyncClient] : aucun secret en clair.
+ * jeton d'appairage de [com.mpacer.core.SyncClient] : aucun secret en clair.
  */
 object LiveSettings {
 
@@ -27,6 +27,12 @@ object LiveSettings {
     private const val KEY_ACCURACY = "min_accuracy_m"
 
     @Volatile private var cache: SharedPreferences? = null
+
+    /**
+     * Suffixe utilise quand le systeme ne fournit aucun identifiant exploitable.
+     * L'application le remplace au demarrage ("montre", "telephone").
+     */
+    @Volatile var deviceFallback: String = "appareil"
 
     /** Reglages enregistres, completees par les valeurs par defaut. */
     fun load(context: Context): LiveConfig {
@@ -66,7 +72,7 @@ object LiveSettings {
 
     /**
      * Adresse du broker, modifiable au lancement pour le developpement :
-     *   adb shell am start -n com.mpacer.watch/.MainActivity --es mqtt_url mqtt://hote:1883
+     *   adb shell am start -n <paquet>/.MainActivity --es mqtt_url mqtt://hote:1883
      */
     fun setUrl(context: Context, url: String): LiveConfig =
         save(context, load(context).copy(url = url.trim()))
@@ -81,7 +87,7 @@ object LiveSettings {
             Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
         }.getOrNull()
         val propre = brut.orEmpty().filter { it.isLetterOrDigit() }
-        return if (propre.isBlank()) "montre" else propre.take(8).lowercase()
+        return if (propre.isBlank()) deviceFallback else propre.take(8).lowercase()
     }
 
     private fun prefs(context: Context): SharedPreferences {

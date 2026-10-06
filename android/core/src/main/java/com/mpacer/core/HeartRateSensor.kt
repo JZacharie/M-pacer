@@ -1,4 +1,4 @@
-package com.mpacer.watch
+package com.mpacer.core
 
 import android.content.Context
 import android.hardware.Sensor
@@ -56,4 +56,30 @@ class HeartRateSensor(
     fun stop() {
         manager?.unregisterListener(listener)
     }
+}
+
+/**
+ * Source de frequence cardiaque supplementaire.
+ *
+ * [HeartRateSensor] couvre le capteur integre de l'appareil (montre, ou de rares
+ * telephones). Le telephone, lui, lit sa frequence sur une ceinture Bluetooth :
+ * l'application y enregistre cette source dans [HeartRateSources.external], et la
+ * seance demarre les deux sans rien connaitre de Bluetooth.
+ */
+interface HeartRateSource {
+
+    /** Nom affiche dans les reglages ("Ceinture BLE"). */
+    val label: String
+
+    /** Demarre l'ecoute ; chaque mesure part telle quelle dans le moteur. */
+    fun start(onSample: (tMs: Long, bpm: Int) -> Unit)
+
+    fun stop()
+}
+
+/** Registre des sources cardiaques externes (une seule a la fois). */
+object HeartRateSources {
+
+    @Volatile
+    var external: HeartRateSource? = null
 }

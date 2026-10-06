@@ -1,5 +1,8 @@
 package com.mpacer.watch.ui
 
+import com.mpacer.core.ui.GpsLight
+import com.mpacer.core.ui.Palette
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,11 +25,11 @@ import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.ButtonDefaults
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
-import com.mpacer.watch.EngineOutput
-import com.mpacer.watch.MpacerFormat
-import com.mpacer.watch.WatchState
-import com.mpacer.watch.music.MusicDirective
-import com.mpacer.watch.music.MusicState
+import com.mpacer.core.EngineOutput
+import com.mpacer.core.MpacerFormat
+import com.mpacer.core.SessionState
+import com.mpacer.core.music.MusicDirective
+import com.mpacer.core.music.MusicState
 import kotlin.math.roundToInt
 
 /**
@@ -38,7 +41,7 @@ import kotlin.math.roundToInt
  */
 @Composable
 fun MainScreen(
-    state: WatchState,
+    state: SessionState,
     onStart: () -> Unit,
     onPause: () -> Unit,
     onResume: () -> Unit,
@@ -79,7 +82,7 @@ fun MainScreen(
 }
 
 @Composable
-private fun StatusLight(state: WatchState) {
+private fun StatusLight(state: SessionState) {
     GpsLight(state.output?.light)
 }
 

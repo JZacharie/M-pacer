@@ -24,21 +24,21 @@ static jstring take_string(JNIEnv *env, char *text) {
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_mpacer_watch_MpacerCore_nativeNew(JNIEnv *env, jclass clazz) {
+Java_com_mpacer_core_MpacerCore_nativeNew(JNIEnv *env, jclass clazz) {
     (void) env;
     (void) clazz;
     return (jlong) (intptr_t) mpacer_new();
 }
 
 JNIEXPORT void JNICALL
-Java_com_mpacer_watch_MpacerCore_nativeFree(JNIEnv *env, jclass clazz, jlong handle) {
+Java_com_mpacer_core_MpacerCore_nativeFree(JNIEnv *env, jclass clazz, jlong handle) {
     (void) env;
     (void) clazz;
     mpacer_free((void *) (intptr_t) handle);
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_mpacer_watch_MpacerCore_nativeCommand(JNIEnv *env, jclass clazz, jlong handle, jstring command) {
+Java_com_mpacer_core_MpacerCore_nativeCommand(JNIEnv *env, jclass clazz, jlong handle, jstring command) {
     (void) clazz;
     if (command == NULL) {
         return (*env)->NewStringUTF(env, "{\"error\":\"commande nulle\"}");
@@ -53,7 +53,7 @@ Java_com_mpacer_watch_MpacerCore_nativeCommand(JNIEnv *env, jclass clazz, jlong 
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_mpacer_watch_MpacerCore_nativeVersion(JNIEnv *env, jclass clazz) {
+Java_com_mpacer_core_MpacerCore_nativeVersion(JNIEnv *env, jclass clazz) {
     (void) clazz;
     return take_string(env, mpacer_version());
 }

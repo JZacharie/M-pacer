@@ -1,4 +1,4 @@
-package com.mpacer.watch
+package com.mpacer.core
 
 import android.content.Context
 import android.content.SharedPreferences
@@ -30,7 +30,7 @@ import java.util.concurrent.TimeUnit
  * Synchronisation des seances vers le backend auto-heberge.
  *
  * Deux responsabilites, volontairement separees du moteur Rust :
- *  1. appairer la montre avec le compte (device flow RFC 8628 : code utilisateur,
+ *  1. appairer l'appareil avec le compte (device flow RFC 8628 : code utilisateur,
  *     puis sondage du jeton jusqu a approbation sur la page /link) ;
  *  2. envoyer les seances locales (WorkoutArchive, format .pac) via POST /api/v1/workouts.
  *
@@ -73,7 +73,15 @@ object SyncClient {
 
     private val _state = MutableStateFlow(SyncState())
 
-    /** Etat observe par [com.mpacer.watch.ui.SyncScreen]. */
+    /**
+     * Libelle envoye au backend pendant l'appairage. Chaque application pose le
+     * sien au demarrage ("Montre M-pacer", "Telephone M-pacer") : le socle ne
+     * connait aucun nom d'appareil.
+     */
+    @Volatile
+    var pairingLabel: String = "M-pacer"
+
+    /** Etat observe par l'ecran de synchronisation. */
     val state: StateFlow<SyncState> = _state.asStateFlow()
 
     // ------------------------------------------------------------- preferences
@@ -107,7 +115,7 @@ object SyncClient {
     /** Oublie le jeton local ; les seances deja envoyees restent marquees comme telles. */
     fun disconnect(context: Context) {
         prefs(context).edit().remove(KEY_TOKEN).apply()
-        _state.update { it.copy(paired = false, pairing = null, phase = SyncPhase.Idle, message = "Montre deconnectee") }
+        _state.update { it.copy(paired = false, pairing = null, phase = SyncPhase.Idle, message = "Appareil deconnecte") }
     }
 
     private fun normalise(url: String): String = url.trim().trimEnd('/')
@@ -143,7 +151,7 @@ object SyncClient {
     suspend fun startPairing(context: Context): DeviceCode? {
         _state.update { it.copy(phase = SyncPhase.RequestingCode, pairing = null, message = null) }
         return try {
-            val code = requestDeviceCode(context, BuildConfig.PAIRING_LABEL)
+            val code = requestDeviceCode(context, pairingLabel)
             _state.update { it.copy(phase = SyncPhase.WaitingApproval, pairing = code, message = null) }
             code
         } catch (error: Exception) {
@@ -169,7 +177,7 @@ object SyncClient {
                             pairing = null,
                             phase = SyncPhase.Done,
                             pending = pendingCount(context),
-                            message = "Montre appairee",
+                            message = "Appareil appaire",
                         )
                     }
                     return true
@@ -195,11 +203,11 @@ object SyncClient {
     /**
      * Envoie les seances en attente sans bloquer l'appelant : utilise a la fin d'une
      * seance pour que l'utilisateur n'ait pas a ouvrir l'ecran de synchronisation.
-     * Si la montre n'est pas appairee, l'archive reste sur la montre (aucun echec).
+     * Si l'appareil n'est pas appaire, l'archive reste locale (aucun echec).
      */
     fun syncInBackground(context: Context) {
         if (!isPaired(context)) {
-            Log.i(TAG, "seance conservee localement : montre non appairee")
+            Log.i(TAG, "seance conservee localement : appareil non appaire")
             return
         }
         val application = context.applicationContext
@@ -213,7 +221,7 @@ object SyncClient {
     suspend fun syncPending(context: Context): Int {
         val token = token(context)
         if (token == null) {
-            fail("Montre non appairee")
+            fail("Appareil non appaire")
             return 0
         }
         val synced = prefs(context).getStringSet(KEY_SYNCED_IDS, emptySet())?.toMutableSet() ?: mutableSetOf()

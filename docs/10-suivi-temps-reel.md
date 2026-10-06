@@ -294,8 +294,8 @@ cargo test -p mpacer-api
 # Un faux broker dans les tests : connexion, PUBLISH QoS 1, PUBACK
 cargo test -p mpacer-api mqtt::
 
-# Montre : politique de cadence, charge utile, paquets MQTT
-cd android && ./gradlew :app:testDebugUnitTest
+# Socle partage : politique de cadence, charge utile, paquets MQTT
+cd android && ./gradlew :core:testDebugUnitTest
 ```
 
 Essai de bout en bout, sans montre :

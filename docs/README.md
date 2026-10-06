@@ -16,6 +16,7 @@ Index des documents. Le point d'entrée reste le [README principal](../README.md
 | [10 - Suivi en direct (MQTT)](10-suivi-temps-reel.md) | suivre la course en temps réel : contrat du sujet et de la charge utile, cadence et filtre de précision sur la montre, page `/live`, budget de ressources chiffré, sécurité et limites |
 | [11 - Playlists multi-sources et synchro des MP3](11-playlists-multi-sources-et-synchro-mp3.md) | chercher et récupérer des playlists sur **Spotify ou Deezer**, lister les MP3 à mettre en place, pousser des fichiers dans l'application locale et suivre le statut de synchronisation vers la montre |
 | [08 - Tableaux de bord](08-tableaux-de-bord.md) | composer vos propres écrans : catalogue de neuf widgets (allure, carte, tours, meilleures distances, cardio, historique…), gabarits Pace Control / Analyse / Historique, modèle de données et routes |
+| [12 - Courir avec le téléphone](12-course-telephone.md) | courir sans montre : socle partagé `:core`, écran de course Material 3, ceinture cardiaque Bluetooth LE, permissions, réglages persistants, musique et limites connues |
 | [Guide de déploiement](../deploy/README.md) | déployer concrètement sur le cluster k3s **jo3** : image, secrets, Helm, ingress, TLS, sauvegardes, dépannage |
 
 ## Illustrations
@@ -44,7 +45,7 @@ du site (visionneuse plein écran) et reprises par
 
 **Je veux déployer** → [deploy/README.md](../deploy/README.md).
 
-**Je veux reprendre le développement montre** → 03 puis [android/README.md](../android/README.md).
+**Je veux reprendre le développement montre ou téléphone** → 03 et 12, puis [android/README.md](../android/README.md).
 
 **Je veux déployer sur une montre Garmin** → 09 puis [garmin/README.md](../garmin/README.md).
 

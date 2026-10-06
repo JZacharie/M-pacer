@@ -1,4 +1,4 @@
-package com.mpacer.watch.music
+package com.mpacer.core.music
 
 import android.content.Intent
 import androidx.media3.common.AudioAttributes

@@ -1,4 +1,4 @@
-package com.mpacer.watch.live
+package com.mpacer.core.live
 
 /**
  * Politique de publication : c'est ici que se joue l'essentiel du cout du suivi

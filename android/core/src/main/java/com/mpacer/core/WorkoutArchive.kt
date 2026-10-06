@@ -1,4 +1,4 @@
-package com.mpacer.watch
+package com.mpacer.core
 
 import android.content.Context
 import org.json.JSONObject
@@ -29,7 +29,16 @@ object WorkoutArchive {
             ?: emptyList()
     }
 
-    /** Contenu exportable (import/export entre montres, comme le fichier .pac d'origine). */
+    /**
+     * Supprime une seance locale (identifiant = horodatage de depart, qui est
+     * aussi le nom du fichier).
+     *
+     * @return vrai si le fichier existait et a ete supprime.
+     */
+    fun delete(context: Context, startedAtMs: Long): Boolean =
+        File(File(context.filesDir, DIRECTORY), "workout-" + startedAtMs + ".json").delete()
+
+    /** Contenu exportable (import/export entre appareils, comme le fichier .pac d'origine). */
     fun exportAll(context: Context): String {
         val workouts = list(context)
         val root = JSONObject()

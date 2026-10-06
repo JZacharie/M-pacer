@@ -1781,7 +1781,9 @@ fn layout_refresh(
                     }
                 }
                 main { (content) }
-                footer { "M-pacer - " (mpacer_core::VERSION) " - vos donnees restent chez vous" }
+                // Slogan du pied de page : la promesse du projet (aucun tiers,
+                // aucune donnee qui part) et le rappel de ce qu'il reste a faire.
+                footer { "M-pacer - " (mpacer_core::VERSION) " - Vos données restent chez vous, vous courez !" }
                 @if user.is_some() {
                     nav class="tabbar" aria-label="Navigation principale" {
                         @for (cle, libelle, icone, chemin) in NAV {
@@ -5685,6 +5687,20 @@ mod navigation_web_tests {
         // Plus de menu deroulant ni de deconnexion dans l'en-tete.
         assert!(!markup.contains("menu-panel"), "{markup}");
         assert!(!markup.contains("action=\"/logout\""), "{markup}");
+    }
+
+    #[test]
+    fn the_footer_states_where_the_data_stays() {
+        // Le pied de page porte la promesse du projet, avec ses accents : la page
+        // est servie en UTF-8 (meta charset), rien ne doit etre translittere.
+        let markup = layout("Accueil", "accueil", None, html! {}).into_string();
+        assert!(
+            markup.contains(&format!(
+                "M-pacer - {} - Vos données restent chez vous, vous courez !",
+                mpacer_core::VERSION
+            )),
+            "{markup}"
+        );
     }
 }
 

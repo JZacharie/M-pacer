@@ -1,4 +1,4 @@
-package com.mpacer.watch.live
+package com.mpacer.core.live
 
 import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
@@ -19,7 +19,7 @@ import org.junit.Test
  *
  * ```
  * MPACER_MQTT_TEST_URL="mqtt://utilisateur:motdepasse@192.168.0.115:1883" \
- *   ./gradlew :app:testDebugUnitTest --tests '*WatchMqttLiveTest*'
+ *   ./gradlew :core:testDebugUnitTest --tests '*WatchMqttLiveTest*'
  * ```
  *
  * Sans la variable, le test est ignore : la suite JVM reste hermetique au reseau.

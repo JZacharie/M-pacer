@@ -1,18 +1,20 @@
-# Android : montre Wear OS (`:app`) + application telephone (`:companion`)
+# Android : socle partage (`:core`), montre (`:app`), course au telephone (`:phone`) et compagnon (`:companion`)
 
-Ce dossier contient **deux modules Gradle** qui partagent le meme coeur Rust et le
+Ce dossier contient **quatre modules Gradle** qui partagent le meme coeur Rust et le
 meme backend auto-heberge :
 
 | Module | Identifiant | Role |
 |---|---|---|
-| `:app` | `com.mpacer.watch` | Application Wear OS : course (GPS, voix, tours), historique local, synchronisation des seances. |
-| `:companion` | `com.mpacer.companion` | Application telephone (Android 8+) : connexion au backend, liste et detail des seances, import de fichier `.pac`/JSON, envoi vers la montre. |
+| `:core` | `com.mpacer.core` | Bibliotheque commune : pont JNI vers `mpacer-core`, service de seance (GPS 1 Hz), voix, archive locale, synchronisation backend, suivi MQTT, musique. Aucune interface. |
+| `:app` | `com.mpacer.watch` | Application Wear OS : ecrans ronds, capteur cardiaque de la montre, Data Layer (reception des seances envoyees par le telephone). |
+| `:phone` | `com.mpacer.phone` | Application telephone (Android 8+) pour **courir avec le telephone** : ecrans Material 3, ceinture cardiaque Bluetooth LE, historique, synchronisation, MQTT, musique. |
+| `:companion` | `com.mpacer.companion` | Application telephone d'appoint : connexion au backend, liste et detail des seances, import de fichier `.pac`/JSON, envoi vers la montre. **Ne fait pas de seance.** |
 
-> **Rien n a ete compile ni teste.** La machine de redaction ne dispose ni de JDK ni de
-> SDK Android. Le code a ete relu et **toutes les versions de dependances ont ete
-> verifiees** sur Google Maven et Maven Central, mais la compilation, la fusion des
-> ressources et l execution restent a valider sur une machine equipee (voir
-> [Points a verifier](#points-a-verifier)).
+> **Verifie le 6 octobre 2026** : les quatre modules compilent (`.gradlew.bat
+> assembleDebug`), les trois applications produisent un APK, les bibliotheques
+> natives sont empaquetees et les 27 tests JVM du socle passent. La seance n'a en
+> revanche **pas encore ete courue** avec le telephone : voir
+> [Points a verifier](#points-a-verifier).
 
 ## Arborescence
 
@@ -20,40 +22,46 @@ meme backend auto-heberge :
 android/
   gradlew, gradlew.bat, gradle/wrapper/     wrapper Gradle 8.11.1 (jar inclus)
   gradle/libs.versions.toml                  catalogue de versions unique
-  settings.gradle.kts                        include(":app") + include(":companion")
+  settings.gradle.kts                        include(":core") + :app + :phone + :companion
   build.gradle.kts                           plugins declares en apply false
   gradle.properties                          reglages communs
   .gitignore                                 secrets et sorties locales
+  core/                                      SOCLE PARTAGE (bibliotheque Android)
+    build.gradle.kts                         cargo-ndk, ABI, buildConfig, signature des .so
+    proguard-rules.pro                       regles R8 transmises aux applications
+    src/main/AndroidManifest.xml             permissions et services fusionnes dans les applications
+    src/main/cpp/CMakeLists.txt, mpacer_jni.c  shim JNI vers la C ABI Rust (Java_com_mpacer_core_*)
+    src/main/jniLibs/<abi>/libmpacer_ffi.so  coeur Rust, produit par cargo-ndk (non versionne)
+    src/main/java/com/mpacer/core/
+      MpacerCore.kt        pont JNI + data classes d etat
+      TrackingService.kt   service de premier plan GPS + notification (Pause / Stop)
+      VoiceCoach.kt        TTS + focus audio
+      WorkoutArchive.kt    historique local .pac (lister, supprimer, exporter)
+      MpacerFormat.kt      formatage (allure, duree, distance, notification)
+      SyncClient.kt        device flow, envoi des seances, jeton chiffre
+      SessionConfig.kt     reglages assistant + voix gardes hors seance
+      HeartRateSensor.kt   capteur integre + interface HeartRateSource (ceinture BLE)
+      live/                MQTT : config, politique de cadence, charge utile, codec, tracker, test, persistance
+      music/               Media3 : bibliotheque USB, lecteur, session, modeles du contrat docs/07 v2
+      ui/Palette.kt        palette et voyant GPS partages par les deux interfaces
+    src/test/java/com/mpacer/core/live/      tests unitaires JVM (paquets, cadence, charge utile)
   app/                                       module montre
-    build.gradle.kts                         Wear OS, cargo-ndk, ABI, signature
+    build.gradle.kts                         Wear OS, ABI, signature
     proguard-rules.pro
-    src/main/AndroidManifest.xml             permissions reseau + listener Data Layer
-    src/main/cpp/CMakeLists.txt, mpacer_jni.c  shim JNI vers la C ABI Rust
+    src/main/AndroidManifest.xml             permissions propres a la montre + listener Data Layer
     src/main/java/com/mpacer/watch/
-      MpacerCore.kt        pont JNI + data classes d etat (existant)
-      TrackingService.kt   service de premier plan GPS (existant)
-      VoiceCoach.kt        TTS + focus audio (existant)
-      WorkoutArchive.kt    historique local .pac (existant)
-      MpacerFormat.kt      formatage (existant)
-      SyncClient.kt        NOUVEAU : device flow, envoi des seances, jeton chiffre
-      WearSyncListener.kt  NOUVEAU : reception des seances envoyees par le telephone
       MainActivity.kt      navigation course / reglages / synchronisation / musique
-      ui/MainScreen.kt, ui/SettingsScreen.kt  ecrans ronds (existants)
-      ui/SyncScreen.kt     NOUVEAU : code d appairage, etat, seances en attente
-      ui/MusicScreen.kt    NOUVEAU : bibliotheque importee par USB + lecture locale
-      music/MusicModels.kt, MusicDto.kt       modeles du contrat docs/07 v2
-      music/MusicLibrary.kt                   scan du dossier Music/ (USB) + index local
-      music/MusicPlayer.kt, MusicPlaybackService.kt  Media3 ExoPlayer + MediaSessionService
-      music/MusicSession.kt                   pont vers le coeur (reglages, piste, cadence)
-      live/LiveConfig.kt                      reglages MQTT + analyse de l adresse du broker
-      live/LivePolicy.kt                      cadence (10 s / 60 s en pause) et filtre de precision
-      live/LivePayload.kt                     charge utile JSON compacte (~130 octets)
-      live/MqttCodec.kt                       paquets MQTT 3.1.1 (CONNECT, PUBLISH, PINGREQ)
-      live/LiveTracker.kt                     fil de fond : file bornee, reconnexion, compteurs
-      live/LiveSettings.kt                    persistance (mot de passe chiffre)
-      live/LiveProbe.kt                       test de connexion au broker (CONNACK + point de test)
-      ui/LiveSettingsScreen.kt                menu MQTT : clavier, presse-papiers, test, enregistrement
-    src/test/java/com/mpacer/watch/live/      tests unitaires JVM (paquets, cadence, charge utile)
+      WearSyncListener.kt  reception des seances envoyees par le telephone
+      ui/                  MainScreen, SettingsScreen, SyncScreen, MusicScreen, LiveSettingsScreen
+  phone/                                     module telephone (courir avec le telephone)
+    build.gradle.kts                         Material 3, ABI, signature
+    proguard-rules.pro
+    src/main/AndroidManifest.xml             GPS, cardio, Bluetooth LE, ceinture cardiaque
+    src/main/java/com/mpacer/phone/
+      MainActivity.kt      permissions + navigation a cinq onglets
+      PhoneSettings.kt     reglages persistants (assistant, voix, musique, cardio, ecran)
+      hr/BleHeartRate.kt   ceinture cardiaque Bluetooth LE (0x180D / 0x2A37) + recherche
+      ui/                  Theme, RunScreen, HistoryScreen, MusicScreen, SyncScreen, SettingsScreen
   companion/                                 module telephone
     build.gradle.kts                         Material 3, Compose, OkHttp, Wearable
     proguard-rules.pro
@@ -99,7 +107,8 @@ assemblage Gradle et installation eventuelle sur la montre :
 ```powershell
 pwsh ./local-ci.ps1 -Check                 # diagnostic seul (code de sortie 1 si un prerequis manque)
 pwsh ./local-ci.ps1                        # montre, debug
-pwsh ./local-ci.ps1 -Target all            # montre + telephone
+pwsh ./local-ci.ps1 -Target all            # montre + les deux applications telephone
+pwsh ./local-ci.ps1 -Target phone          # application de course du telephone
 pwsh ./local-ci.ps1 -Release               # APK release (si android/keystore.properties)
 pwsh ./local-ci.ps1 -ApiUrl http://192.168.0.152:8080 -Install
 pwsh ./local-ci.ps1 -Bootstrap             # installe cibles rustup, cargo-ndk et paquets du SDK
@@ -127,8 +136,8 @@ La tache `cargoNdkBuild` (branchee sur `preBuild`) compile automatiquement le co
 Rust pour chaque ABI :
 
 ```powershell
-# equivalente manuelle de ce que fait la tache :
-cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o android/app/src/main/jniLibs build --release -p mpacer-ffi
+# equivalente manuelle de ce que fait la tache (le module :core porte le coeur) :
+cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -o android/core/src/main/jniLibs build --release -p mpacer-ffi
 ```
 
 Options utiles :
@@ -141,7 +150,17 @@ Options utiles :
 
 APK : `app/build/outputs/apk/debug/app-debug.apk`.
 
-### 2. Telephone (`:companion`)
+### 2. Telephone — courir avec le telephone (`:phone`)
+
+```powershell
+./gradlew :phone:assembleDebug
+./gradlew :phone:installDebug
+```
+
+APK : `phone/build/outputs/apk/debug/phone-debug.apk` (~20 Mo, trois ABI :
+arm64-v8a, armeabi-v7a, x86_64).
+
+### 3. Telephone — application d'appoint (`:companion`)
 
 ```powershell
 ./gradlew :companion:assembleDebug
@@ -150,13 +169,14 @@ APK : `app/build/outputs/apk/debug/app-debug.apk`.
 
 APK : `companion/build/outputs/apk/debug/companion-debug.apk`.
 
-### 3. Les deux modules
+### 4. Les quatre modules
 
 ```powershell
-./gradlew assembleDebug        # :app + :companion
+./gradlew assembleDebug        # :core + :app + :phone + :companion
+./gradlew :core:testDebugUnitTest   # tests JVM du socle (27 tests)
 ```
 
-### 4. APK release signe (a deployer sur la montre)
+### 5. APK release signe (a deployer sur la montre)
 
 Le build release exige une cle : sans `android/keystore.properties`,
 `assembleRelease` produit un APK non signe que la montre refuse. Le magasin de
@@ -198,10 +218,55 @@ Aucun secret n entre dans l APK : l adresse du broker MQTT se saisit sur la mont
 
 Sans SDK Android ni cargo-ndk, **aucune de ces commandes n a ete executee ici**.
 
+## Application telephone : courir avec le telephone (`:phone`)
+
+Le module `:phone` reprend **toutes** les fonctions de la montre, sur le meme socle
+`:core` : le coeur Rust ne change pas d une ligne, seule la plateforme differe.
+Detail complet : [docs/12](../docs/12-course-telephone.md).
+
+| Fonction | Montre (`:app`) | Telephone (`:phone`) |
+|---|---|---|
+| Calcul de la seance | `mpacer-core` (JNI) | `mpacer-core` (JNI) — le meme |
+| Position | FusedLocation 1 Hz, service de premier plan | identique (type `location`) |
+| Cardio | capteur integre | ceinture Bluetooth LE (`0x180D` / `0x2A37`) |
+| Voix, annonces, tours | TTS + focus audio | identique |
+| Assistant, shadow runner | ecran rond | tuiles Material 3 |
+| Historique local | `.pac` dans `filesDir` | identique (+ suppression, partage) |
+| Synchronisation backend | device flow + `POST /api/v1/workouts` | identique (onglet Sync, onglet ouvert dans un Custom Tab) |
+| Suivi en direct MQTT | oui (opt-in) | identique, reglages au clavier |
+| Musique | fichiers copies par USB | identique (`Music/` du telephone) |
+| Ecran allume | reglage de la montre | `FLAG_KEEP_SCREEN_ON` pendant la seance |
+
+Ce qui est propre au telephone :
+
+- **Navigation a cinq onglets** : Course, Historique, Musique, Sync, Reglages.
+- **Notification de seance actionnable** : Pause/Reprendre et Stop depuis le
+  bandeau, sans sortir le telephone de sa ceinture (le service est partage, la
+  montre en profite aussi).
+- **Bouton « Preparer »** : le chrono reste arme et part au premier pas.
+- **Boutons « Annonce vocale » et « Fenetre d'allure »** : les deux commandes du
+  moteur (`announce_now`, `reset_pace_window`) etaient jusqu ici sans bouton.
+- **Reglages persistants** : `SharedPreferences` pour l'interface, secrets
+  inchanges dans le socle (Keystore). Les reglages d'assistant et de voix sont
+  desormais reellement transmis au moteur au depart de la seance
+  (`SessionConfig`), ce qui manquait sur la montre.
+- **Ceinture cardiaque Bluetooth LE** : recherche filtree sur le service Heart
+  Rate, choix de l'appareil, reconnexion par Android. Le socle ne connait qu'une
+  interface `HeartRateSource` : la seance demarre le capteur integre et la
+  source declaree.
+- **Musique du telephone** : `adb push ./run-170
+  /sdcard/Android/data/com.mpacer.phone/files/Music/` puis « Importer (USB) »
+  dans l'onglet Musique (le dossier exact est affiche a l'ecran).
+
+Permissions demandees au premier lancement : position, notifications, activite,
+capteur cardiaque, Bluetooth (Android 12+). **Aucune n'est obligatoire** : la
+seance est complete sans cardio, et l'archive reste locale sans backend.
+
 ## Flux d appairage (RFC 8628 simplifie)
 
 Le backend expose `POST /api/v1/device/code` puis `POST /api/v1/device/token`, et la
-page `/link` permet de saisir le code utilisateur. Les deux modules suivent le meme flux.
+page `/link` permet de saisir le code utilisateur. Les trois applications (montre,
+course au telephone, compagnon) suivent le meme flux, porte par `:core`.
 
 1. L application appelle `POST /api/v1/device/code` avec `{"label": "..."}`.
 2. Le backend repond `device_code`, `user_code` (du type `BCDF-GHJK`), `verification_uri`,
@@ -305,7 +370,7 @@ de ressources et limites : [docs/10](../docs/10-suivi-temps-reel.md).
 
   ```powershell
   cd android
-  ./gradlew :app:testDebugUnitTest
+  ./gradlew :core:testDebugUnitTest
   ```
 
 ### Montre de developpement : ecran toujours allume
@@ -430,6 +495,12 @@ intents soient resolus.
    NDK 27.2.12479018, cargo-ndk 4.1.2, Gradle 8.11.1) :
    `app-debug.apk` 36,4 Mo et `companion-debug.apk` 11,5 Mo, aucune erreur Kotlin.
    Les trois ABI embarquent bien `libmpacer_ffi.so` (coeur Rust) et `libmpacer_jni.so`.
+   **Refait le 6 octobre 2026** apres extraction du socle `:core` et ajout du module
+   `:phone` : les quatre modules compilent (`.gradlew.bat assembleDebug`),
+   `app-debug.apk` 39 Mo, `phone-debug.apk` 19,5 Mo, `companion-debug.apk` 11,5 Mo,
+   les services de seance et de lecture sont bien fusionnes dans les manifestes des
+   trois applications, et les 27 tests JVM du socle passent
+   (`.gradlew.bat :core:testDebugUnitTest`).
 2. **Wrapper** : le `gradle-wrapper.jar` (Gradle 8.11.1) et les scripts `gradlew`/
    `gradlew.bat` proviennent du depot Gradle (tag `v8.11.1`) ; leur somme de controle
    n a pas ete comparee a `gradle-wrapper.jar.sha256`. Sous Linux/macOS, `chmod +x gradlew`.
@@ -467,3 +538,25 @@ intents soient resolus.
     presse-papiers et le bouton « Tester la connexion » se verifient sur une vraie
     montre ronde (`ui/LiveSettingsScreen.kt`, `live/LiveProbe.kt`) ; l'APK release
     est signe par `android/keystore.properties` (non versionne).
+14. **Seance au telephone** : rien n'a encore ete couru avec l'application
+    `:phone`. A verifier en priorite : le GPS continue d'arriver ecran eteint
+    (service de premier plan de type `location`), la precision en ville, la
+    consommation sur une heure, et le comportement d'Android 12+ pour le demarrage
+    du service depuis la notification.
+15. **Ceinture cardiaque Bluetooth LE** : la recherche (`hr/BleHeartRate.kt`)
+    filtre sur le service Heart Rate `0x180D` ; la connexion GATT, les
+    notifications `0x2A37` et la reconnexion sont a valider avec une ceinture
+    reelle (Polar H10, Garmin HRM-Dual, Decathlon Dual). Permission Bluetooth
+    refusee : la seance doit rester complete, sans cardio.
+16. **Correction apportee aux deux applications** : l'assistant et la voix
+    n'etaient transmis au moteur par aucun ecran ; ils passent desormais par
+    `SessionConfig` (applique au depart de la seance). Verifier sur la montre
+    qu'un mode « temps vise » change bien le panneau a la seance suivante.
+17. **Reglages persistants du telephone** : `PhoneSettings.kt` ecrit dans les
+    `SharedPreferences` a chaque modification (et `LiveSettings` dans le
+    Keystore). Verifier la latence percue sur un appareil modeste.
+18. **Musique du telephone** : `MediaStore` n'est pas utilise ; les fichiers
+    doivent etre pousses par `adb` dans
+    `Android/data/com.mpacer.phone/files/Music/`. Une lecture depuis la
+    bibliotheque du telephone (sans BPM, donc sans choix de tempo) reste une
+    evolution possible.

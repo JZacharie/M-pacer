@@ -1,5 +1,8 @@
 package com.mpacer.watch.ui
 
+import com.mpacer.core.ui.GpsLight
+import com.mpacer.core.ui.Palette
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,8 +26,8 @@ import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.ButtonDefaults
 import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.Text
-import com.mpacer.watch.SyncClient
-import com.mpacer.watch.SyncPhase
+import com.mpacer.core.SyncClient
+import com.mpacer.core.SyncPhase
 import kotlinx.coroutines.launch
 
 /**

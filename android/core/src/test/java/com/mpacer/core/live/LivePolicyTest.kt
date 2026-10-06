@@ -1,4 +1,4 @@
-package com.mpacer.watch.live
+package com.mpacer.core.live
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

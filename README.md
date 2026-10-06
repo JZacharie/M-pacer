@@ -23,7 +23,8 @@ avec vos séances synchronisées.
 |---|---|---|
 | **Cœur Rust** — [`crates/mpacer-core/`](crates/mpacer-core/) | Allure lissée 2 min, tours, machine à états de séance, assistant (4 modes) et shadow runner, cardio, voix FR/EN, analyse de séance, musique et tempo, GPX, format `.pac` | **Fait, testé** (182 tests) |
 | **Montre Wear OS** — [`android/app/`](android/app/) | GPS 1 Hz, fréquence cardiaque, écran rond, service de premier plan, voix, archive locale, synchronisation | **APK construit** ; validation terrain à faire |
-| **Application téléphone** — [`android/companion/`](android/companion/) | Connexion au backend, liste et détail des séances, import, envoi vers la montre (Data Layer) | **APK construit** ; à valider sur appareils réels |
+| **Course au téléphone** — [`android/phone/`](android/phone/) | Courir avec le téléphone seul : GPS 1 Hz, ceinture cardiaque Bluetooth LE, voix, musique, suivi MQTT, archive et synchronisation — sur le même socle [`android/core/`](android/core/) que la montre | **APK construit** ; validation terrain à faire |
+| **Application téléphone d'appoint** — [`android/companion/`](android/companion/) | Connexion au backend, liste et détail des séances, import, envoi vers la montre (Data Layer) | **APK construit** ; à valider sur appareils réels |
 | **Montre Garmin** — [`garmin/`](garmin/) | Portage Connect IQ (Monkey C) du même cœur : GPS, cardio, FIT, vibrations, synchronisation identique | **Compilé** (SDK Connect IQ 9.2.0) ; à valider |
 | **Backend et site** — [`crates/mpacer-api/`](crates/mpacer-api/) | API JSON, OAuth Google, appairage montre, interface web (séances, analyse, tableaux de bord, courses, musique, suivi en direct) | **Fait, testé** |
 | **Outils** — `mpacer-sim`, `mpacer-music` | Simulateur de séance ; appariement des MP3 et copie sur la montre par USB | **Fait, testé** |
@@ -98,11 +99,11 @@ bande-son (playlists Spotify ou Deezer, BPM cible, manifeste à copier sur la mo
 | [`crates/mpacer-client/`](crates/mpacer-client/) | Client de synchronisation utilisé par le simulateur |
 | [`crates/mpacer-sim/`](crates/mpacer-sim/) | Simulateur : rejoue une course synthétique, écrit un GPX, synchronise vers le backend |
 | [`crates/mpacer-music/`](crates/mpacer-music/) | Application locale de transfert des MP3 vers la montre (CLI + interface sur `127.0.0.1:8077`) |
-| [`android/`](android/) | Montre Wear OS (`:app`) et application téléphone (`:companion`) — voir [`android/README.md`](android/README.md) |
+| [`android/`](android/) | Socle partagé (`:core`), montre Wear OS (`:app`), course au téléphone (`:phone`) et application d'appoint (`:companion`) — voir [`android/README.md`](android/README.md) |
 | [`garmin/`](garmin/) | Application Connect IQ en Monkey C — voir [`garmin/README.md`](garmin/README.md) |
 | [`charts/`](charts/) | Chart Helm `mpacer` |
 | [`deploy/`](deploy/) | Dockerfile, script de construction d'image, notes GitOps — voir [`deploy/README.md`](deploy/README.md) |
-| [`docs/`](docs/) | Documentation technique (12 documents) — index : [`docs/README.md`](docs/README.md) |
+| [`docs/`](docs/) | Documentation technique (13 documents) — index : [`docs/README.md`](docs/README.md) |
 | [`site/`](site/) | Documentation illustrée publiée sur GitHub Pages |
 | [`examples/`](examples/) | Cas concrets reproductibles (pacer autour du parc de Parilly) |
 | [`simulations/`](simulations/) | Traces GPS synthétiques prêtes à importer |
@@ -154,11 +155,14 @@ saisir le code d'appairage affiché sur `http://localhost:8080/link`, la séance
 **Tester le backend contre un PostgreSQL** (`MPACER_TEST_DATABASE_URL`) ou contre un vrai
 broker MQTT (`MPACER_MQTT_TEST_URL`) : voir `crates/mpacer-api/tests/`.
 
-### Montres
+### Montres et téléphone
 
 ```bash
-pwsh ./local-ci.ps1 -Target all        # montre Wear OS + application téléphone
+pwsh ./local-ci.ps1 -Target all        # montre Wear OS + téléphone + application d'appoint
+pwsh ./local-ci.ps1 -Target phone      # application de course du téléphone
 pwsh ./local-ci.ps1 -Install           # compile et installe sur la montre branchée
+
+adb install -r android/phone/build/outputs/apk/debug/phone-debug.apk
 ```
 
 Pour la Garmin : `pwsh garmin/build.ps1` puis consignes de [`garmin/README.md`](garmin/README.md).
@@ -174,7 +178,7 @@ cargo run -p mpacer-music              # interface locale http://127.0.0.1:8077
 | Vérification | Résultat |
 |---|---|
 | `cargo test --workspace` | **330 tests** : 182 cœur, 8 FFI, 139 service (API, musique, suivi MQTT), 1 test de documentation — 328 exécutés, 2 ignorés par défaut |
-| `cd android && ./gradlew :app:testDebugUnitTest` | **24 tests** Kotlin : codec MQTT octet par octet, politique de cadence, charge utile JSON |
+| `cd android && ./gradlew :core:testDebugUnitTest` | **27 tests** Kotlin (socle partagé) : codec MQTT octet par octet, politique de cadence, charge utile JSON, analyse d'adresse de broker |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 avertissement |
 | `cargo fmt --all --check` | conforme |
 | `helm lint charts/mpacer -f charts/mpacer/values-jo3.yaml` | 0 chart en échec (rendu `helm template` vérifié) |

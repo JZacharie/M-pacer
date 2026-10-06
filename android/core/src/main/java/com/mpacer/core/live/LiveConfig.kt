@@ -1,4 +1,4 @@
-package com.mpacer.watch.live
+package com.mpacer.core.live
 
 /**
  * Reglages du suivi en direct (MQTT) pendant une seance.

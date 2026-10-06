@@ -1,5 +1,8 @@
 package com.mpacer.watch.ui
 
+import com.mpacer.core.ui.GpsLight
+import com.mpacer.core.ui.Palette
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,13 +31,13 @@ import androidx.wear.compose.material.ButtonDefaults
 import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.Text
-import com.mpacer.watch.TrackingService
-import com.mpacer.watch.music.LocalPlaylist
-import com.mpacer.watch.music.MusicLibrary
-import com.mpacer.watch.music.MusicLibraryState
-import com.mpacer.watch.music.MusicPlayer
-import com.mpacer.watch.music.MusicPlayerState
-import com.mpacer.watch.music.MusicSession
+import com.mpacer.core.TrackingService
+import com.mpacer.core.music.LocalPlaylist
+import com.mpacer.core.music.MusicLibrary
+import com.mpacer.core.music.MusicLibraryState
+import com.mpacer.core.music.MusicPlayer
+import com.mpacer.core.music.MusicPlayerState
+import com.mpacer.core.music.MusicSession
 import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -64,7 +67,7 @@ fun MusicScreen(onBack: () -> Unit) {
 
     LaunchedEffect(Unit) {
         MusicLibrary.reload(context)
-        MusicPlayer.ensure(context)
+        MusicPlayer.prepare(context)
     }
 
     Column(

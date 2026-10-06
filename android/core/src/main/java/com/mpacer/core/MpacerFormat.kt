@@ -1,4 +1,4 @@
-package com.mpacer.watch
+package com.mpacer.core
 
 import java.util.Locale
 

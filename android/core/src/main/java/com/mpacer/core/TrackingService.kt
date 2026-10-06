@@ -1,4 +1,4 @@
-package com.mpacer.watch
+package com.mpacer.core
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -18,12 +18,12 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
-import com.mpacer.watch.live.LiveTracker
-import com.mpacer.watch.music.MusicDirective
-import com.mpacer.watch.music.MusicPlayer
-import com.mpacer.watch.music.MusicSession
-import com.mpacer.watch.music.MusicState
-import com.mpacer.watch.music.NowPlaying
+import com.mpacer.core.live.LiveTracker
+import com.mpacer.core.music.MusicDirective
+import com.mpacer.core.music.MusicPlayer
+import com.mpacer.core.music.MusicSession
+import com.mpacer.core.music.MusicState
+import com.mpacer.core.music.NowPlaying
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,7 +33,12 @@ import kotlinx.coroutines.flow.asStateFlow
  *
  * Le service ne calcule rien : il pousse les positions dans [MpacerCore] et publie
  * l'etat renvoye par le moteur ([state]). La notification evite que le systeme tue
- * la seance et rappelle a l'utilisateur qu'un enregistrement est en cours.
+ * la seance et rappelle a l'utilisateur qu'un enregistrement est en cours ; elle
+ * porte aussi Pause/Reprendre et Stop, ce qui evite de sortir le telephone de sa
+ * ceinture pendant la course.
+ *
+ * Le meme service sert la montre et le telephone : aucune ligne ne depend de
+ * l'ecran qui l'a lance.
  */
 class TrackingService : Service() {
 
@@ -54,6 +59,7 @@ class TrackingService : Service() {
         // Le moteur n'existe que pendant la seance : l'ecran Musique lui transmet
         // ses reglages par ce pont (voir MusicSession).
         MusicSession.attach(core)
+        SessionConfig.attach(core)
         // Prepare le MediaController de la montre (lecture des fichiers locaux).
         MusicPlayer.ensure(this)
         locations = LocationServices.getFusedLocationProviderClient(this)
@@ -64,7 +70,15 @@ class TrackingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
+        // Redemarrage par le systeme sans commande (apres un arret brutal) : il
+        // n'y a plus de seance a tenir. Un service de premier plan qui ne
+        // republierait pas sa notification serait tue par Android au bout de
+        // cinq secondes : on ferme proprement et on ne demande pas de relance.
+        if (intent?.action == null) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        when (intent.action) {
             ACTION_START -> start(armed = false)
             ACTION_ARM -> start(armed = true)
             ACTION_PAUSE -> {
@@ -78,6 +92,10 @@ class TrackingService : Service() {
                 requestLocations(precisionMaximale = true)
             }
             ACTION_STOP -> stopWorkout()
+            // Memes commandes que les boutons du casque sur la montre : elles
+            // n'existaient que dans le moteur, aucun ecran ne les declenchait.
+            ACTION_ANNOUNCE -> publish(core.announceNow(now()))
+            ACTION_RESET_PACE -> publish(core.resetPaceWindow(now()))
         }
         return START_STICKY
     }
@@ -89,13 +107,31 @@ class TrackingService : Service() {
         // Reglages et playlist choisis avant la course : le moteur les recoit
         // avant le premier tick pour publier une consigne des le depart.
         MusicSession.apply(core)
-        startForeground(NOTIFICATION_ID, notification("Preparation GPS..."))
+        SessionConfig.apply(core)
+        startForeground(NOTIFICATION_ID, notification("Preparation GPS...", enPause = false))
         publish(if (armed) core.arm(now()) else core.start(now()))
         // Suivi en direct : sans broker configure, LiveTracker.start ne fait
         // strictement rien (aucun fil, aucune connexion).
         LiveTracker.start(this, if (armed) "arm" else "run")
         requestLocations()
+        startHeartSensors()
+    }
+
+    /**
+     * Capteurs de frequence cardiaque : le capteur integre de l'appareil (montre,
+     * ou rare telephone qui en possede un) et la source supplementaire declaree par
+     * l'application ([HeartRateSources.external], la ceinture Bluetooth du
+     * telephone). Aucune des deux n'est obligatoire : sans cardio la seance reste
+     * complete, il manque seulement les zones et la derive cardiaque.
+     */
+    private fun startHeartSensors() {
         heart.start()
+        HeartRateSources.external?.start(::onHeartRate)
+    }
+
+    private fun stopHeartSensors() {
+        heart.stop()
+        HeartRateSources.external?.stop()
     }
 
     /**
@@ -158,7 +194,7 @@ class TrackingService : Service() {
     }
 
     private fun publish(output: EngineOutput, location: Location? = null) {
-        _state.value = WatchState(output, location?.accuracy?.toDouble())
+        _state.value = SessionState(output, location?.accuracy?.toDouble())
         // Les annonces vocales sont deja redigees par le moteur : le service ne
         // fait que les transmettre.
         output.messages.forEach(VoiceCoach::speak)
@@ -230,7 +266,7 @@ class TrackingService : Service() {
         val summary = core.summary(startedAtMs)
         WorkoutArchive.save(this, summary)
         locations.removeLocationUpdates(locationCallback)
-        heart.stop()
+        stopHeartSensors()
         // Envoi immediat de la seance terminee (le scope appartient au processus :
         // il n'est pas annule par le stopSelf() ci-dessous).
         SyncClient.syncInBackground(this)
@@ -241,8 +277,9 @@ class TrackingService : Service() {
     override fun onDestroy() {
         LiveTracker.stop()
         locations.removeLocationUpdates(locationCallback)
-        heart.stop()
+        stopHeartSensors()
         MusicSession.detach(core)
+        SessionConfig.detach(core)
         core.close()
         super.onDestroy()
     }
@@ -251,6 +288,7 @@ class TrackingService : Service() {
 
     /** Dernier texte de notification publie, pour eviter les republications inutiles. */
     private var derniereNotification: String? = null
+    private var derniereNotificationEnPause = false
     private var derniereNotificationMs = 0L
 
     /** Derniere piste remontee au moteur (evite d'envoyer un `null` a chaque tick). */
@@ -268,21 +306,42 @@ class TrackingService : Service() {
         )
     }
 
-    private fun notification(text: String): Notification {
-        val open = PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
+    /**
+     * Notification de seance : le contenu ouvre l'application, les deux actions
+     * evitent d'avoir a la sortir de la poche ou de la ceinture pour mettre en
+     * pause ou arreter.
+     *
+     * L'activite a ouvrir est celle que le systeme associe au paquet : le socle ne
+     * connait aucune classe d'ecran, il sert la montre comme le telephone.
+     */
+    private fun notification(text: String, enPause: Boolean): Notification {
+        val open = packageManager.getLaunchIntentForPackage(packageName)?.let { intention ->
+            PendingIntent.getActivity(
+                this,
+                0,
+                intention,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+        }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("M-pacer")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setContentIntent(open)
+            .addAction(0, if (enPause) "Reprendre" else "Pause", action(if (enPause) ACTION_RESUME else ACTION_PAUSE))
+            .addAction(0, "Stop", action(ACTION_STOP))
             .build()
     }
+
+    /** Action de notification : le service s'envoie la commande a lui-meme. */
+    private fun action(name: String): PendingIntent = PendingIntent.getService(
+        this,
+        name.hashCode(),
+        Intent(this, TrackingService::class.java).setAction(name),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     /**
      * Republier une notification a chaque position coute cher (aller-retour vers
@@ -291,21 +350,24 @@ class TrackingService : Service() {
      */
     private fun updateNotification(output: EngineOutput) {
         val texte = MpacerFormat.summaryLine(output)
+        val enPause = output.isPaused
         val maintenant = System.currentTimeMillis()
-        if (texte == derniereNotification || maintenant - derniereNotificationMs < INTERVALLE_NOTIFICATION_MS) {
-            return
-        }
+        if (texte == derniereNotification && enPause == derniereNotificationEnPause) return
+        if (maintenant - derniereNotificationMs < INTERVALLE_NOTIFICATION_MS) return
         derniereNotification = texte
+        derniereNotificationEnPause = enPause
         derniereNotificationMs = maintenant
-        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(texte))
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(texte, enPause))
     }
 
     companion object {
-        const val ACTION_START = "com.mpacer.watch.START"
-        const val ACTION_ARM = "com.mpacer.watch.ARM"
-        const val ACTION_PAUSE = "com.mpacer.watch.PAUSE"
-        const val ACTION_RESUME = "com.mpacer.watch.RESUME"
-        const val ACTION_STOP = "com.mpacer.watch.STOP"
+        const val ACTION_START = "com.mpacer.core.START"
+        const val ACTION_ARM = "com.mpacer.core.ARM"
+        const val ACTION_PAUSE = "com.mpacer.core.PAUSE"
+        const val ACTION_RESUME = "com.mpacer.core.RESUME"
+        const val ACTION_STOP = "com.mpacer.core.STOP"
+        const val ACTION_ANNOUNCE = "com.mpacer.core.ANNOUNCE"
+        const val ACTION_RESET_PACE = "com.mpacer.core.RESET_PACE"
 
         private const val CHANNEL_ID = "mpacer.workout"
         private const val NOTIFICATION_ID = 42
@@ -313,8 +375,8 @@ class TrackingService : Service() {
         /** Cadence minimale de republication de la notification. */
         private const val INTERVALLE_NOTIFICATION_MS = 5000L
 
-        private val _state = MutableStateFlow(WatchState.disconnected())
-        val state: StateFlow<WatchState> = _state.asStateFlow()
+        private val _state = MutableStateFlow(SessionState.disconnected())
+        val state: StateFlow<SessionState> = _state.asStateFlow()
 
         fun send(context: Context, action: String) {
             val intent = Intent(context, TrackingService::class.java).setAction(action)
@@ -327,9 +389,9 @@ class TrackingService : Service() {
     }
 }
 
-/** Etat expose a l'interface. */
-data class WatchState(val output: EngineOutput?, val accuracyM: Double?) {
+/** Etat de la seance expose a l'interface, montre comme telephone. */
+data class SessionState(val output: EngineOutput?, val accuracyM: Double?) {
     companion object {
-        fun disconnected() = WatchState(null, null)
+        fun disconnected() = SessionState(null, null)
     }
 }

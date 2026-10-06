@@ -1,4 +1,4 @@
-package com.mpacer.watch.live
+package com.mpacer.core.live
 
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow

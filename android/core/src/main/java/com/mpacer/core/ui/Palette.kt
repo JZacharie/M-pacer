@@ -1,4 +1,4 @@
-package com.mpacer.watch.ui
+package com.mpacer.core.ui
 
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat

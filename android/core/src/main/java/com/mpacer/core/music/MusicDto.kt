@@ -1,4 +1,4 @@
-package com.mpacer.watch.music
+package com.mpacer.core.music
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable

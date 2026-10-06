@@ -1,5 +1,8 @@
 package com.mpacer.watch.ui
 
+import com.mpacer.core.ui.GpsLight
+import com.mpacer.core.ui.Palette
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,10 +18,10 @@ import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.Text
-import com.mpacer.watch.AssistantMode
+import com.mpacer.core.AssistantMode
 import com.mpacer.watch.WatchSettings
-import com.mpacer.watch.live.LiveConfig
-import com.mpacer.watch.live.LiveState
+import com.mpacer.core.live.LiveConfig
+import com.mpacer.core.live.LiveState
 
 /**
  * Reglages essentiels, en listes de puces (pattern Wear OS) plutot qu'en formulaires.

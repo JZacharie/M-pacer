@@ -1,11 +1,11 @@
-package com.mpacer.watch.music
+package com.mpacer.core.music
 
 import android.util.Log
-import com.mpacer.watch.MpacerCore
+import com.mpacer.core.MpacerCore
 
 /**
  * Pont entre l'interface musique et l'instance de [MpacerCore] detenue par
- * [com.mpacer.watch.TrackingService].
+ * [com.mpacer.core.TrackingService].
  *
  * Le moteur n'existe que pendant une seance. L'ecran Musique peut donc etre
  * utilise avant la course : les reglages et la playlist sont conserves ici et

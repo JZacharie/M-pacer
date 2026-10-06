@@ -1,5 +1,8 @@
 package com.mpacer.watch.ui
 
+import com.mpacer.core.ui.GpsLight
+import com.mpacer.core.ui.Palette
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -39,10 +42,10 @@ import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.Text
-import com.mpacer.watch.live.LiveConfig
-import com.mpacer.watch.live.LiveSettings
-import com.mpacer.watch.live.LiveState
-import com.mpacer.watch.live.ProbeState
+import com.mpacer.core.live.LiveConfig
+import com.mpacer.core.live.LiveSettings
+import com.mpacer.core.live.LiveState
+import com.mpacer.core.live.ProbeState
 
 /**
  * Parametres du suivi en direct (MQTT), saisis **depuis la montre**.

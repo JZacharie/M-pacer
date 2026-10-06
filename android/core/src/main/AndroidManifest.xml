@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Socle partage : les services de la seance et de la lecture musicale sont
+  declares ici une seule fois, puis fusionnes dans les applications :app (montre),
+  :phone et :companion. Chaque application n'a plus qu'a demander les
+  permissions correspondantes.
+
+  Le type de service de premier plan de la seance est "location" pour les deux
+  applications : c'est le seul reellement utilise (FusedLocationProvider). Le type
+  "health" de Wear OS n'est pas necessaire, aucun ExerciseService n'est en jeu, et
+  l'exiger imposerait BODY_SENSORS au telephone.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application>
+
+        <!-- Seance en cours : GPS, ecran eteint, telephones et montres. -->
+        <service
+            android:name=".TrackingService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
+        <!-- Lecture audio locale : session medias Media3 (ExoPlayer).
+             Les fichiers joues sont ceux copies dans Music/ (docs/07 v2) ;
+             aucune application tierce n est pilotee. -->
+        <service
+            android:name=".music.MusicPlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

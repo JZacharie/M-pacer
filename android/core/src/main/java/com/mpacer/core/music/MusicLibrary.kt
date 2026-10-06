@@ -1,4 +1,4 @@
-package com.mpacer.watch.music
+package com.mpacer.core.music
 
 import android.content.Context
 import android.os.StatFs
@@ -20,7 +20,7 @@ import java.io.File
  * `context.getExternalFilesDir("Music")` :
  *
  * ```text
- * /sdcard/Android/data/com.mpacer.watch/files/Music/
+ * /sdcard/Android/data/com.mpacer.core/files/Music/
  *   run-170/                      <- un dossier par playlist
  *     01 - Avicii - Wake me up.mp3
  *     manifest.json               <- manifeste + fichier et taille par piste

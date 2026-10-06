@@ -1,4 +1,4 @@
-package com.mpacer.watch.live
+package com.mpacer.core.live
 
 import java.io.ByteArrayInputStream
 import org.junit.Assert.assertArrayEquals

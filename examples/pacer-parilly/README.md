@@ -89,22 +89,28 @@ shadow runner dans la tolérance (« sur le plan » = moins de 5 m ou 2 s), et u
 message vocal toutes les 5 minutes. À l'arrivée : 15,00 km, 1:00:0x, allure
 moyenne 4:00, 15 tours de 1 km, meilleurs temps 5 km ≈ 19:58 et 10 km ≈ 39:59.
 
-## 4. Ce qu'il manque pour le tester sur la montre aujourd'hui
+## 4. Où régler la distance et le temps cible aujourd'hui
 
 L'écran **Réglages** de la montre
-(`android/app/src/main/java/com/mpacer/watch/ui/SettingsScreen.kt`) ne propose que
-le **mode**, les **unités** et la **voix**. Or `WatchSettings` porte bien
-`raceDistanceM`, `plannedTimeS` et `negativeSplitRatio`
-(`android/app/src/main/java/com/mpacer/watch/MainActivity.kt:90-92`) : aucun appel
-ne les renseigne, donc `MpacerCore.setAssistant()` envoie `null` pour la distance
-et le temps cible, et `RacePlan::is_valid()` refuse le plan. Le mode
-« Shadow runner » reste donc inutilisable sur la montre en l'état (le téléphone ne
-pousse, lui, que les séances déjà enregistrées via `/mpacer/workout`).
+(`android/app/src/main/java/com/mpacer/watch/ui/SettingsScreen.kt`) ne propose
+toujours que le **mode**, les **unités** et la **voix** : ses puces ne suffisent pas
+à saisir 15 000 m et 3 600 s sur un écran rond.
 
-Le correctif minimal, dans `SettingsScreen.kt` : deux réglages par paliers
-(distance 15 000 m, temps 3 600 s, negative split 0 ou 3 %) qui appellent
-`setAssistant(ACHIEVE_PLANNED_TIME, 15_000.0, 3_600.0, ratio)` — de quoi rendre
-cet exemple testable tel quel.
+En revanche, la plomberie existe désormais et les réglages sont bien transmis :
+
+- `SessionConfig` (module `:core`) conserve l'assistant et la voix hors séance et
+  les envoie au moteur au départ (`set_assistant`, `set_voice`), ce qui manquait
+  complètement auparavant ;
+- l'application **téléphone** (`:phone`) propose les deux champs —
+  *Réglages ▸ Assistant de course* : distance en km, temps visé en `h:mm:ss`,
+  part négative — et le mode « Shadow runner » fonctionne alors tel quel.
+
+Pour tester cet exemple sur la montre, le correctif minimal reste d'ajouter à
+`SettingsScreen.kt` deux réglages par paliers (distance 15 000 m, temps 3 600 s,
+negative split 0 ou 3 %) qui appellent
+`SessionConfig.setAssistant(AssistantConfig(ACHIEVE_PLANNED_TIME, 15_000.0, 3_600.0, ratio))`.
+En attendant, il suffit de préparer la séance depuis l'application téléphone : le
+même coeur Rust reçoit les mêmes réglages.
 
 ## 5. Références publiques (Strava et alentours)
 

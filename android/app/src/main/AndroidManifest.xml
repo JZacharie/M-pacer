@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Application montre. Le service de seance, celui de lecture musicale, le suivi
+  MQTT, la synchronisation et le pont JNI vivent dans le module :core : leurs
+  permissions et leurs declarations de service y sont fusionnees automatiquement.
+  Ici ne restent que ce qui est propre a la montre.
+-->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-feature android:name="android.hardware.type.watch" />
@@ -7,22 +13,12 @@
          il manque seulement les zones et la derive cardiaque. -->
     <uses-feature android:name="android.hardware.sensor.heartrate" android:required="false" />
 
+    <!-- Position de la seance (le type de service de premier plan est declare par :core). -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <!-- Android 14+ : un type est obligatoire pour un service de premier plan -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Lecture musicale pendant la course : service de premier plan de type mediaPlayback -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Detection d'activite et frequence cardiaque du capteur de la montre. -->
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
-    <!-- Frequence cardiaque (capteur de la montre) : zones, derive, export GPX -->
     <uses-permission android:name="android.permission.BODY_SENSORS" />
-    <!-- Synchronisation des seances vers le backend auto-heberge (SyncClient) -->
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:allowBackup="true"
@@ -46,24 +42,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- Lecture audio locale : session medias Media3 (ExoPlayer).
-             Les fichiers joues sont ceux copies par USB dans Music/ (docs/07 v2) ;
-             aucune application tierce n est pilotee. -->
-        <service
-            android:name=".music.MusicPlaybackService"
-            android:exported="true"
-            android:foregroundServiceType="mediaPlayback">
-            <intent-filter>
-                <action android:name="androidx.media3.session.MediaSessionService" />
-            </intent-filter>
-        </service>
-
-        <!-- Seance en cours : GPS sans le telephone, ecran eteint -->
-        <service
-            android:name=".TrackingService"
-            android:exported="false"
-            android:foregroundServiceType="location|health" />
 
         <!-- Reception des seances envoyees par le module :companion (Wearable Data Layer).
              Meme paquet/signature exiges cote telephone pour que le routage fonctionne. -->

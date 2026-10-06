@@ -1,4 +1,4 @@
-package com.mpacer.watch.music
+package com.mpacer.core.music
 
 import android.content.ComponentName
 import android.content.Context
@@ -40,8 +40,16 @@ object MusicPlayer {
 
     // ---------------------------------------------------------------- connexion
 
+    /**
+     * Prepare le lecteur sans exposer la session Media3 : c'est le point d'entree
+     * des interfaces (montre, telephone), qui n'ont pas Media3 sur leur classpath.
+     */
+    fun prepare(context: Context) {
+        ensure(context)
+    }
+
     /** Ouvre (une fois) la connexion a la session de lecture de l'application. */
-    fun ensure(context: Context): MediaController? {
+    internal fun ensure(context: Context): MediaController? {
         val application = context.applicationContext
         appContext = application
         controller?.let { return it }

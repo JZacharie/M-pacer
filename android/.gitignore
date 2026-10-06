@@ -5,9 +5,10 @@ keystore.properties
 *.keystore
 local.properties
 
-# Sorties de build des deux modules
+# Sorties de build des modules
 build/
 .gradle/
-app/src/main/jniLibs/
+# Bibliotheques Rust, produites par cargo-ndk dans le socle :core
+core/src/main/jniLibs/
 # Intermediaires CMake du shim JNI (regeneres par Gradle/AGP)
 .cxx/

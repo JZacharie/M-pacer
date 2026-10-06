@@ -7,11 +7,13 @@
     Chaine complete, sans CI :
       1. verification de l'environnement (JDK 17, SDK Android 35, NDK r27, cargo-ndk, cibles rustup)
       2. compilation du coeur Rust pour les trois ABI (arm64-v8a, armeabi-v7a, x86_64)
-      3. assemblage Gradle du module :app (montre) et/ou :companion (telephone)
+      3. assemblage Gradle des modules :core (socle), :app (montre), :phone
+         (courir avec le telephone) et :companion (appoint)
       4. installation sur une montre ou un emulateur connecte (-Install)
 
 .PARAMETER Target
-    watch (defaut) : la montre. companion : le telephone. all : les deux. rust : le coeur Rust seul.
+    watch (defaut) : la montre. phone : l'application de course du telephone.
+    companion : l'application d'appoint. all : les trois. rust : le coeur Rust seul.
 
 .PARAMETER ApiUrl
     URL du backend inscrite dans l'APK (BuildConfig.DEFAULT_API_URL).
@@ -30,7 +32,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('watch', 'companion', 'all', 'rust')]
+    [ValidateSet('watch', 'phone', 'companion', 'all', 'rust')]
     [string] $Target = 'watch',
 
     [switch] $Release,
@@ -70,7 +72,7 @@ $script:CiblesManquantes = @()
 $script:CmakeOk = $false
 $racine = $PSScriptRoot
 $dossierAndroid = Join-Path $racine 'android'
-$dossierJniLibs = Join-Path $dossierAndroid 'app/src/main/jniLibs'
+$dossierJniLibs = Join-Path $dossierAndroid 'core/src/main/jniLibs'
 $chrono = [System.Diagnostics.Stopwatch]::StartNew()
 
 function Etape([string] $texte) {
@@ -284,7 +286,7 @@ if ($sdk) {
     Info 'Installez les command-line tools puis : sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018" "cmake;3.22.1"'
 }
 
-$besoinRust = (-not $SkipRust) -and ($Target -in @('watch', 'all', 'rust'))
+$besoinRust = (-not $SkipRust) -and ($Target -in @('watch', 'phone', 'all', 'rust'))
 if ($besoinRust) {
     if (Test-Commande 'cargo') { Ok ('cargo : ' + (cargo --version)) }
     else { Echec 'cargo introuvable'; Info 'https://rustup.rs' }
@@ -466,7 +468,9 @@ if ($Clean) {
     Etape 'Nettoyage'
     foreach ($chemin in @(
         (Join-Path $dossierAndroid 'app/build'),
+        (Join-Path $dossierAndroid 'phone/build'),
         (Join-Path $dossierAndroid 'companion/build'),
+        (Join-Path $dossierAndroid 'core/build'),
         (Join-Path $dossierAndroid 'build'),
         (Join-Path $dossierAndroid '.gradle'),
         $dossierJniLibs
@@ -514,15 +518,20 @@ $taches = @()
 $prefixe = if ($Release) { 'assembleRelease' } else { 'assembleDebug' }
 switch ($Target) {
     'watch' { $taches += (':app:' + $prefixe) }
+    'phone' { $taches += (':phone:' + $prefixe) }
     'companion' { $taches += (':companion:' + $prefixe) }
-    'all' { $taches += (':app:' + $prefixe); $taches += (':companion:' + $prefixe) }
+    'all' {
+        $taches += (':app:' + $prefixe)
+        $taches += (':phone:' + $prefixe)
+        $taches += (':companion:' + $prefixe)
+    }
     'rust' { Info 'cible rust : aucune tache Gradle' }
 }
 
 if ($taches.Count -gt 0) {
     Etape 'Assemblage Gradle'
     $arguments = $taches
-    if ($rustCompile -or $SkipRust -or $Target -eq 'companion') { $arguments += '-Pmpacer.buildRust=false' }
+    if ($rustCompile -or $SkipRust -or ($Target -in @('phone', 'companion'))) { $arguments += '-Pmpacer.buildRust=false' }
     if ($CargoProfile) { $arguments += ('-Pmpacer.cargoProfile=' + $CargoProfile) }
     if ($ApiUrl) { $arguments += ('-Pmpacer.apiUrl=' + $ApiUrl) }
     if ($NoDaemon) { $arguments += '--no-daemon' }
@@ -531,6 +540,7 @@ if ($taches.Count -gt 0) {
     Etape 'Artefacts'
     $dossiers = @()
     if ($Target -in @('watch', 'all')) { $dossiers += (Join-Path $dossierAndroid 'app/build/outputs/apk') }
+    if ($Target -in @('phone', 'all')) { $dossiers += (Join-Path $dossierAndroid 'phone/build/outputs/apk') }
     if ($Target -in @('companion', 'all')) { $dossiers += (Join-Path $dossierAndroid 'companion/build/outputs/apk') }
     $apks = Get-ChildItem $dossiers -Recurse -Filter '*.apk' -ErrorAction SilentlyContinue
     if (-not $apks) { Alerte 'aucun APK trouve' }

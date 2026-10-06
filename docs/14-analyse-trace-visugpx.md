@@ -27,7 +27,7 @@ qui a ete repris ici, et ce qui est volontairement laisse de cote.
 | V2 | Carte interactive | trace sur fond OpenStreetMap, reperes de lieux (POI) | **Repris** : carte de la trace sur la fiche de seance |
 | V3 | Profil altimetrique interactif | courbe distance/altitude, curseur, deplacable sur la carte | **Repris** : profil colore par pente, infobulle au survol |
 | V4 | Reglages du denivele | seuil (defaut 10 m) et lissage (defaut 5 points) modifiables | **Repris** : recalcul depuis la fiche de seance |
-| V5 | Resume | distance, D+/D-, duree, heure de depart et d'arrivee | Deja la, complete par l'altitude min/max/moyenne |
+| V5 | Resume | distance, D+/D-, duree, heure de depart et d'arrivee, nombre de points | Deja la, complete par l'altitude min/max/moyenne et les heures |
 | V6 | Vitesse moyenne sans les pauses | allure de deplacement, pauses exclues | Deja la (temps en mouvement) |
 | V7 | Tableau par kilometre | km, temps, vitesse, **pause** | Colonne **pause** ajoutee |
 | V8 | Vitesse maximale | valeur lissee et **kilometre** ou elle a ete atteinte | **Repris** |
@@ -95,9 +95,10 @@ VisuGPX, sont appliques dans `mpacer_core::analysis::elevation_summary` :
    ajoute l'ecart et la reference suit. Une oscillation de +/-3 m autour d'une
    altitude ne compte donc rien, une montee de 25 m compte 25 m.
 
-Le resume gagne les cartes **D+ / D-**, **altitude min / max** et
-**altitude moyenne** ; le D+ affiche est celui des reglages choisis, et non plus
-la somme brute.
+Le resume gagne les cartes **D+ / D-**, **altitude min / max**,
+**altitude moyenne**, **depart / arrivee** et **points GPS** ; le D+ affiche est
+celui des reglages choisis, et non plus la somme brute. Le tableau des temps de
+passage conserve, lui, le denivele brut de chaque kilometre.
 
 ### 2.4 Denivele horaire (V9)
 
@@ -162,6 +163,8 @@ les applications de cartes hors ligne.
 | KML (coordonnees, altitude, echappement XML) | `gpx::tests` |
 | Charge utile de la carte (echantillonnage, reperes kilometriques) | `routes::web::workout_web_tests` |
 | Bornes des reglages seuil/lissage, classes de pente | `routes::web::workout_web_tests` |
+| Rendu complet de la fiche : carte, profil, cartes de statistiques, colonne pause, exports | `routes::web::workout_web_tests::the_workout_page_shows_the_visugpx_analysis` |
+| Memes verifications contre une vraie base PostgreSQL | `tests/api.rs` |
 
 ```bash
 cargo test --workspace

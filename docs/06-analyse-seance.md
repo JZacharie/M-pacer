@@ -52,6 +52,11 @@ ecoule, les **zones de frequence cardiaque**, et la **comparaison au plan**.
    d'**acceleration** et la repartition du temps entre accelerer, allure stable
    et ralentir.
 7. **Meilleures distances** - 1 km, 1 mi, 5 km, 10 km, semi.
+8. **Carte de la trace** - fond OpenStreetMap dessine par le script du site
+   (`static/map.js`), trace echantillonnee et reperes de distance.
+9. **Profil altimetrique** - distance contre altitude, chaque portion colorée
+   selon sa pente, avec infobulle ; les reglages **seuil** et **lissage**
+   recalculent le denivele (voir [14 - Analyse de trace : VisuGPX](14-analyse-trace-visugpx.md)).
 
 ## 3. Les formules
 
@@ -114,8 +119,18 @@ La vitesse est lissee sur 30 s (moyenne glissante centree), puis :
 
 ### 3.6 Denivele
 
-Somme des variations positives (D+) et negatives (D-) de l'altitude, tronçon par
-tronçon. Aucun denivele n'est affiche si la montre n'a pas enregistre d'altitude.
+Deux mesures cohabitent :
+
+- le **denivele brut**, somme des variations d'altitude tronçon par tronçon
+  (colonne D+ du tableau des temps de passage) ;
+- le **denivele filtre**, celui du resume et du profil : l'altitude est lissee
+  par une moyenne glissante, puis un seuil (hysteresis) ignore les variations
+  plus petites que la valeur choisie. Meme reglage que VisuGPX, avec un seuil de
+  10 m et un lissage sur 5 points par defaut.
+
+Le **denivele horaire** (m/h) ne retient que les portions ou la pente depasse
+3 % sur au moins 200 m. Aucun denivele n'est affiche si la montre n'a pas
+enregistre d'altitude.
 
 
 ### 3.7 Allure ajustee a la pente (GAP)
@@ -173,5 +188,5 @@ superflus retires, texte vide converti en `NULL`) : l'affichage distingue toujou
 |---|---|
 | Training Effect / TRIMP | demande l'historique complet du coureur et un modele d'EPOC |
 | Cadence, puissance | non mesurees par la montre visee |
-| Carte interactive | la carte est un lien OpenStreetMap, sans script tiers |
+| ~~Carte interactive~~ | **reprise depuis** : la carte de la trace est dessinee par `static/map.js`, le script maison sans dependance (docs/13), alimente par des coordonnees echantillonnees |
 | Segments, classements | suppose un service centralise, contraire au choix auto-heberge |

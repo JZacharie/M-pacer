@@ -1,7 +1,0 @@
-[
-{
-  "directory": "E:/git/JZacharie/M-pacer/android/app/.cxx/Debug/5t73216i/armeabi-v7a",
-  "command": "C:\\Users\\josep\\AppData\\Local\\Android\\Sdk\\ndk\\27.0.12077973\\toolchains\\llvm\\prebuilt\\windows-x86_64\\bin\\clang.exe --target=armv7-none-linux-androideabi30 --sysroot=C:/Users/josep/AppData/Local/Android/Sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/windows-x86_64/sysroot -Dmpacer_jni_EXPORTS -g -DANDROID -fdata-sections -ffunction-sections -funwind-tables -fstack-protector-strong -no-canonical-prefixes -D_FORTIFY_SOURCE=2 -march=armv7-a -mthumb -Wformat -Werror=format-security  -fno-limit-debug-info  -fPIC -o CMakeFiles\\mpacer_jni.dir\\mpacer_jni.c.o -c E:\\git\\JZacharie\\M-pacer\\android\\app\\src\\main\\cpp\\mpacer_jni.c",
-  "file": "E:\\git\\JZacharie\\M-pacer\\android\\app\\src\\main\\cpp\\mpacer_jni.c"
-}
-]

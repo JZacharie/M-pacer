@@ -46,7 +46,7 @@ expressions sont alignées sur celles des autres applications du cluster.
 
 | Secret Kubernetes | ClusterSecretStore | Clé `remoteRef` | Chemin Vault réel | Contenu |
 |---|---|---|---|---|
-| `mpacer-secrets` | `vault-apps` | `mpacer` | `apps/data/mpacer` | `MPACER_SESSION_SECRET`, `MPACER_GOOGLE_CLIENT_ID`, `MPACER_GOOGLE_CLIENT_SECRET` — et, si Spotify est active, `MPACER_SPOTIFY_CLIENT_ID`, `MPACER_SPOTIFY_CLIENT_SECRET` ; si Deezer est active, `MPACER_DEEZER_APP_ID`, `MPACER_DEEZER_APP_SECRET` ; si le broker MQTT du suivi en direct demande un mot de passe, `MPACER_MQTT_PASSWORD` |
+| `mpacer-secrets` | `vault-apps` | `mpacer` | `apps/data/mpacer` | `MPACER_SESSION_SECRET`, `MPACER_GOOGLE_CLIENT_ID`, `MPACER_GOOGLE_CLIENT_SECRET` — et, si Spotify est active, `MPACER_SPOTIFY_CLIENT_ID`, `MPACER_SPOTIFY_CLIENT_SECRET` ; si Deezer est active, `MPACER_DEEZER_ARL` (cookie arl, voie recommandee) et/ou `MPACER_DEEZER_APP_ID`, `MPACER_DEEZER_APP_SECRET` ; si le broker MQTT du suivi en direct demande un mot de passe, `MPACER_MQTT_PASSWORD` |
 
 > **Attention au piège** : dans un `ClusterSecretStore`, `provider.vault.path` désigne le
 > **montage** KV, pas un préfixe de chemin. Sur jo3, `vault-apps` est monté sur `apps/`
@@ -70,8 +70,33 @@ vault kv put apps/mpacer \
   MPACER_SPOTIFY_CLIENT_SECRET="<secret Spotify>" \
   MPACER_DEEZER_APP_ID="<Application ID Deezer>" \
   MPACER_DEEZER_APP_SECRET="<Secret Key Deezer>" \
+  MPACER_DEEZER_ARL="<cookie arl Deezer>" \
   MPACER_MQTT_PASSWORD="<mot de passe du broker MQTT>"
 ```
+
+> **Deezer par cookie `arl` (voie recommandee).** Elle ne demande **aucune**
+> application developpeur et rend lisibles les playlists du compte, y compris
+> privees. Le cookie se recupere dans le navigateur connecte a deezer.com
+> (DevTools > Application > Cookies > `arl`) et change rarement ; quand Deezer le
+> renouvelle, `/music` affiche « Le cookie Deezer (ARL) a ete refuse » et il
+> suffit de resceller la nouvelle valeur :
+>
+> ```bash
+> vault kv patch apps/mpacer MPACER_DEEZER_ARL="<cookie arl>"
+> kubectl -n mpacer annotate externalsecret mpacer-secrets force-sync="$(date +%s)" --overwrite
+> ```
+>
+> Reportez la meme cle dans `externalSecrets.keys.deezerArl: MPACER_DEEZER_ARL`
+> (voir [values-jo3.yaml](../charts/mpacer/values-jo3.yaml)) : un `remoteRef` vers
+> une propriete absente fait echouer l'ExternalSecret. Quand le cookie `arl` est
+> present, le mode OAuth Deezer n'est plus utilise : la page `/music` accede
+> directement aux playlists du compte, sans bouton « Connecter ».
+>
+> Les MP3 listes par `/music` se telechargent depuis l'instance Deemix
+> (`MPACER_DEEMIX_URL`, par defaut `https://deemix.p.zacharie.org`) : la page
+> produit un lien par piste (`#/track/<id>`) et un lien pour la playlist entiere
+> (`#/playlist/<id>`). Voir
+> [docs/11](../docs/11-playlists-multi-sources-et-synchro-mp3.md).
 
 > **Suivi en direct (MQTT).** `MPACER_MQTT_PASSWORD` n'est utile que si le broker
 > demande une authentification ; l'adresse et l'identifiant vivent dans les

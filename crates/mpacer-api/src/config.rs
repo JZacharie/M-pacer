@@ -127,6 +127,9 @@ impl Environment {
 }
 
 /// Configuration complete du service.
+/// Instance Deemix par defaut, utilisee quand `MPACER_DEEMIX_URL` est vide.
+pub const DEFAULT_DEEMIX_URL: &str = "https://deemix.p.zacharie.org";
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub environment: Environment,
@@ -156,6 +159,16 @@ pub struct Config {
     /// URI de redirection Deezer explicitement enregistree.
     /// Vide => `{public_url}/auth/deezer/callback`.
     pub deezer_redirect_uri: Option<String>,
+    /// Cookie `arl` du compte Deezer (API privee `gw-light`).
+    ///
+    /// C'est la voie recommandee : elle ne demande **aucune** application
+    /// developpeur Deezer et donne acces aux playlists du compte, y compris
+    /// celles qui ne sont pas publiques. Le mode OAuth (`deezer_app_id` +
+    /// `deezer_app_secret`) reste accepte en repli.
+    pub deezer_arl: Option<String>,
+    /// Base de l'instance Deemix qui telecharge les MP3.
+    /// Vide => `https://deemix.p.zacharie.org`.
+    pub deemix_url: Option<String>,
     /// Autorise une connexion de test sans Google (`/auth/dev-login`).
     pub dev_auth: bool,
     /// Broker MQTT du suivi en direct (absent = fonctionnalite eteinte, aucun cout).
@@ -216,6 +229,8 @@ impl Config {
             deezer_app_id: env_var("MPACER_DEEZER_APP_ID"),
             deezer_app_secret: env_var("MPACER_DEEZER_APP_SECRET"),
             deezer_redirect_uri: env_var("MPACER_DEEZER_REDIRECT_URI"),
+            deezer_arl: env_var("MPACER_DEEZER_ARL"),
+            deemix_url: env_var("MPACER_DEEMIX_URL"),
             dev_auth: env_var("MPACER_DEV_AUTH")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
@@ -284,14 +299,45 @@ impl Config {
         redirect_path_of(&self.deezer_redirect_uri())
     }
 
-    /// Vrai si une application Deezer **exploitable** est configuree.
-    pub fn deezer_configured(&self) -> bool {
+    /// Vrai si une application Deezer **exploitable** est configuree (mode OAuth).
+    pub fn deezer_app_configured(&self) -> bool {
         match (&self.deezer_app_id, &self.deezer_app_secret) {
             (Some(id), Some(secret)) => {
                 !looks_like_placeholder(id) && !looks_like_placeholder(secret)
             }
             _ => false,
         }
+    }
+
+    /// Vrai si un cookie `arl` exploitable est configure (mode recommande).
+    ///
+    /// Un `arl` Deezer fait plusieurs dizaines de caracteres : une valeur trop
+    /// courte est un gabarit laisse en place, pas un vrai cookie.
+    pub fn deezer_arl_configured(&self) -> bool {
+        self.deezer_arl
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|arl| arl.len() >= 32 && !looks_like_placeholder(arl))
+    }
+
+    /// Vrai si la source Deezer est exploitable, par cookie `arl` **ou** par OAuth.
+    pub fn deezer_configured(&self) -> bool {
+        self.deezer_arl_configured() || self.deezer_app_configured()
+    }
+
+    /// Base de l'instance Deemix qui telecharge les MP3.
+    ///
+    /// Les liens produits sont les routes de l'interface Deemix
+    /// (`{base}/#/playlist/{id}`, `{base}/#/track/{id}`) : l'utilisateur les
+    /// ouvre dans le navigateur ou il est deja authentifie sur son instance.
+    pub fn deemix_base_url(&self) -> String {
+        self.deemix_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .unwrap_or(DEFAULT_DEEMIX_URL)
+            .trim_end_matches('/')
+            .to_string()
     }
 
     /// Vrai si le suivi en direct est configure.
@@ -372,6 +418,8 @@ impl Config {
             deezer_app_id: None,
             deezer_app_secret: None,
             deezer_redirect_uri: None,
+            deezer_arl: None,
+            deemix_url: None,
             dev_auth: false,
             mqtt_url: None,
             mqtt_topic: crate::live::DEFAULT_TOPIC.to_string(),
@@ -497,6 +545,39 @@ mod tests {
             config.deezer_redirect_uri(),
             "https://mpacer.p.zacharie.org/deezer/retour"
         );
+    }
+
+    #[test]
+    fn deezer_arl_enables_the_source_without_a_developer_application() {
+        let mut config = Config::for_tests("http://localhost:8080", "postgresql://exemple");
+        assert!(!config.deezer_configured());
+
+        // Un gabarit trop court ne compte pas comme un cookie.
+        config.deezer_arl = Some("REMPLACER-PAR-VOTRE-ARL".to_string());
+        assert!(!config.deezer_arl_configured());
+        assert!(!config.deezer_configured());
+
+        config.deezer_arl = Some("a".repeat(64));
+        assert!(config.deezer_arl_configured());
+        assert!(config.deezer_configured(), "l'arl suffit, sans app Deezer");
+        assert!(
+            !config.deezer_app_configured(),
+            "aucune application developpeur n'est necessaire"
+        );
+    }
+
+    #[test]
+    fn deemix_url_defaults_to_the_zacharie_instance() {
+        let mut config = Config::for_tests("http://localhost:8080", "postgresql://exemple");
+        assert_eq!(config.deemix_base_url(), DEFAULT_DEEMIX_URL);
+
+        // La barre oblique finale est retiree : les liens sont construits par
+        // concatenation ("{base}/#/playlist/{id}").
+        config.deemix_url = Some("https://deemix.exemple.org/".to_string());
+        assert_eq!(config.deemix_base_url(), "https://deemix.exemple.org");
+
+        config.deemix_url = Some("   ".to_string());
+        assert_eq!(config.deemix_base_url(), DEFAULT_DEEMIX_URL);
     }
 
     #[test]

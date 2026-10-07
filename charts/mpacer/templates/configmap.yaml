@@ -22,6 +22,10 @@ data:
   # Doit correspondre EXACTEMENT a une URI autorisee dans l'application Deezer
   MPACER_DEEZER_REDIRECT_URI: {{ .Values.config.deezerRedirectUri | quote }}
   {{- end }}
+  {{- if .Values.config.deemixUrl }}
+  # Instance Deemix des liens de telechargement MP3 de la page /music
+  MPACER_DEEMIX_URL: {{ .Values.config.deemixUrl | quote }}
+  {{- end }}
   {{- if .Values.config.mqttUrl }}
   # Suivi en direct : positions publiees par la montre pendant la seance.
   MPACER_MQTT_URL: {{ .Values.config.mqttUrl | quote }}

@@ -59,7 +59,12 @@ config:
   spotifyRedirectUri: ""
   # URI de redirection OAuth Deezer, declaree dans "Application Domains" sur
   # https://developers.deezer.com/myapps. Vide => <publicUrl>/auth/deezer/callback
+  # (inutile avec un cookie arl : la source est deja accessible)
   deezerRedirectUri: ""
+  # Instance Deemix utilisee pour telecharger les MP3 depuis un navigateur.
+  # Vide => https://deemix.p.zacharie.org. La page /music construit ses liens sur
+  # les routes de l'interface Deemix (#/playlist/<id>, #/track/<id>).
+  deemixUrl: ""
   # Suivi en direct : le service s'abonne a ce broker MQTT et publie la page
   # /live avec la position de la montre pendant la seance. Vide => fonctionnalite
   # desactivee (aucune connexion ouverte, page /live explicative).
@@ -85,6 +90,10 @@ auth:
   # annoncee "non configuree" et la page /music reste utilisable.
   deezerAppId: ""
   deezerAppSecret: ""
+  # Cookie "arl" du compte Deezer : la voie recommandee (aucune application
+  # developpeur, playlists privees lisibles). Le copier depuis le navigateur
+  # (deezer.com > Application > Cookies > arl). Prioritaire sur l'OAuth.
+  deezerArl: ""
   # Mot de passe du broker MQTT du suivi en direct (optionnel). Stocke dans le
   # Secret, jamais dans le ConfigMap.
   mqttPassword: ""
@@ -158,6 +167,9 @@ externalSecrets:
     # MPACER_DEEZER_APP_SECRET ne sont pas scelles dans Vault.
     deezerAppId: ""
     deezerAppSecret: ""
+    # Idem pour le cookie arl Deezer (MPACER_DEEZER_ARL) : vide tant qu'il n'est
+    # pas scelle dans Vault.
+    deezerArl: ""
     # Idem pour le mot de passe du broker MQTT du suivi en direct (docs/10) :
     # vide tant que MPACER_MQTT_PASSWORD n'est pas scelle dans Vault.
     mqttPassword: ""

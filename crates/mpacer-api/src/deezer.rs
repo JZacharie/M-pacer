@@ -64,6 +64,9 @@ pub struct PlaylistRef {
 /// Piste Deezer (metadonnees seules : aucun tempo n'est disponible).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TrackRef {
+    /// Identifiant Deezer de la piste (`SNG_ID`) : il construit le lien de
+    /// telechargement Deemix. `None` quand le fournisseur ne le donne pas.
+    pub id: Option<String>,
     pub title: String,
     pub artist: Option<String>,
     pub album: Option<String>,
@@ -111,6 +114,8 @@ struct RawAlbum {
 /// sa position et son titre).
 #[derive(Debug, Deserialize)]
 struct RawTrack {
+    #[serde(default)]
+    id: Option<i64>,
     #[serde(default)]
     title: Option<String>,
     /// Duree en secondes (Deezer ne renvoie pas de millisecondes).
@@ -433,6 +438,555 @@ pub fn playlist_id_from_ref(reference: &str) -> Option<String> {
     (!digits.is_empty()).then_some(digits)
 }
 
+// ---------------------------------------------------------------- cookie arl
+//
+// Deezer expose une API privee, celle de son propre site : un cookie `arl`
+// (recupere dans le navigateur, onglet Application > Cookies > deezer.com) suffit
+// a lire le profil, les playlists du compte et leurs pistes. C'est la voie
+// utilisee par M-pacer : aucune application developpeur, aucun OAuth, et les
+// playlists privees sont lisibles.
+//
+// Le cookie n'est jamais ecrit en base : il vit dans `MPACER_DEEZER_ARL`.
+
+/// Point d'entree de l'API privee du site Deezer.
+pub const GW_LIGHT_URL: &str = "https://www.deezer.com/ajax/gw-light.php";
+/// En-tete navigateur : l'API privee refuse les clients sans `User-Agent`.
+const BROWSER_UA: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) \
+     Chrome/120.0.0.0 Safari/537.36";
+/// Taille de page demandee a l'API privee.
+const GW_PAGE_SIZE: i64 = 200;
+
+/// Session ouverte par un cookie `arl`.
+///
+/// Le cookie reste prive : aucune methode ne l'expose, et il n'apparait dans
+/// aucun journal.
+pub struct ArlSession {
+    arl: String,
+    /// Cookie de session (`sid`) pose par la premiere reponse : Deezer exige
+    /// qu'il accompagne le jeton anti-CSRF, sinon le POST est refuse
+    /// (`VALID_TOKEN_REQUIRED`). Sans depôt de cookies, il faut le conserver ici.
+    sid: Option<String>,
+    /// Jeton anti-CSRF renvoye par `deezer.getUserData`.
+    pub api_token: String,
+    pub user_id: String,
+    pub display_name: Option<String>,
+}
+
+impl ArlSession {
+    /// Nom affiche du compte, avec un repli lisible.
+    pub fn label(&self) -> String {
+        self.display_name
+            .clone()
+            .unwrap_or_else(|| format!("Compte Deezer {}", self.user_id))
+    }
+
+    fn user_id_number(&self) -> AppResult<i64> {
+        self.user_id.parse::<i64>().map_err(|_| {
+            AppError::internal(format!("identifiant Deezer illisible : {}", self.user_id))
+        })
+    }
+
+    /// Cookie a envoyer : le `arl` du compte, plus le `sid` de session.
+    fn cookie_header(&self) -> String {
+        match &self.sid {
+            Some(sid) => format!("arl={}; sid={sid}", self.arl),
+            None => format!("arl={}", self.arl),
+        }
+    }
+
+    /// Reprend le cookie de session pose par une reponse.
+    ///
+    /// Deezer renouvelle `sid` au fil des appels : sans cette reprise, la
+    /// session se coupe au bout de quelques requetes.
+    fn absorb_cookies(&mut self, set_cookies: &[String]) {
+        for header in set_cookies {
+            let Some((name, value)) = header
+                .split(';')
+                .next()
+                .and_then(|pair| pair.split_once('='))
+            else {
+                continue;
+            };
+            if !name.trim().eq_ignore_ascii_case("sid") {
+                continue;
+            }
+            let value = value.trim().to_string();
+            if value.is_empty() || value == "deleted" {
+                self.sid = None;
+            } else {
+                self.sid = Some(value);
+            }
+        }
+    }
+
+    async fn call<T: for<'de> Deserialize<'de>>(
+        &mut self,
+        http: &reqwest::Client,
+        method: &str,
+        payload: &serde_json::Value,
+    ) -> AppResult<T> {
+        let cookie = self.cookie_header();
+        let response = gw_send(http, &cookie, &self.api_token, method, payload).await?;
+        self.absorb_cookies(&response.cookies);
+        parse_gw_body(&response.body)
+    }
+}
+
+/// Ouvre une session avec le cookie `arl` du compte.
+pub async fn arl_session(http: &reqwest::Client, arl: &str) -> AppResult<ArlSession> {
+    let payload = serde_json::json!({});
+    // Premier appel : le cookie `arl` seul, sans jeton (api_token=null).
+    let response = gw_send(
+        http,
+        &format!("arl={}", arl.trim()),
+        "null",
+        "deezer.getUserData",
+        &payload,
+    )
+    .await?;
+    let data: RawGwUserData = parse_gw_body(&response.body)?;
+    let api_token = data
+        .check_form
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| {
+            AppError::internal(
+                "Deezer n'a pas renvoye de jeton d'API : le cookie arl est probablement expire"
+                    .to_string(),
+            )
+        })?;
+    let user_id = data
+        .user
+        .as_ref()
+        .and_then(|user| user.user_id.as_ref())
+        .and_then(JsonScalar::as_string)
+        .ok_or_else(|| {
+            AppError::internal(
+                "Deezer n'a pas renvoye de compte : le cookie arl est probablement expire"
+                    .to_string(),
+            )
+        })?;
+    let display_name = data
+        .user
+        .and_then(|user| user.blog_name)
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty());
+    let mut session = ArlSession {
+        arl: arl.trim().to_string(),
+        sid: None,
+        api_token,
+        user_id,
+        display_name,
+    };
+    session.absorb_cookies(&response.cookies);
+    Ok(session)
+}
+
+/// Playlists du compte lie (celles que l'utilisateur suit ou possede).
+pub async fn list_user_playlists_arl(
+    http: &reqwest::Client,
+    session: &mut ArlSession,
+) -> AppResult<Vec<PlaylistRef>> {
+    let user_id = session.user_id_number()?;
+    let mut playlists = Vec::new();
+    let mut start = 0i64;
+    for _ in 0..MAX_PAGES {
+        let payload = serde_json::json!({
+            "user_id": user_id,
+            "tab": "playlists",
+            "nb": GW_PAGE_SIZE,
+            "start": start,
+        });
+        let page: RawGwProfile = session.call(http, "deezer.pageProfile", &payload).await?;
+        let Some(entries) = page.tab.and_then(|tab| tab.playlists) else {
+            break;
+        };
+        let fetched = entries.data.len() as i64;
+        playlists.extend(entries.data.iter().filter_map(gw_playlist_ref));
+        let total = entries
+            .total
+            .as_ref()
+            .and_then(JsonScalar::as_i64)
+            .unwrap_or(0);
+        start += fetched;
+        if fetched == 0 || (total > 0 && start >= total) {
+            break;
+        }
+    }
+    Ok(playlists)
+}
+
+/// Recherche de playlists publiques (20 premiers resultats).
+pub async fn search_playlists_arl(
+    http: &reqwest::Client,
+    session: &mut ArlSession,
+    query: &str,
+) -> AppResult<Vec<PlaylistRef>> {
+    let payload = serde_json::json!({
+        "query": query,
+        "start": 0,
+        "nb": 20,
+        "tab": "playlist",
+        "suggestion": true,
+        "artist_suggest": true,
+        "top_tracks": true,
+    });
+    let page: RawGwSearch = session.call(http, "deezer.pageSearch", &payload).await?;
+    Ok(page
+        .playlist
+        .map(|entries| entries.data.iter().filter_map(gw_playlist_ref).collect())
+        .unwrap_or_default())
+}
+
+/// Fiche complete d'une playlist (titre, vignette et toutes les pistes).
+///
+/// Chaque piste porte son identifiant Deezer : c'est lui qui construit le lien
+/// de telechargement Deemix affiche dans la liste des MP3.
+pub async fn get_playlist_arl(
+    http: &reqwest::Client,
+    session: &mut ArlSession,
+    id: &str,
+) -> AppResult<PlaylistDetail> {
+    let playlist_id = id
+        .parse::<i64>()
+        .map(|number| serde_json::json!(number))
+        .unwrap_or_else(|_| serde_json::json!(id));
+    let mut header: Option<RawGwPlaylistHeader> = None;
+    let mut tracks = Vec::new();
+    let mut start = 0i64;
+    for _ in 0..MAX_PAGES {
+        let payload = serde_json::json!({
+            "playlist_id": playlist_id,
+            "start": start,
+            "nb": GW_PAGE_SIZE,
+            "tab": 0,
+            "tags": true,
+            "header": true,
+        });
+        let page: RawGwPlaylistPage = session.call(http, "deezer.pagePlaylist", &payload).await?;
+        if header.is_none() {
+            header = page.data;
+        }
+        let Some(songs) = page.songs else {
+            break;
+        };
+        let fetched = songs.data.len() as i64;
+        tracks.extend(songs.data.iter().filter_map(gw_track_ref));
+        let total = songs
+            .total
+            .as_ref()
+            .and_then(JsonScalar::as_i64)
+            .unwrap_or(0);
+        start += fetched;
+        if fetched == 0 || (total > 0 && start >= total) {
+            break;
+        }
+    }
+    let header = header.unwrap_or_default();
+    Ok(PlaylistDetail {
+        id: id.to_string(),
+        name: header
+            .title
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| format!("Playlist Deezer {id}")),
+        cover_url: header.picture.as_deref().and_then(gw_cover_url),
+        tracks,
+    })
+}
+
+/// Reponse brute de l'API privee : corps utile et cookies poses.
+struct GwResponse {
+    body: String,
+    /// Valeurs de `Set-Cookie`, telles qu'envoyees.
+    cookies: Vec<String>,
+}
+
+/// Appel a l'API privee : le cookie porte l'identite, `api_token` protège le
+/// POST, et les erreurs applicatives arrivent en HTTP 200 dans `error`.
+async fn gw_send(
+    http: &reqwest::Client,
+    cookie: &str,
+    api_token: &str,
+    method: &str,
+    payload: &serde_json::Value,
+) -> AppResult<GwResponse> {
+    let url = format!(
+        "{GW_LIGHT_URL}?method={method}&input=3&api_version=1.0&api_token={}",
+        encode(api_token)
+    );
+    let response = http
+        .post(&url)
+        .header(reqwest::header::COOKIE, cookie)
+        .header(reqwest::header::USER_AGENT, BROWSER_UA)
+        .header(reqwest::header::ACCEPT_LANGUAGE, "fr-FR,fr;q=0.9")
+        .json(payload)
+        .send()
+        .await?;
+    let status = response.status();
+    let cookies = response
+        .headers()
+        .get_all(reqwest::header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(str::to_string)
+        .collect();
+    let body = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(AppError::internal(format!(
+            "Deezer a refuse la demande (HTTP {}): {}",
+            status.as_u16(),
+            truncate(&body)
+        )));
+    }
+    Ok(GwResponse { body, cookies })
+}
+
+/// Decode un corps de l'API privee en refusant les erreurs applicatives.
+fn parse_gw_body<T: for<'de> Deserialize<'de>>(body: &str) -> AppResult<T> {
+    let envelope: GwEnvelope<T> = serde_json::from_str(body.trim()).map_err(|error| {
+        AppError::internal(format!(
+            "reponse Deezer illisible : {error} ({})",
+            truncate(body)
+        ))
+    })?;
+    if let Some(message) = gw_error_message(&envelope.error) {
+        return Err(AppError::internal(format!(
+            "Deezer a refuse la demande : {message}"
+        )));
+    }
+    envelope.results.ok_or_else(|| {
+        AppError::internal(format!("reponse Deezer sans resultat ({})", truncate(body)))
+    })
+}
+
+/// Message d'erreur de l'API privee, s'il y en a un.
+///
+/// Deezer renvoie `error: []` ou `error: {}` quand tout va bien : seul un objet
+/// non vide (ou une chaine non vide) est une erreur.
+fn gw_error_message(error: &serde_json::Value) -> Option<String> {
+    match error {
+        serde_json::Value::Null => None,
+        serde_json::Value::Array(values) => values.iter().find_map(gw_error_message),
+        serde_json::Value::Object(entries) => {
+            if entries.is_empty() {
+                return None;
+            }
+            let text = entries
+                .iter()
+                .map(|(key, value)| match value {
+                    serde_json::Value::String(message) => format!("{key}: {message}"),
+                    other => format!("{key}: {other}"),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(text)
+        }
+        serde_json::Value::String(message) => {
+            let trimmed = message.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// URL de vignette Deezer a partir du hachage renvoye par l'API privee.
+fn gw_cover_url(picture: &str) -> Option<String> {
+    let trimmed = picture.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Some(trimmed.to_string());
+    }
+    Some(format!(
+        "https://e-cdns-images.dzcdn.net/images/cover/{trimmed}/250x250-000000-80-0-0.jpg"
+    ))
+}
+
+fn gw_playlist_ref(raw: &RawGwPlaylist) -> Option<PlaylistRef> {
+    let id = raw.playlist_id.as_ref().and_then(JsonScalar::as_string)?;
+    Some(PlaylistRef {
+        id,
+        name: raw
+            .title
+            .clone()
+            .map(|title| title.trim().to_string())
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| "Playlist Deezer".to_string()),
+        track_count: raw
+            .nb_song
+            .as_ref()
+            .and_then(JsonScalar::as_i64)
+            .unwrap_or(0)
+            .max(0),
+        cover_url: raw.picture.as_deref().and_then(gw_cover_url),
+        owner: raw
+            .owner
+            .clone()
+            .map(|owner| owner.trim().to_string())
+            .filter(|owner| !owner.is_empty()),
+    })
+}
+
+fn gw_track_ref(raw: &RawGwSong) -> Option<TrackRef> {
+    let title = raw
+        .title
+        .clone()
+        .map(|title| title.trim().to_string())
+        .filter(|title| !title.is_empty())?;
+    Some(TrackRef {
+        id: raw.sng_id.as_ref().and_then(JsonScalar::as_string),
+        title,
+        artist: raw
+            .artist
+            .clone()
+            .map(|artist| artist.trim().to_string())
+            .filter(|artist| !artist.is_empty()),
+        album: raw
+            .album
+            .clone()
+            .map(|album| album.trim().to_string())
+            .filter(|album| !album.is_empty()),
+        duration_s: raw
+            .duration
+            .as_ref()
+            .and_then(JsonScalar::as_i64)
+            .filter(|seconds| *seconds > 0)
+            .map(|seconds| seconds as f64),
+    })
+}
+
+// ------------------------------------------- reponses brutes de l'API privee
+
+/// Valeur JSON scalaire : l'API privee mele nombres et chaines pour un meme
+/// champ (`SNG_ID`, `DURATION`, `NB_SONG` sont des chaines, `USER_ID` un nombre).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum JsonScalar {
+    String(String),
+    Integer(i64),
+    Float(f64),
+}
+
+impl JsonScalar {
+    fn as_string(&self) -> Option<String> {
+        match self {
+            JsonScalar::String(value) => {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }
+            JsonScalar::Integer(value) => Some(value.to_string()),
+            JsonScalar::Float(value) => Some(value.to_string()),
+        }
+    }
+
+    fn as_i64(&self) -> Option<i64> {
+        match self {
+            JsonScalar::Integer(value) => Some(*value),
+            JsonScalar::Float(value) => Some(*value as i64),
+            JsonScalar::String(value) => value.trim().parse().ok(),
+        }
+    }
+}
+
+/// Enveloppe commune : `{"error": [], "results": {...}}`.
+#[derive(Debug, Deserialize)]
+#[serde(bound(deserialize = "T: serde::Deserialize<'de>"))]
+struct GwEnvelope<T> {
+    #[serde(default)]
+    results: Option<T>,
+    #[serde(default)]
+    error: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawGwUserData {
+    #[serde(default, rename = "checkForm")]
+    check_form: Option<String>,
+    #[serde(default, rename = "USER")]
+    user: Option<RawGwUser>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawGwUser {
+    #[serde(default, rename = "USER_ID")]
+    user_id: Option<JsonScalar>,
+    #[serde(default, rename = "BLOG_NAME")]
+    blog_name: Option<String>,
+}
+
+/// Page generique de l'API privee (`{data, total}`).
+#[derive(Debug, Deserialize)]
+#[serde(bound(deserialize = "T: serde::Deserialize<'de>"))]
+struct RawGwPage<T> {
+    #[serde(default)]
+    data: Vec<T>,
+    #[serde(default)]
+    total: Option<JsonScalar>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawGwProfile {
+    #[serde(default, rename = "TAB")]
+    tab: Option<RawGwProfileTab>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawGwProfileTab {
+    #[serde(default)]
+    playlists: Option<RawGwPage<RawGwPlaylist>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawGwSearch {
+    #[serde(default, rename = "PLAYLIST")]
+    playlist: Option<RawGwPage<RawGwPlaylist>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawGwPlaylist {
+    #[serde(default, rename = "PLAYLIST_ID")]
+    playlist_id: Option<JsonScalar>,
+    #[serde(default, rename = "TITLE")]
+    title: Option<String>,
+    #[serde(default, rename = "NB_SONG")]
+    nb_song: Option<JsonScalar>,
+    #[serde(default, rename = "PLAYLIST_PICTURE")]
+    picture: Option<String>,
+    #[serde(default, rename = "PARENT_USERNAME")]
+    owner: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawGwPlaylistPage {
+    #[serde(default, rename = "DATA")]
+    data: Option<RawGwPlaylistHeader>,
+    #[serde(default, rename = "SONGS")]
+    songs: Option<RawGwPage<RawGwSong>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RawGwPlaylistHeader {
+    #[serde(default, rename = "TITLE")]
+    title: Option<String>,
+    #[serde(default, rename = "PLAYLIST_PICTURE")]
+    picture: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawGwSong {
+    #[serde(default, rename = "SNG_ID")]
+    sng_id: Option<JsonScalar>,
+    #[serde(default, rename = "SNG_TITLE")]
+    title: Option<String>,
+    #[serde(default, rename = "ART_NAME")]
+    artist: Option<String>,
+    #[serde(default, rename = "ALB_TITLE")]
+    album: Option<String>,
+    #[serde(default, rename = "DURATION")]
+    duration: Option<JsonScalar>,
+}
+
 /// Ajoute le jeton d'acces a une URL de pagination renvoyee par Deezer.
 fn with_token(url: String, access_token: &str) -> String {
     if url.contains("access_token=") {
@@ -462,6 +1016,7 @@ fn playlist_ref(raw: &RawPlaylist) -> Option<PlaylistRef> {
 fn track_ref(raw: &RawTrack) -> Option<TrackRef> {
     let title = raw.title.clone().filter(|title| !title.is_empty())?;
     Some(TrackRef {
+        id: raw.id.map(|id| id.to_string()),
         title,
         artist: raw.artist.as_ref().and_then(|artist| artist.name.clone()),
         album: raw.album.as_ref().and_then(|album| album.title.clone()),
@@ -691,5 +1246,146 @@ mod tests {
         assert!(
             url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fauth%2Fdeezer%2Fcallback")
         );
+    }
+
+    #[test]
+    fn gw_light_errors_are_detected_in_a_successful_body() {
+        // Corps nominal : `error` est un tableau vide.
+        let ok: serde_json::Value = serde_json::json!([]);
+        assert_eq!(gw_error_message(&ok), None);
+        let empty: serde_json::Value = serde_json::json!({});
+        assert_eq!(gw_error_message(&empty), None);
+        assert_eq!(gw_error_message(&serde_json::Value::Null), None);
+
+        let refused = serde_json::json!({"VALID_TOKEN_REQUIRED": "Invalid CSRF token"});
+        assert_eq!(
+            gw_error_message(&refused).as_deref(),
+            Some("VALID_TOKEN_REQUIRED: Invalid CSRF token")
+        );
+        let wrapped: serde_json::Value = serde_json::json!([{"GATEWAY_ERROR": "expired arl"}]);
+        assert_eq!(
+            gw_error_message(&wrapped).as_deref(),
+            Some("GATEWAY_ERROR: expired arl")
+        );
+    }
+
+    #[test]
+    fn private_api_values_accept_strings_and_numbers() {
+        let string: JsonScalar = serde_json::from_str(r#""4273247042""#).unwrap();
+        assert_eq!(string.as_string().as_deref(), Some("4273247042"));
+        assert_eq!(string.as_i64(), Some(4273247042));
+        let number: JsonScalar = serde_json::from_str("561799").unwrap();
+        assert_eq!(number.as_string().as_deref(), Some("561799"));
+        // Une chaine vide n'est pas une valeur : elle devient None.
+        let blank: JsonScalar = serde_json::from_str(r#""  ""#).unwrap();
+        assert_eq!(blank.as_string(), None);
+    }
+
+    #[test]
+    fn arl_playlist_payloads_carry_track_ids_for_deemix() {
+        let page: RawGwPlaylistPage = serde_json::from_str(
+            r#"{
+                "DATA": { "TITLE": "Rock Workout", "PLAYLIST_PICTURE": "abc123" },
+                "SONGS": {
+                    "total": "2",
+                    "data": [
+                        { "SNG_ID": "4273247042", "SNG_TITLE": "Fille a Papa",
+                          "ART_NAME": "Vacra", "ALB_TITLE": "Fille a Papa", "DURATION": "169" },
+                        { "SNG_ID": 12345, "SNG_TITLE": "Sans artiste" }
+                    ]
+                }
+            }"#,
+        )
+        .expect("charge utile gw-light valide");
+
+        let header = page.data.expect("en-tete de playlist");
+        assert_eq!(header.title.as_deref(), Some("Rock Workout"));
+        assert_eq!(
+            header.picture.as_deref().and_then(gw_cover_url).as_deref(),
+            Some("https://e-cdns-images.dzcdn.net/images/cover/abc123/250x250-000000-80-0-0.jpg")
+        );
+
+        let songs = page.songs.expect("pistes presentes");
+        assert_eq!(songs.total.as_ref().and_then(JsonScalar::as_i64), Some(2));
+        let tracks: Vec<TrackRef> = songs.data.iter().filter_map(gw_track_ref).collect();
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].id.as_deref(), Some("4273247042"));
+        assert_eq!(tracks[0].title, "Fille a Papa");
+        assert_eq!(tracks[0].artist.as_deref(), Some("Vacra"));
+        assert_eq!(tracks[0].album.as_deref(), Some("Fille a Papa"));
+        assert_eq!(tracks[0].duration_s, Some(169.0));
+        assert_eq!(tracks[1].id.as_deref(), Some("12345"));
+        assert_eq!(tracks[1].duration_s, None);
+    }
+
+    #[test]
+    fn arl_profile_entries_become_playlist_references() {
+        let profile: RawGwProfile = serde_json::from_str(
+            r#"{
+                "TAB": {
+                    "playlists": {
+                        "total": 19,
+                        "data": [
+                            { "PLAYLIST_ID": "1924357302", "TITLE": "Rock Workout",
+                              "NB_SONG": 100, "PLAYLIST_PICTURE": "cover-hash",
+                              "PARENT_USERNAME": "Rod - Deezer Rock Editor" },
+                            { "PLAYLIST_ID": 2004715782, "TITLE": "French rock", "NB_SONG": "3" }
+                        ]
+                    }
+                }
+            }"#,
+        )
+        .expect("profil gw-light valide");
+
+        let entries = profile.tab.unwrap().playlists.unwrap();
+        assert_eq!(
+            entries.total.as_ref().and_then(JsonScalar::as_i64),
+            Some(19)
+        );
+        let playlists: Vec<PlaylistRef> = entries.data.iter().filter_map(gw_playlist_ref).collect();
+        assert_eq!(playlists.len(), 2);
+        assert_eq!(playlists[0].id, "1924357302");
+        assert_eq!(playlists[0].name, "Rock Workout");
+        assert_eq!(playlists[0].track_count, 100);
+        assert_eq!(
+            playlists[0].owner.as_deref(),
+            Some("Rod - Deezer Rock Editor")
+        );
+        assert!(playlists[0].cover_url.is_some());
+        assert_eq!(playlists[1].id, "2004715782");
+        assert_eq!(playlists[1].track_count, 3);
+        assert_eq!(playlists[1].owner, None);
+    }
+
+    #[test]
+    fn arl_search_payload_is_read_from_the_playlist_key() {
+        let payload: RawGwSearch = serde_json::from_str(
+            r#"{
+                "PLAYLIST": {
+                    "data": [
+                        { "PLAYLIST_ID": "1951277682", "TITLE": "Classical Running",
+                          "NB_SONG": 50, "PARENT_USERNAME": "Deezer Classical Editor" }
+                    ]
+                }
+            }"#,
+        )
+        .expect("recherche gw-light valide");
+        let playlists: Vec<PlaylistRef> = payload
+            .playlist
+            .map(|page| page.data.iter().filter_map(gw_playlist_ref).collect())
+            .unwrap_or_default();
+        assert_eq!(playlists.len(), 1);
+        assert_eq!(playlists[0].id, "1951277682");
+        assert_eq!(playlists[0].name, "Classical Running");
+    }
+
+    #[test]
+    fn arl_covers_accept_hashes_and_full_urls() {
+        assert_eq!(gw_cover_url("  "), None);
+        assert_eq!(
+            gw_cover_url("https://exemple.org/cover.jpg").as_deref(),
+            Some("https://exemple.org/cover.jpg")
+        );
+        assert!(gw_cover_url("hash").unwrap().contains("/cover/hash/"));
     }
 }

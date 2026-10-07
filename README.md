@@ -39,7 +39,8 @@ avant d'être envoyée au backend.
 allure / cardio / altitude, plan contre réalisé, zones de fréquence cardiaque,
 chronologie des pauses), les écrans se composent à partir de **neuf widgets**, les
 courses à venir ont leur fiche et leur planning, et la page `/music` prépare la
-bande-son (playlists Spotify ou Deezer, BPM cible, manifeste à copier sur la montre).
+bande-son (playlists Spotify ou Deezer par cookie `arl`, BPM cible, liste des MP3 à
+télécharger via Deemix, manifeste à copier sur la montre).
 
 ## 2. Architecture
 
@@ -94,7 +95,7 @@ bande-son (playlists Spotify ou Deezer, BPM cible, manifeste à copier sur la mo
 | Chemin | Contenu |
 |---|---|
 | [`crates/mpacer-core/`](crates/mpacer-core/) | Cœur métier : unités, GPS, allure, tours, séance, assistant, voix, cardio, analyse, musique, GPX, `.pac` |
-| [`crates/mpacer-api/`](crates/mpacer-api/) | Backend Axum : API `/api/v1/*`, pages web, OAuth Google, Spotify et Deezer, suivi MQTT, migrations SQL (0001 → 0006) |
+| [`crates/mpacer-api/`](crates/mpacer-api/) | Backend Axum : API `/api/v1/*`, pages web, OAuth Google, Spotify, Deezer (OAuth **et** cookie `arl`), suivi MQTT, migrations SQL (0001 → 0008) |
 | [`crates/mpacer-ffi/`](crates/mpacer-ffi/) | Pont C ABI JSON exposé au shell Android (aucun panic ne traverse la frontière) |
 | [`crates/mpacer-client/`](crates/mpacer-client/) | Client de synchronisation utilisé par le simulateur |
 | [`crates/mpacer-sim/`](crates/mpacer-sim/) | Simulateur : rejoue une course synthétique, écrit un GPX, synchronise vers le backend |

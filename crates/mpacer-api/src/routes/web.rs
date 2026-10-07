@@ -129,6 +129,7 @@ pub fn router() -> Router<AppState> {
         .route("/music/import", post(music_import))
         .route("/music/playlists/{id}/manifest", get(music_manifest))
         .route("/music/playlists/{id}/files", get(music_files))
+        .route("/music/playlists/{id}/deemix", get(music_deemix_list))
         .route("/music/playlists/{id}/track-bpm", post(music_track_bpm))
         .route("/music/playlists/{id}/target", post(music_target))
         .route("/music/playlists/{id}/rename", post(music_rename))
@@ -3919,8 +3920,9 @@ fn music_error_message(code: &str) -> String {
         "spotify_refuse" => "Spotify a refuse la demande (identifiants invalides, redirection non autorisee ou endpoint restreint).".to_string(),
         "spotify_ref_invalide" => "La reference de playlist Spotify est illisible : collez un lien open.spotify.com ou un identifiant.".to_string(),
         "spotify_non_connecte" => "Connectez votre compte Spotify avant d'importer une playlist.".to_string(),
-        "deezer_non_configure" => "Deezer n'est pas configure sur ce service : renseignez MPACER_DEEZER_APP_ID et MPACER_DEEZER_APP_SECRET.".to_string(),
-        "deezer_refuse" => "Deezer a refuse la demande (identifiants invalides, redirection non autorisee ou jeton expire).".to_string(),
+        "deezer_non_configure" => "Deezer n'est pas configure sur ce service : renseignez MPACER_DEEZER_ARL (cookie arl du compte), ou MPACER_DEEZER_APP_ID et MPACER_DEEZER_APP_SECRET.".to_string(),
+        "deezer_refuse" => "Deezer a refuse la demande (cookie arl ou jeton invalide, ou playlist inaccessible).".to_string(),
+        "deezer_arl_refuse" => "Le cookie Deezer (ARL) a ete refuse : il est expire ou incomplet. Recopiez la valeur du cookie arl de deezer.com dans MPACER_DEEZER_ARL.".to_string(),
         "deezer_ref_invalide" => "La reference de playlist Deezer est illisible : collez un lien deezer.com ou un identifiant numerique.".to_string(),
         "deezer_non_connecte" => "Connectez votre compte Deezer avant de recuperer une playlist.".to_string(),
         "source_inconnue" => "Source musicale inconnue : choisissez Spotify ou Deezer.".to_string(),
@@ -3938,6 +3940,7 @@ fn music_ok_message(code: &str) -> String {
         "spotify_deconnecte" => "Compte Spotify deconnecte.".to_string(),
         "deezer_connecte" => "Compte Deezer connecte.".to_string(),
         "deezer_deconnecte" => "Compte Deezer deconnecte.".to_string(),
+        "deezer_arl" => "Deezer est deja accessible par le cookie ARL du service.".to_string(),
         "playlist_importee" => "Playlist importee.".to_string(),
         "bpm_enregistre" => "BPM enregistre.".to_string(),
         "playlist_renommee" => "Playlist renommee.".to_string(),
@@ -3973,7 +3976,7 @@ fn source_label(source: &str) -> &'static str {
 fn source_unconfigured_message(source: &str) -> &'static str {
     match source {
         "deezer" => {
-            "Deezer n'est pas configure sur ce service : renseignez MPACER_DEEZER_APP_ID et MPACER_DEEZER_APP_SECRET."
+            "Deezer n'est pas configure sur ce service : renseignez MPACER_DEEZER_ARL (cookie arl du compte). L'OAuth (MPACER_DEEZER_APP_ID + MPACER_DEEZER_APP_SECRET) reste accepte."
         }
         _ => {
             "Spotify n'est pas configure sur ce service : renseignez MPACER_SPOTIFY_CLIENT_ID et MPACER_SPOTIFY_CLIENT_SECRET."
@@ -3985,7 +3988,7 @@ fn source_unconfigured_message(source: &str) -> &'static str {
 fn source_connect_hint(source: &str) -> &'static str {
     match source {
         "deezer" => {
-            "Connectez Deezer pour retrouver vos playlists : seules les metadonnees (titres, durees) sont stockees. Deezer ne fournit pas de tempo : le BPM se complete par la balise du MP3, le tap ou la saisie."
+            "Connectez Deezer pour retrouver vos playlists : seules les metadonnees (titres, durees) sont stockees. Deezer ne fournit pas de tempo : le BPM se complete par la balise du MP3, le tap ou la saisie. Avec MPACER_DEEZER_ARL, la source est deja accessible sans cette etape."
         }
         _ => {
             "Connectez Spotify pour retrouver vos playlists : seules les metadonnees (titres, durees, BPM) sont stockees. L'audio est copie sur la montre par USB, depuis les fichiers de votre ordinateur."
@@ -4017,19 +4020,40 @@ fn deezer_source_playlist(item: crate::deezer::PlaylistRef) -> SourcePlaylist {
     }
 }
 
+/// Etat affiche d'un panneau de source musicale.
+///
+/// Regroupe ce qui vient de la requete et de la configuration : le panneau
+/// lui-meme ne connait ni la base ni le reseau.
+struct SourcePanel<'a> {
+    /// `spotify` ou `deezer`.
+    source: &'static str,
+    ready: bool,
+    connected_name: Option<String>,
+    results: &'a [SourcePlaylist],
+    /// Vrai pour la source interrogee par la requete courante.
+    active: bool,
+    term: &'a str,
+    error: Option<&'a str>,
+    /// Vrai quand la source est liee par OAuth (bouton « Deconnecter ») ; faux
+    /// quand l'acces vient du cookie ARL du service, qu'il n'y a rien a oter.
+    linked_account: bool,
+}
+
 /// Panneau d'une source musicale : connexion, recherche, playlists du compte.
 ///
 /// Les resultats affiches appartiennent a la source interrogee (`active`) : le
 /// panneau de l'autre service reste visible pour changer de source.
-fn source_panel(
-    source: &'static str,
-    ready: bool,
-    connected_name: Option<String>,
-    results: &[SourcePlaylist],
-    active: bool,
-    term: &str,
-    error: Option<&str>,
-) -> Markup {
+fn source_panel(panel: SourcePanel<'_>) -> Markup {
+    let SourcePanel {
+        source,
+        ready,
+        connected_name,
+        results,
+        active,
+        term,
+        error,
+        linked_account,
+    } = panel;
     let label = source_label(source);
     html! {
         div class="panel" {
@@ -4083,8 +4107,14 @@ fn source_panel(
                 @if active && results.is_empty() {
                     p class="muted" { "Aucune playlist trouvee." }
                 }
-                form method="post" action={ "/music/" (source) "/disconnect" } {
-                    button class="ghost" type="submit" { "Deconnecter" }
+                @if linked_account {
+                    form method="post" action={ "/music/" (source) "/disconnect" } {
+                        button class="ghost" type="submit" { "Deconnecter" }
+                    }
+                } @else {
+                    p class="tiny muted" {
+                        "Acces par le cookie arl du service (MPACER_DEEZER_ARL) : rien a connecter."
+                    }
                 }
             } @else {
                 p class="muted" { (source_connect_hint(source)) }
@@ -4102,14 +4132,28 @@ struct PreparedFile {
     title: String,
     artist: Option<String>,
     file_name: String,
+    /// Lien Deemix de la piste Deezer, quand son identifiant est connu : c'est
+    /// le bouton « telecharger » de la liste des MP3.
+    deemix_url: Option<String>,
+}
+
+/// Lien Deemix d'une piste Deezer (route de l'interface Deemix).
+fn deemix_track_url(base: &str, track_id: &str) -> String {
+    format!("{base}/#/track/{track_id}")
+}
+
+/// Lien Deemix d'une playlist Deezer entiere.
+fn deemix_playlist_url(base: &str, playlist_id: &str) -> String {
+    format!("{base}/#/playlist/{playlist_id}")
 }
 
 /// Liste des fichiers MP3 a preparer pour une playlist selectionnee.
 ///
 /// Le nom est exactement celui que `mpacer-music` ecrit sur la montre
 /// (`01 - Artiste - Titre.mp3`) : l'utilisateur sait donc quoi telecharger ou
-/// convertir, et l'appariement du dossier local retrouve le fichier.
-fn prepared_files(tracks: &[MusicTrack]) -> Vec<PreparedFile> {
+/// convertir, et l'appariement du dossier local retrouve le fichier. Quand la
+/// piste vient de Deezer, `deemix_url` pointe sa fiche sur l'instance Deemix.
+fn prepared_files(tracks: &[MusicTrack], deemix_base: &str) -> Vec<PreparedFile> {
     tracks
         .iter()
         .map(|track| {
@@ -4129,9 +4173,44 @@ fn prepared_files(tracks: &[MusicTrack]) -> Vec<PreparedFile> {
                 title: track.title.clone(),
                 artist: track.artist.clone(),
                 file_name: suggested_file_name(&wanted, "mp3"),
+                deemix_url: track
+                    .deezer_track_id
+                    .as_deref()
+                    .map(|id| deemix_track_url(deemix_base, id)),
             }
         })
         .collect()
+}
+
+/// Liste de telechargement Deemix (piece jointe `.txt`) : un fichier attendu par
+/// ligne, suivi du lien Deemix de la piste.
+fn deemix_files_text(
+    playlist_name: &str,
+    playlist_url: Option<&str>,
+    files: &[PreparedFile],
+) -> String {
+    let mut text = String::new();
+    let _ = writeln!(
+        text,
+        "# {playlist_name} : {} titre(s) a telecharger",
+        files.len()
+    );
+    if let Some(url) = playlist_url {
+        let _ = writeln!(text, "# playlist entiere : {url}");
+    }
+    let _ = writeln!(
+        text,
+        "# nom de fichier attendu sur la montre <TAB> lien Deemix de la piste"
+    );
+    for file in files {
+        let _ = writeln!(
+            text,
+            "{}\t{}",
+            file.file_name,
+            file.deemix_url.as_deref().unwrap_or("-")
+        );
+    }
+    text
 }
 
 /// Contenu texte de la liste des fichiers a preparer (piece jointe `.txt`).
@@ -4435,6 +4514,9 @@ async fn music_page(
     };
     let spotify_ready = state.config.spotify_configured();
     let deezer_ready = state.config.deezer_configured();
+    // Acces Deezer par cookie `arl` : pas de compte a connecter, la source est
+    // deja utilisable des que MPACER_DEEZER_ARL est renseigne.
+    let deezer_arl_ready = state.config.deezer_arl_configured();
     let account = crate::db::get_spotify_account(&state.pool, &user.id).await?;
     let deezer_account = crate::db::get_deezer_account(&state.pool, &user.id).await?;
     let playlists = crate::db::list_music_playlist_summaries(&state.pool, &user.id).await?;
@@ -4477,7 +4559,8 @@ async fn music_page(
             spotify_ready
         };
         let connected = if source == "deezer" {
-            deezer_account.is_some()
+            // Cookie arl : rien a connecter. OAuth : il faut un compte lie.
+            deezer_arl_ready || deezer_account.is_some()
         } else {
             account.is_some()
         };
@@ -4488,31 +4571,25 @@ async fn music_page(
                 "Connectez votre compte {} pour continuer.",
                 source_label(source)
             ));
+        } else if source == "deezer" {
+            match deezer_source_playlists(
+                &state,
+                &user.id,
+                mine,
+                term.as_deref().unwrap_or_default(),
+            )
+            .await
+            {
+                Ok(results) => source_playlists = results,
+                Err(error) => {
+                    tracing::warn!(error = %error, "requete Deezer refusee");
+                    search_error = Some(music_error_message(deezer_error_code(&state.config)));
+                }
+            }
         } else {
-            let token = if source == "deezer" {
-                deezer_access_token(&state, &user.id).await?
-            } else {
-                spotify_access_token(&state, &user.id).await?
-            };
-            match token {
+            match spotify_access_token(&state, &user.id).await? {
                 Some(token) => {
-                    let outcome: AppResult<Vec<SourcePlaylist>> = if source == "deezer" {
-                        if mine {
-                            crate::deezer::list_user_playlists(&state.http, &token)
-                                .await
-                                .map(|items| {
-                                    items.into_iter().map(deezer_source_playlist).collect()
-                                })
-                        } else {
-                            crate::deezer::search_playlists(
-                                &state.http,
-                                &token,
-                                term.as_deref().unwrap_or_default(),
-                            )
-                            .await
-                            .map(|items| items.into_iter().map(deezer_source_playlist).collect())
-                        }
-                    } else if mine {
+                    let outcome: AppResult<Vec<SourcePlaylist>> = if mine {
                         crate::spotify::list_user_playlists(&state.http, &token)
                             .await
                             .map(|items| items.into_iter().map(spotify_source_playlist).collect())
@@ -4528,17 +4605,15 @@ async fn music_page(
                     match outcome {
                         Ok(results) => source_playlists = results,
                         Err(error) => {
-                            tracing::warn!(error = %error, source, "requete de playlists refusee");
+                            tracing::warn!(error = %error, source, "requete Spotify refusee");
                             search_error =
                                 Some(format!("La requete {} a echoue.", source_label(source)));
                         }
                     }
                 }
                 None => {
-                    search_error = Some(format!(
-                        "Session {} expiree : reconnectez le compte.",
-                        source_label(source)
-                    ));
+                    search_error =
+                        Some("Session Spotify expiree : reconnectez le compte.".to_string());
                 }
             }
         }
@@ -4562,8 +4637,16 @@ async fn music_page(
         .as_ref()
         .map(|playlist| crate::models::manifest_file_name(&playlist.name));
     let manifest_command = manifest_name.as_deref().map(transfer_command);
-    // Bloc 4 : les noms de fichiers attendus sur la montre pour cette playlist.
-    let prepared = prepared_files(&tracks);
+    // Bloc 4 : les noms de fichiers attendus sur la montre pour cette playlist,
+    // et le lien Deemix de chaque piste Deezer (telechargement des MP3).
+    let deemix_base = state.config.deemix_base_url();
+    let prepared = prepared_files(&tracks, &deemix_base);
+    let deemix_playlist = selected_playlist
+        .as_ref()
+        .filter(|playlist| playlist.source == "deezer")
+        .and_then(|playlist| playlist.deezer_id.as_deref())
+        .map(|id| deemix_playlist_url(&deemix_base, id));
+    let has_deemix_links = prepared.iter().any(|file| file.deemix_url.is_some());
     // Nom affiche du compte lie, quel que soit le fournisseur.
     let spotify_name = account.as_ref().and_then(|account| {
         account
@@ -4571,12 +4654,15 @@ async fn music_page(
             .clone()
             .or_else(|| account.spotify_user_id.clone())
     });
-    let deezer_name = deezer_account.as_ref().and_then(|account| {
-        account
-            .display_name
-            .clone()
-            .or_else(|| account.deezer_user_id.clone())
-    });
+    let deezer_name = deezer_account
+        .as_ref()
+        .and_then(|account| {
+            account
+                .display_name
+                .clone()
+                .or_else(|| account.deezer_user_id.clone())
+        })
+        .or_else(|| deezer_arl_ready.then(|| "Compte Deezer (cookie arl)".to_string()));
 
     let content = html! {
         section class="hero" {
@@ -4602,24 +4688,27 @@ async fn music_page(
         // ------------------------------------ 1. sources Spotify et Deezer
         div class="section-head" { h2 { "1. Source des playlists (Spotify ou Deezer)" } }
         div class="music-grid" {
-            (source_panel(
-                "spotify",
-                spotify_ready,
-                spotify_name,
-                &source_playlists,
-                source == "spotify",
-                term.as_deref().unwrap_or_default(),
-                search_error.as_deref(),
-            ))
-            (source_panel(
-                "deezer",
-                deezer_ready,
-                deezer_name,
-                &source_playlists,
-                source == "deezer",
-                term.as_deref().unwrap_or_default(),
-                search_error.as_deref(),
-            ))
+            (source_panel(SourcePanel {
+                source: "spotify",
+                ready: spotify_ready,
+                connected_name: spotify_name,
+                results: &source_playlists,
+                active: source == "spotify",
+                term: term.as_deref().unwrap_or_default(),
+                error: search_error.as_deref(),
+                linked_account: true,
+            }))
+            (source_panel(SourcePanel {
+                source: "deezer",
+                ready: deezer_ready,
+                connected_name: deezer_name,
+                results: &source_playlists,
+                active: source == "deezer",
+                term: term.as_deref().unwrap_or_default(),
+                error: search_error.as_deref(),
+                // Cookie arl : rien a deconnecter, le panneau le dit.
+                linked_account: !deezer_arl_ready,
+            }))
         }
 
         // ------------------------------------------------ 2. playlists preparees
@@ -4763,9 +4852,26 @@ async fn music_page(
                     (prepared.len()) " fichier(s) MP3 a mettre en place : un nom par piste, "
                     "exactement celui ecrit sur la montre par mpacer-music."
                 }
+                @if let Some(url) = &deemix_playlist {
+                    p class="muted" {
+                        "Telechargez la playlist dans Deemix ("
+                        (deemix_base)
+                        "), puis copiez les MP3 sur la montre avec mpacer-music."
+                    }
+                    div class="actions" {
+                        a class="button" target="_blank" rel="noopener" href=(url) {
+                            "Telecharger toute la playlist dans Deemix"
+                        }
+                    }
+                }
                 div class="actions" {
                     a class="button" href={ "/music/playlists/" (playlist.id) "/files" } {
                         "Telecharger la liste (.txt)"
+                    }
+                    @if has_deemix_links {
+                        a class="button ghost" href={ "/music/playlists/" (playlist.id) "/deemix" } {
+                            "Liste Deemix (.txt)"
+                        }
                     }
                 }
                 div class="table-wrap" {
@@ -4776,6 +4882,9 @@ async fn music_page(
                                 th { "Titre" }
                                 th { "Artiste" }
                                 th { "Fichier MP3 attendu" }
+                                @if has_deemix_links {
+                                    th { "Telecharger" }
+                                }
                             }
                         }
                         tbody {
@@ -4785,6 +4894,17 @@ async fn music_page(
                                     td { (file.title) }
                                     td { (file.artist.clone().unwrap_or_else(|| "-".to_string())) }
                                     td { code { (file.file_name) } }
+                                    @if has_deemix_links {
+                                        td {
+                                            @if let Some(url) = &file.deemix_url {
+                                                a class="button small" target="_blank" rel="noopener" href=(url) {
+                                                    "Deemix"
+                                                }
+                                            } @else {
+                                                span class="muted" { "-" }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -5000,6 +5120,84 @@ async fn spotify_disconnect(
 
 // ---------------------------------------------------------------- Deezer (web)
 
+/// Acces Deezer utilise par la page : cookie `arl` du service, ou compte lie.
+enum DeezerSession {
+    /// API privee du site, ouverte par `MPACER_DEEZER_ARL` (voie recommandee).
+    Arl(crate::deezer::ArlSession),
+    /// Jeton OAuth du compte lie (`deezer_accounts`).
+    OAuth(String),
+}
+
+/// Ouvre la session Deezer exploitable, ou `None` si le service n'a aucun acces.
+///
+/// Le cookie `arl` est prioritaire : quand il est renseigne, le compte OAuth
+/// eventuel n'est plus interroge.
+async fn deezer_session(state: &AppState, user_id: &str) -> AppResult<Option<DeezerSession>> {
+    if state.config.deezer_arl_configured() {
+        let arl = state.config.deezer_arl.clone().unwrap_or_default();
+        let session = crate::deezer::arl_session(&state.http, &arl).await?;
+        return Ok(Some(DeezerSession::Arl(session)));
+    }
+    Ok(deezer_access_token(state, user_id)
+        .await?
+        .map(DeezerSession::OAuth))
+}
+
+/// Playlists Deezer du compte (`mine`) ou resultats de recherche.
+async fn deezer_source_playlists(
+    state: &AppState,
+    user_id: &str,
+    mine: bool,
+    term: &str,
+) -> AppResult<Vec<SourcePlaylist>> {
+    let session = deezer_session(state, user_id)
+        .await?
+        .ok_or_else(|| AppError::bad_request("aucun acces Deezer n'est configure"))?;
+    let items = match session {
+        DeezerSession::Arl(mut session) => {
+            if mine {
+                crate::deezer::list_user_playlists_arl(&state.http, &mut session).await?
+            } else {
+                crate::deezer::search_playlists_arl(&state.http, &mut session, term).await?
+            }
+        }
+        DeezerSession::OAuth(token) => {
+            if mine {
+                crate::deezer::list_user_playlists(&state.http, &token).await?
+            } else {
+                crate::deezer::search_playlists(&state.http, &token, term).await?
+            }
+        }
+    };
+    Ok(items.into_iter().map(deezer_source_playlist).collect())
+}
+
+/// Code d'erreur de la page quand Deezer refuse la requete.
+///
+/// En mode cookie `arl`, la cause est un cookie expire : le code le dit et le
+/// message indique la variable a corriger.
+fn deezer_error_code(config: &crate::config::Config) -> &'static str {
+    if config.deezer_arl_configured() {
+        "deezer_arl_refuse"
+    } else {
+        "deezer_refuse"
+    }
+}
+
+/// Fiche Deezer d'une playlist, quel que soit le mode d'acces.
+async fn deezer_playlist_detail(
+    state: &AppState,
+    session: &mut DeezerSession,
+    id: &str,
+) -> AppResult<crate::deezer::PlaylistDetail> {
+    match session {
+        DeezerSession::Arl(session) => {
+            crate::deezer::get_playlist_arl(&state.http, session, id).await
+        }
+        DeezerSession::OAuth(token) => crate::deezer::get_playlist(&state.http, token, id).await,
+    }
+}
+
 /// Jeton d'acces Deezer du compte lie.
 ///
 /// Deezer n'emet pas de jeton de rafraichissement : `expires_at_ms = 0` signifie
@@ -5023,6 +5221,10 @@ async fn deezer_start(
 ) -> AppResult<Response> {
     if !state.config.deezer_configured() {
         return Ok(Redirect::to("/music?erreur=deezer_non_configure").into_response());
+    }
+    // Cookie arl : le compte est deja accessible, aucune redirection OAuth.
+    if state.config.deezer_arl_configured() {
+        return Ok(Redirect::to("/music?ok=deezer_arl").into_response());
     }
     let oauth_state = crate::auth::random_urlsafe(24);
     let now = state.now_ms();
@@ -5269,6 +5471,7 @@ async fn import_spotify(
                 bpm,
                 bpm_source: bpm.map(|_| "spotify".to_string()),
                 spotify_uri: track.spotify_uri.clone(),
+                deezer_track_id: None,
             },
             state.now_ms(),
         )
@@ -5304,14 +5507,29 @@ async fn import_deezer(
     let Some(deezer_id) = crate::deezer::playlist_id_from_ref(reference) else {
         return Ok(Redirect::to("/music?erreur=deezer_ref_invalide").into_response());
     };
-    let Some(token) = deezer_access_token(state, &user.id).await? else {
-        return Ok(Redirect::to("/music?erreur=deezer_non_connecte").into_response());
+    let mut session = match deezer_session(state, &user.id).await {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            return Ok(Redirect::to("/music?erreur=deezer_non_connecte").into_response());
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "session Deezer refusee");
+            return Ok(Redirect::to(&format!(
+                "/music?erreur={}",
+                deezer_error_code(&state.config)
+            ))
+            .into_response());
+        }
     };
-    let detail = match crate::deezer::get_playlist(&state.http, &token, &deezer_id).await {
+    let detail = match deezer_playlist_detail(state, &mut session, &deezer_id).await {
         Ok(detail) => detail,
         Err(error) => {
             tracing::warn!(error = %error, "import Deezer refuse");
-            return Ok(Redirect::to("/music?erreur=deezer_refuse").into_response());
+            return Ok(Redirect::to(&format!(
+                "/music?erreur={}",
+                deezer_error_code(&state.config)
+            ))
+            .into_response());
         }
     };
 
@@ -5351,6 +5569,7 @@ async fn import_deezer(
                 bpm: None,
                 bpm_source: None,
                 spotify_uri: None,
+                deezer_track_id: track.id.clone(),
             },
             state.now_ms(),
         )
@@ -5524,7 +5743,7 @@ async fn music_files(
         .await?
         .ok_or(AppError::NotFound)?;
     let tracks = crate::db::list_music_tracks(&state.pool, &user.id, &id).await?;
-    let files = prepared_files(&tracks);
+    let files = prepared_files(&tracks, &state.config.deemix_base_url());
     let body = prepared_files_text(&playlist.name, &files);
     let base = crate::models::manifest_file_name(&playlist.name);
     let base = base.strip_suffix(".json").unwrap_or(&base);
@@ -5533,6 +5752,40 @@ async fn music_files(
         .header(
             header::CONTENT_DISPOSITION,
             format!("attachment; filename=\"{base}.txt\""),
+        )
+        .body(Body::from(body))
+        .map_err(|error| AppError::internal(error.to_string()))
+}
+
+/// Liste de telechargement Deemix (piece jointe `.txt`).
+///
+/// Un fichier attendu par ligne, suivi du lien Deemix de la piste : c'est la
+/// liste a ouvrir dans l'instance Deemix pour recuperer les MP3, avant de les
+/// copier sur la montre avec `mpacer-music`.
+async fn music_deemix_list(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let playlist = crate::db::get_music_playlist(&state.pool, &user.id, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let tracks = crate::db::list_music_tracks(&state.pool, &user.id, &id).await?;
+    let deemix_base = state.config.deemix_base_url();
+    let files = prepared_files(&tracks, &deemix_base);
+    let playlist_url = playlist
+        .deezer_id
+        .as_deref()
+        .filter(|_| playlist.source == "deezer")
+        .map(|deezer_id| deemix_playlist_url(&deemix_base, deezer_id));
+    let body = deemix_files_text(&playlist.name, playlist_url.as_deref(), &files);
+    let base = crate::models::manifest_file_name(&playlist.name);
+    let base = base.strip_suffix(".json").unwrap_or(&base);
+    Response::builder()
+        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{base}-deemix.txt\""),
         )
         .body(Body::from(body))
         .map_err(|error| AppError::internal(error.to_string()))
@@ -6293,6 +6546,7 @@ mod friends_web_tests {
 #[cfg(test)]
 mod music_web_tests {
     use super::*;
+    use crate::config::DEFAULT_DEEMIX_URL;
 
     #[test]
     fn the_transfer_command_shows_the_manifest_and_the_folder() {
@@ -6324,9 +6578,12 @@ mod music_web_tests {
         assert_eq!(source_label("spotify"), "Spotify");
         // Les messages de developpement restent explicites.
         assert!(music_error_message("deezer_non_configure").contains("MPACER_DEEZER_APP_ID"));
+        assert!(music_error_message("deezer_non_configure").contains("MPACER_DEEZER_ARL"));
+        assert!(music_error_message("deezer_arl_refuse").contains("MPACER_DEEZER_ARL"));
         assert!(music_error_message("deezer_ref_invalide").contains("deezer.com"));
         assert!(music_error_message("source_inconnue").contains("Spotify"));
         assert!(music_ok_message("deezer_connecte").contains("Deezer"));
+        assert!(music_ok_message("deezer_arl").contains("ARL"));
     }
 
     #[test]
@@ -6340,10 +6597,12 @@ mod music_web_tests {
                 ..music_track(Some(200.0), None)
             },
         ];
-        let files = prepared_files(&tracks);
+        let files = prepared_files(&tracks, DEFAULT_DEEMIX_URL);
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].file_name, "01 - Artiste - Titre.mp3");
         assert_eq!(files[1].file_name, "04 - Levels.mp3");
+        // Sans identifiant Deezer, aucune piste n'a de lien de telechargement.
+        assert!(files.iter().all(|file| file.deemix_url.is_none()));
 
         let text = prepared_files_text("Run 170", &files);
         assert!(text.contains("# Run 170 : 2 fichier(s) MP3 a mettre en place"));
@@ -6352,6 +6611,64 @@ mod music_web_tests {
 
         let empty = prepared_files_text("Vide", &[]);
         assert!(empty.contains("0 fichier(s) MP3"));
+    }
+
+    #[test]
+    fn deemix_links_follow_the_webui_routes() {
+        assert_eq!(
+            deemix_track_url("https://deemix.p.zacharie.org", "4273247042"),
+            "https://deemix.p.zacharie.org/#/track/4273247042"
+        );
+        assert_eq!(
+            deemix_playlist_url("https://deemix.p.zacharie.org", "1924357302"),
+            "https://deemix.p.zacharie.org/#/playlist/1924357302"
+        );
+
+        // Une playlist Deezer : chaque piste porte son lien Deemix.
+        let tracks = vec![
+            MusicTrack {
+                deezer_track_id: Some("4273247042".into()),
+                ..music_track(Some(169.0), None)
+            },
+            MusicTrack {
+                title: "Sans identifiant".into(),
+                position: 2,
+                ..music_track(Some(200.0), None)
+            },
+        ];
+        let files = prepared_files(&tracks, DEFAULT_DEEMIX_URL);
+        assert_eq!(
+            files[0].deemix_url.as_deref(),
+            Some("https://deemix.p.zacharie.org/#/track/4273247042")
+        );
+        assert_eq!(files[1].deemix_url, None);
+
+        let text = deemix_files_text(
+            "Rock Workout",
+            Some("https://deemix.p.zacharie.org/#/playlist/1924357302"),
+            &files,
+        );
+        assert!(
+            text.contains("# Rock Workout : 2 titre(s) a telecharger"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "# playlist entiere : https://deemix.p.zacharie.org/#/playlist/1924357302"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "01 - Artiste - Titre.mp3	https://deemix.p.zacharie.org/#/track/4273247042"
+            ),
+            "{text}"
+        );
+        // Une piste sans identifiant garde sa ligne, sans lien.
+        assert!(
+            text.contains("02 - Artiste - Sans identifiant.mp3	-"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -6387,6 +6704,7 @@ mod music_web_tests {
             bpm,
             bpm_source: None,
             spotify_uri: None,
+            deezer_track_id: None,
             mime: None,
             size_bytes: None,
             storage_path: None,

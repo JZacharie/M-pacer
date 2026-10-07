@@ -38,6 +38,12 @@ externalSecrets:
   secretStore: vault-apps
   vaultPath: mpacer
   secretName: mpacer-secrets
+  keys:
+    # Deezer par cookie arl : a renseigner ICI seulement apres avoir scelle
+    # MPACER_DEEZER_ARL dans Vault (un remoteRef absent fait echouer l'ESO).
+    #   vault kv patch apps/mpacer MPACER_DEEZER_ARL="<cookie arl>"
+    # puis : keys.deezerArl: MPACER_DEEZER_ARL
+    deezerArl: ""
 
 # Le chart ne cree pas de Secret : il consomme celui produit par ESO
 auth:
@@ -63,6 +69,10 @@ config:
   # et declare https://mpacer.p.zacharie.org/auth/deezer/callback dans
   # "Application Domains" sur https://developers.deezer.com/myapps.
   deezerRedirectUri: ""
+  # Deezer par cookie arl (voie recommandee) : le cookie va dans Vault
+  # (MPACER_DEEZER_ARL), pas ici. Laissez vide pour utiliser l'instance Deemix
+  # par defaut (https://deemix.p.zacharie.org) dans les liens MP3 de /music.
+  deemixUrl: ""
 
 # PostgreSQL gere par l'operateur CloudNativePG (present sur jo3 : cnpg-system)
 postgresql:

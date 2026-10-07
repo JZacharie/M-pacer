@@ -1627,6 +1627,7 @@ async fn music_api_publishes_playlists_and_the_transfer_manifest() {
                 bpm: Some(*bpm),
                 bpm_source: Some("spotify".into()),
                 spotify_uri: Some(format!("spotify:track:{position}")),
+                deezer_track_id: None,
             },
             state.now_ms(),
         )
@@ -1768,6 +1769,114 @@ async fn music_api_publishes_playlists_and_the_transfer_manifest() {
 }
 
 #[tokio::test]
+async fn deemix_list_exports_the_download_links() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (user, session) = dev_user_session(&state).await;
+
+    // Une playlist Deezer importee : chaque piste garde son identifiant Deezer.
+    let playlist = mpacer_api::db::insert_music_playlist(
+        &state.pool,
+        &user.id,
+        &mpacer_api::models::MusicPlaylistInput {
+            name: "Rock Workout".into(),
+            source: "deezer".into(),
+            spotify_id: None,
+            deezer_id: Some("1924357302".into()),
+            cover_url: None,
+            target_bpm: None,
+        },
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+    for (position, (title, track_id)) in [("Wake me up", "4273247042"), ("Levels", "999")]
+        .iter()
+        .enumerate()
+    {
+        mpacer_api::db::insert_music_track(
+            &state.pool,
+            &user.id,
+            &playlist.id,
+            &mpacer_api::models::MusicTrackInput {
+                position: position as i32,
+                title: (*title).to_string(),
+                artist: Some("Avicii".into()),
+                album: None,
+                duration_s: Some(249.0),
+                bpm: None,
+                bpm_source: None,
+                spotify_uri: None,
+                deezer_track_id: Some((*track_id).to_string()),
+            },
+            state.now_ms(),
+        )
+        .await
+        .unwrap();
+    }
+
+    // 1. La page propose le telechargement de la playlist dans Deemix.
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie(
+                &format!("/music?playlist={}", playlist.id),
+                &session,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        body.contains("https://deemix.p.zacharie.org/#/playlist/1924357302"),
+        "{body}"
+    );
+    assert!(body.contains("Deemix"), "{body}");
+
+    // 2. La liste .txt porte un lien Deemix par piste.
+    let response = app
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/music/playlists/{}/deemix", playlist.id),
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let disposition = response.headers()[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        disposition.contains("rock-workout-deemix.txt"),
+        "{disposition}"
+    );
+    let body = body_text(response).await;
+    assert!(
+        body.contains("# playlist entiere : https://deemix.p.zacharie.org/#/playlist/1924357302"),
+        "{body}"
+    );
+    assert!(
+        body.contains(
+            "01 - Avicii - Wake me up.mp3	https://deemix.p.zacharie.org/#/track/4273247042"
+        ),
+        "{body}"
+    );
+    assert!(
+        body.contains("https://deemix.p.zacharie.org/#/track/999"),
+        "{body}"
+    );
+
+    // 3. Une playlist inconnue reste un 404.
+    let response = app
+        .oneshot(get_with_cookie(
+            "/music/playlists/inconnue/deemix",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn music_page_has_six_blocks_and_downloads_the_manifest() {
     let (app, state) = app_or_skip!(test_app(true).await);
     let (_user, session) = dev_user_session(&state).await;
@@ -1830,6 +1939,7 @@ async fn music_page_has_six_blocks_and_downloads_the_manifest() {
             bpm: None,
             bpm_source: None,
             spotify_uri: Some("spotify:track:t1".into()),
+            deezer_track_id: None,
         },
         state.now_ms(),
     )
@@ -2986,6 +3096,7 @@ async fn music_page_validates_the_coverage_and_renames_a_playlist() {
                 bpm: Some(150.0),
                 bpm_source: Some("manual".into()),
                 spotify_uri: None,
+                deezer_track_id: None,
             },
             state.now_ms(),
         )
@@ -3046,6 +3157,7 @@ async fn music_page_validates_the_coverage_and_renames_a_playlist() {
             bpm: None,
             bpm_source: None,
             spotify_uri: None,
+            deezer_track_id: None,
         },
         state.now_ms(),
     )

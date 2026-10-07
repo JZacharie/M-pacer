@@ -43,7 +43,24 @@ c'est un chantier distinct, decrit en section 9.
 
 ### 3.1 Cote comptes developpeur (une fois)
 
-**Deezer** (source ajoutee) :
+**Deezer par cookie `arl` (voie recommandee, aucune inscription) :**
+
+1. se connecter sur <https://www.deezer.com> dans un navigateur ;
+2. ouvrir les outils de developpement > **Application** > **Cookies** >
+   `https://www.deezer.com` et copier la valeur du cookie **`arl`** ;
+3. la sceller dans le secret du service (`MPACER_DEEZER_ARL`, voir
+   [deploy/GITOPS-ET-SECRETS.md](../deploy/GITOPS-ET-SECRETS.md) section 2) ou la
+   poser dans `.env` en local.
+
+Ce cookie ouvre l'**API privee** du site (`gw-light`) : profil, playlists du
+compte (**y compris privees**) et pistes avec leur identifiant Deezer — c'est cet
+identifiant qui construit le lien de telechargement Deemix. Le mode OAuth
+ci-dessous reste disponible mais n'est plus necessaire ; quand le cookie est
+present, il est prioritaire. Deezer renouvelle rarement l'`arl` : si le service
+repond « Le cookie Deezer (ARL) a ete refuse », il suffit de recopier la nouvelle
+valeur.
+
+**Deezer par OAuth (repli) :**
 
 1. se connecter sur <https://developers.deezer.com/myapps> ;
 2. **Create a new Application** : nom (`M-pacer`), description, accepter les
@@ -72,8 +89,10 @@ c'est un chantier distinct, decrit en section 9.
 
 | Variable | Role | Defaut |
 |---|---|---|
-| `MPACER_DEEZER_APP_ID` | identifiant de l'application Deezer | *(vide : source eteinte)* |
-| `MPACER_DEEZER_APP_SECRET` | secret applicatif Deezer | *(vide)* |
+| `MPACER_DEEZER_ARL` | **cookie `arl` du compte Deezer** : lecture des playlists sans application developpeur | *(vide : source eteinte)* |
+| `MPACER_DEEMIX_URL` | instance Deemix des liens MP3 (routes `#/playlist/{id}`, `#/track/{id}`) | `https://deemix.p.zacharie.org` |
+| `MPACER_DEEZER_APP_ID` | identifiant de l'application Deezer (repli OAuth) | *(vide : source eteinte)* |
+| `MPACER_DEEZER_APP_SECRET` | secret applicatif Deezer (repli OAuth) | *(vide)* |
 | `MPACER_DEEZER_REDIRECT_URI` | URI enregistree chez Deezer | `{public_url}/auth/deezer/callback` |
 | `MPACER_SPOTIFY_CLIENT_ID` / `_SECRET` | OAuth Spotify | *(vide)* |
 | `MPACER_SPOTIFY_REDIRECT_URI` | URI enregistree chez Spotify | `{public_url}/auth/spotify/callback` |
@@ -105,6 +124,8 @@ Sans identifiants, la source est simplement annoncee « non configuree » sur
 | Chantier | Contenu |
 |---|---|
 | Client Deezer | `crates/mpacer-api/src/deezer.rs` : OAuth 2.0, `list_user_playlists`, `search_playlists`, `get_playlist`, `current_user`, `playlist_id_from_ref`, lecture du jeton (JSON **ou** chaine de requete), detection des erreurs applicatives renvoyees en HTTP 200 |
+| Client Deezer par cookie `arl` | meme fichier : `arl_session`, `list_user_playlists_arl`, `search_playlists_arl`, `get_playlist_arl` sur l'API privee `gw-light` (cookie de session `sid` repris apres le premier appel, pagination, identifiant Deezer de chaque piste) |
+| Telechargement Deemix | bloc 4 : lien `#/playlist/{id}` pour la playlist et `#/track/{id}` par piste (`MPACER_DEEMIX_URL`), export `GET /music/playlists/{id}/deemix` |
 | Configuration | `MPACER_DEEZER_*` + `deezer_configured()` / `deezer_redirect_uri()` / `deezer_redirect_path()` |
 | Base | migration `0006-sources-musique.sql` : colonne `music_playlists.deezer_id` + table `deezer_accounts` |
 | Page `/music` | bloc 1 a **deux panneaux** (Spotify / Deezer) : connexion, recherche, `Mes playlists`, import ; bloc 4 **Fichiers a preparer (MP3)** ; blocs 5 et 6 renumerotes |
@@ -114,11 +135,14 @@ Sans identifiants, la source est simplement annoncee « non configuree » sur
 
 ### 3.4 Cote utilisateur (mode operatoire)
 
-1. `/music` : connecter **Spotify** ou **Deezer** (bloc 1) ;
+1. `/music` : connecter **Spotify**, ou rien du tout pour **Deezer** quand
+   `MPACER_DEEZER_ARL` est renseigne (bloc 1) ;
 2. chercher une playlist ou cliquer **Mes playlists**, puis **Importer** ;
-3. bloc 4 : telecharger la liste `.txt` -> rassembler les MP3 correspondants ;
-4. dans `mpacer-music` : analyser le manifeste, puis soit designer le dossier des
-   MP3, soit **pousser les fichiers** dans la section 6 de la page locale ;
+3. bloc 4 : **Ouvrir la playlist dans Deemix** (ou suivre les liens piste a piste)
+   pour telecharger les MP3, puis recuperer la liste `.txt` des noms attendus ;
+4. dans `mpacer-music` : pointer le dossier des MP3 telecharges par Deemix
+   (`--folder`), analyser le manifeste, puis soit designer ce dossier, soit
+   **pousser les fichiers** dans la section 6 de la page locale ;
 5. **Transferer sur la montre** : chaque fichier passe de `a synchroniser` a
    `synchronise` (ou `erreur` avec le message) ;
 6. sur la montre : **Musique > Importer (USB)**.
@@ -142,6 +166,7 @@ playlist est une chaine (`spotify`, `deezer`, `manual`) deja publiee.
 | POST | `/music/deezer/disconnect` | deconnecte le compte Deezer |
 | POST | `/music/import` | `source`, `ref`, `target_bpm` |
 | GET | `/music/playlists/{id}/files` | **liste des MP3 a preparer** (`.txt`) |
+| GET | `/music/playlists/{id}/deemix` | **liste de telechargement Deemix** (`.txt`) : un fichier attendu par ligne, suivi du lien Deemix de la piste |
 | GET | `/music/playlists/{id}/manifest` | manifeste de transfert (inchange) |
 
 Les routes Spotify existantes sont inchangees ; `POST /music/import` accepte en
@@ -156,8 +181,10 @@ plus `source` et `ref`, et continue d'accepter `spotify_ref`.
 |   [ Deezer  ] Connecte  recherche [ running ] [Chercher] [Mes playlists]     |
 | 2. Playlists preparees                                                       |
 | 3. Titres (playlist selectionnee)   BPM : [tapper] [saisir]                  |
-| 4. Fichiers a preparer (MP3)   [ Telecharger la liste (.txt) ]               |
-|    | 1 | Wake me up | Avicii | 01 - Avicii - Wake me up.mp3 |                |
+| 4. Fichiers a preparer (MP3)                                                 |
+|    [ Telecharger toute la playlist dans Deemix ]                             |
+|    [ Telecharger la liste (.txt) ] [ Liste Deemix (.txt) ]                   |
+|    | 1 | Wake me up | Avicii | 01 - Avicii - Wake me up.mp3 | [ Deemix ] |   |
 | 5. Transfert vers la montre (USB)   [ Telecharger le manifeste ]             |
 | 6. Assez de musique pour la course ?                                         |
 +------------------------------------------------------------------------------+
@@ -207,7 +234,9 @@ montre n'a aucun appel reseau a faire.
 * lecture de l'audio Spotify ou Deezer (DRM) : jamais ;
 * conversion automatique d'un format vers MP3 : la liste indique **le nom attendu**,
   la conversion reste a la charge de l'utilisateur (ffmpeg, etc.) ;
-* telechargement automatique des MP3 depuis un service tiers ;
+* telechargement automatique des MP3 depuis un service tiers : M-pacer **liste**
+  les fichiers et pointe l'instance Deemix de l'utilisateur (lien par piste et
+  lien de playlist), mais ne telecharge rien lui-meme et ne stocke aucun audio ;
 * synchro Wi-Fi montre <-> serveur : voir section 9.
 
 ## 8. Suites possibles
@@ -229,6 +258,18 @@ independant de cette livraison : la decision v2/v3 (aucun audio sur le serveur)
 reste donc en vigueur.
 
 ## 10. Etat d'implementation (7 octobre 2026)
+
+### 10.1 Deezer par cookie `arl` et telechargement Deemix
+
+| Chantier | Livre | Preuve |
+|---|---|---|
+| Cookie `arl` | `crates/mpacer-api/src/deezer.rs` : `arl_session` (`deezer.getUserData`), `list_user_playlists_arl` (`deezer.pageProfile`), `search_playlists_arl` (`deezer.pageSearch`), `get_playlist_arl` (`deezer.pagePlaylist`) sur l'API privee `gw-light`, reprise du cookie de session `sid` apres chaque reponse (sans lui Deezer repond `VALID_TOKEN_REQUIRED`) | test unitaire `gw_light_errors_are_detected_in_a_successful_body` + charges utiles reelles ; test ignore `tests/deezer_live.rs` contre l'API Deezer (19 playlists du compte, 155 pistes paginees, identifiant Deezer de chaque piste) |
+| Conservation des identifiants | migration `0008-deezer-arl.sql` (`music_tracks.deezer_track_id`), `MusicTrack`/`MusicTrackInput`/`insert_music_track` | test unitaire `deemix_links_follow_the_webui_routes` ; test d'integration `deemix_list_exports_the_download_links` |
+| Liens Deemix | bloc 4 : lien de playlist `#/playlist/{id}`, lien par piste `#/track/{id}`, export `GET /music/playlists/{id}/deemix` ; `MPACER_DEEMIX_URL` (defaut `https://deemix.p.zacharie.org`) | tests unitaires `deemix_links_follow_the_webui_routes` (page et export) |
+| Configuration | `MPACER_DEEZER_ARL` prioritaire sur l'OAuth ; `deezer_configured()` vrai avec le seul cookie ; panneau Deezer sans bouton « Connecter » en mode `arl` | tests unitaires `deezer_arl_enables_the_source_without_a_developer_application`, `deemix_url_defaults_to_the_zacharie_instance` |
+| Deploiement | `charts/mpacer` : `auth.deezerArl` -> Secret, `externalSecrets.keys.deezerArl` -> ExternalSecret, `config.deemixUrl` -> ConfigMap ; section 2 de `deploy/GITOPS-ET-SECRETS.md` | `helm lint` + `helm template` |
+
+### 10.2 Livraison v2/v3 (rappel)
 
 | Chantier | Livre | Preuve |
 |---|---|---|

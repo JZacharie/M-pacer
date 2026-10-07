@@ -503,6 +503,9 @@ pub struct MusicTrack {
     pub bpm: Option<f64>,
     pub bpm_source: Option<String>,
     pub spotify_uri: Option<String>,
+    /// Identifiant Deezer de la piste : sert a construire son lien Deemix
+    /// (`{deemix}/#/track/{id}`). `None` pour une source sans identifiant.
+    pub deezer_track_id: Option<String>,
     pub mime: Option<String>,
     pub size_bytes: Option<i64>,
     /// Chemin relatif a `MPACER_MEDIA_DIR` ; `None` = aucun octet sur le serveur.
@@ -527,6 +530,8 @@ pub struct MusicTrackInput {
     pub bpm: Option<f64>,
     pub bpm_source: Option<String>,
     pub spotify_uri: Option<String>,
+    /// Identifiant Deezer de la piste, quand la source est Deezer.
+    pub deezer_track_id: Option<String>,
 }
 
 /// Compte Spotify lie (jetons OAuth). Jamais expose tel quel a l'interface.
@@ -849,6 +854,7 @@ mod music_tests {
             bpm: Some(124.0),
             bpm_source: Some("tag".into()),
             spotify_uri: Some("spotify:track:t1".into()),
+            deezer_track_id: None,
             // Colonnes conservees en base mais inutilisees depuis la v2.
             mime: None,
             size_bytes: None,

@@ -29,6 +29,8 @@ const SCHEMA_DASHBOARDS: &str = include_str!("../migrations/0005-tableaux-de-bor
 const SCHEMA_MUSIC_SOURCES: &str = include_str!("../migrations/0006-sources-musique.sql");
 /// Amis, invitations et appareils revendiques pour le partage en direct.
 const SCHEMA_FRIENDS: &str = include_str!("../migrations/0007-amis.sql");
+/// Deezer par cookie `arl` : identifiant Deezer des pistes (liens Deemix).
+const SCHEMA_DEEZER_ARL: &str = include_str!("../migrations/0008-deezer-arl.sql");
 
 /// Ouvre le pool et applique le schema (idempotent).
 pub async fn connect(config: &Config) -> anyhow::Result<PgPool> {
@@ -50,6 +52,7 @@ pub async fn connect_with_options(options: PgConnectOptions) -> anyhow::Result<P
     sqlx::raw_sql(SCHEMA_DASHBOARDS).execute(&pool).await?;
     sqlx::raw_sql(SCHEMA_MUSIC_SOURCES).execute(&pool).await?;
     sqlx::raw_sql(SCHEMA_FRIENDS).execute(&pool).await?;
+    sqlx::raw_sql(SCHEMA_DEEZER_ARL).execute(&pool).await?;
     Ok(pool)
 }
 
@@ -1041,8 +1044,8 @@ pub async fn insert_music_track(
     sqlx::query(
         "INSERT INTO music_tracks
              (id, playlist_id, user_id, position, title, artist, album, duration_s, bpm,
-              bpm_source, spotify_uri, created_at_ms)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+              bpm_source, spotify_uri, deezer_track_id, created_at_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
     )
     .bind(&id)
     .bind(playlist_id)
@@ -1055,6 +1058,7 @@ pub async fn insert_music_track(
     .bind(input.bpm)
     .bind(input.bpm_source.as_deref())
     .bind(input.spotify_uri.as_deref())
+    .bind(input.deezer_track_id.as_deref())
     .bind(now_ms)
     .execute(pool)
     .await?;

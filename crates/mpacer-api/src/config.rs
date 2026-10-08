@@ -169,6 +169,10 @@ pub struct Config {
     /// Base de l'instance Deemix qui telecharge les MP3.
     /// Vide => `https://deemix.p.zacharie.org`.
     pub deemix_url: Option<String>,
+    /// Identifiants de l'authentification HTTP basique de Deemix (Traefik).
+    /// Sans les deux, l'API n'est pas interrogee : seuls les liens restent.
+    pub deemix_user: Option<String>,
+    pub deemix_password: Option<String>,
     /// Autorise une connexion de test sans Google (`/auth/dev-login`).
     pub dev_auth: bool,
     /// Broker MQTT du suivi en direct (absent = fonctionnalite eteinte, aucun cout).
@@ -231,6 +235,8 @@ impl Config {
             deezer_redirect_uri: env_var("MPACER_DEEZER_REDIRECT_URI"),
             deezer_arl: env_var("MPACER_DEEZER_ARL"),
             deemix_url: env_var("MPACER_DEEMIX_URL"),
+            deemix_user: env_var("MPACER_DEEMIX_USER"),
+            deemix_password: env_var("MPACER_DEEMIX_PASSWORD"),
             dev_auth: env_var("MPACER_DEV_AUTH")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
@@ -323,6 +329,21 @@ impl Config {
     /// Vrai si la source Deezer est exploitable, par cookie `arl` **ou** par OAuth.
     pub fn deezer_configured(&self) -> bool {
         self.deezer_arl_configured() || self.deezer_app_configured()
+    }
+
+    /// Vrai si l'API de l'instance Deemix peut etre interrogee.
+    ///
+    /// Il faut l'authentification HTTP basique de l'instance (Traefik) **et** le
+    /// cookie `arl` : Deemix ouvre sa session Deezer avec ce cookie a chaque
+    /// envoi. Sans ces valeurs, la page `/music` se contente des liens.
+    pub fn deemix_configured(&self) -> bool {
+        let identifiants = match (&self.deemix_user, &self.deemix_password) {
+            (Some(user), Some(password)) => {
+                !looks_like_placeholder(user) && !looks_like_placeholder(password)
+            }
+            _ => false,
+        };
+        identifiants && self.deezer_arl_configured()
     }
 
     /// Base de l'instance Deemix qui telecharge les MP3.
@@ -420,6 +441,8 @@ impl Config {
             deezer_redirect_uri: None,
             deezer_arl: None,
             deemix_url: None,
+            deemix_user: None,
+            deemix_password: None,
             dev_auth: false,
             mqtt_url: None,
             mqtt_topic: crate::live::DEFAULT_TOPIC.to_string(),
@@ -578,6 +601,26 @@ mod tests {
 
         config.deemix_url = Some("   ".to_string());
         assert_eq!(config.deemix_base_url(), DEFAULT_DEEMIX_URL);
+    }
+
+    #[test]
+    fn deemix_api_needs_credentials_and_the_arl() {
+        let mut config = Config::for_tests("http://localhost:8080", "postgresql://exemple");
+        assert!(!config.deemix_configured(), "rien de renseigne : pas d'API");
+
+        // Les identifiants seuls ne suffisent pas : Deemix ouvre sa session
+        // Deezer avec le cookie arl du service.
+        config.deemix_user = Some("joseph".to_string());
+        config.deemix_password = Some("mot-de-passe".to_string());
+        assert!(!config.deemix_configured());
+
+        config.deezer_arl = Some("a".repeat(64));
+        assert!(config.deemix_configured());
+        assert_eq!(config.deemix_base_url(), DEFAULT_DEEMIX_URL);
+
+        // Un gabarit laisse en place ne compte pas comme identifiant.
+        config.deemix_user = Some("REMPLACER-PAR-VOTRE-UTILISATEUR".to_string());
+        assert!(!config.deemix_configured());
     }
 
     #[test]

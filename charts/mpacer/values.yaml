@@ -94,6 +94,12 @@ auth:
   # developpeur, playlists privees lisibles). Le copier depuis le navigateur
   # (deezer.com > Application > Cookies > arl). Prioritaire sur l'OAuth.
   deezerArl: ""
+  # Authentification HTTP basique de l'instance Deemix (Traefik). Avec le cookie
+  # arl ci-dessus, /music peut ENVOYER les playlists dans la file de Deemix
+  # (bouton « Telecharger dans Deemix ») et afficher la progression. Sans ces
+  # deux valeurs, la page se contente des liens vers Deemix.
+  deemixUser: ""
+  deemixPassword: ""
   # Mot de passe du broker MQTT du suivi en direct (optionnel). Stocke dans le
   # Secret, jamais dans le ConfigMap.
   mqttPassword: ""
@@ -170,6 +176,10 @@ externalSecrets:
     # Idem pour le cookie arl Deezer (MPACER_DEEZER_ARL) : vide tant qu'il n'est
     # pas scelle dans Vault.
     deezerArl: ""
+    # Idem pour les identifiants de l'instance Deemix (MPACER_DEEMIX_USER et
+    # MPACER_DEEMIX_PASSWORD) : vides tant qu'ils ne sont pas scelles dans Vault.
+    deemixUser: ""
+    deemixPassword: ""
     # Idem pour le mot de passe du broker MQTT du suivi en direct (docs/10) :
     # vide tant que MPACER_MQTT_PASSWORD n'est pas scelle dans Vault.
     mqttPassword: ""

@@ -129,7 +129,15 @@ pub fn router() -> Router<AppState> {
         .route("/music/import", post(music_import))
         .route("/music/playlists/{id}/manifest", get(music_manifest))
         .route("/music/playlists/{id}/files", get(music_files))
-        .route("/music/playlists/{id}/deemix", get(music_deemix_list))
+        // `/deemix` : la liste .txt (GET) et l'envoi de la playlist dans Deemix (POST).
+        .route(
+            "/music/playlists/{id}/deemix",
+            get(music_deemix_list).post(music_deemix_enqueue),
+        )
+        .route(
+            "/music/playlists/{id}/deemix/track",
+            post(music_deemix_enqueue_track),
+        )
         .route("/music/playlists/{id}/track-bpm", post(music_track_bpm))
         .route("/music/playlists/{id}/target", post(music_target))
         .route("/music/playlists/{id}/rename", post(music_rename))
@@ -3907,6 +3915,9 @@ struct MusicQuery {
     /// Bloc 6 : temps vise (h:mm:ss).
     #[serde(default)]
     temps: Option<String>,
+    /// `1` : affiche la file de telechargement Deemix dans le bloc 4.
+    #[serde(default)]
+    deemix: Option<String>,
     #[serde(default)]
     erreur: Option<String>,
     #[serde(default)]
@@ -3923,6 +3934,10 @@ fn music_error_message(code: &str) -> String {
         "deezer_non_configure" => "Deezer n'est pas configure sur ce service : renseignez MPACER_DEEZER_ARL (cookie arl du compte), ou MPACER_DEEZER_APP_ID et MPACER_DEEZER_APP_SECRET.".to_string(),
         "deezer_refuse" => "Deezer a refuse la demande (cookie arl ou jeton invalide, ou playlist inaccessible).".to_string(),
         "deezer_arl_refuse" => "Le cookie Deezer (ARL) a ete refuse : il est expire ou incomplet. Recopiez la valeur du cookie arl de deezer.com dans MPACER_DEEZER_ARL.".to_string(),
+        "deemix_non_configure" => "Deemix n'est pas configure : renseignez MPACER_DEEMIX_USER et MPACER_DEEMIX_PASSWORD (authentification de l'instance), en plus du cookie MPACER_DEEZER_ARL.".to_string(),
+        "deemix_refuse" => "Deemix a refuse la demande : instance injoignable, identifiants refuses, session Deezer fermee ou reference invalide.".to_string(),
+        "deemix_source" => "Seule une playlist Deezer peut etre envoyee dans Deemix.".to_string(),
+        "deemix_identifiant" => "Cette piste n'a pas d'identifiant Deezer : reimportez la playlist pour l'obtenir, ou ouvrez-la dans Deemix.".to_string(),
         "deezer_ref_invalide" => "La reference de playlist Deezer est illisible : collez un lien deezer.com ou un identifiant numerique.".to_string(),
         "deezer_non_connecte" => "Connectez votre compte Deezer avant de recuperer une playlist.".to_string(),
         "source_inconnue" => "Source musicale inconnue : choisissez Spotify ou Deezer.".to_string(),
@@ -3941,6 +3956,11 @@ fn music_ok_message(code: &str) -> String {
         "deezer_connecte" => "Compte Deezer connecte.".to_string(),
         "deezer_deconnecte" => "Compte Deezer deconnecte.".to_string(),
         "deezer_arl" => "Deezer est deja accessible par le cookie ARL du service.".to_string(),
+        "deemix_envoye" => {
+            "Playlist envoyee dans la file de Deemix : le telechargement continue sur l'instance."
+                .to_string()
+        }
+        "deemix_piste_envoyee" => "Titre envoye dans la file de Deemix.".to_string(),
         "playlist_importee" => "Playlist importee.".to_string(),
         "bpm_enregistre" => "BPM enregistre.".to_string(),
         "playlist_renommee" => "Playlist renommee.".to_string(),
@@ -4128,6 +4148,8 @@ fn source_panel(panel: SourcePanel<'_>) -> Markup {
 
 /// Un fichier MP3 a mettre en place pour une playlist, avec le nom attendu.
 struct PreparedFile {
+    /// Identifiant interne de la piste (formulaire « envoyer dans Deemix »).
+    id: String,
     position: u32,
     title: String,
     artist: Option<String>,
@@ -4159,7 +4181,9 @@ fn prepared_files(tracks: &[MusicTrack], deemix_base: &str) -> Vec<PreparedFile>
         .map(|track| {
             let wanted = WantedTrack {
                 id: track.id.clone(),
-                position: track.position.max(0) as u32,
+                // Meme conversion que le manifeste : le nom affiche ici est
+                // exactement celui que mpacer-music ecrit sur la montre.
+                position: crate::models::manifest_position(track.position),
                 title: track.title.clone(),
                 artist: track.artist.clone(),
                 album: track.album.clone(),
@@ -4169,6 +4193,7 @@ fn prepared_files(tracks: &[MusicTrack], deemix_base: &str) -> Vec<PreparedFile>
                 size_bytes: None,
             };
             PreparedFile {
+                id: track.id.clone(),
                 position: wanted.position,
                 title: track.title.clone(),
                 artist: track.artist.clone(),
@@ -4517,6 +4542,9 @@ async fn music_page(
     // Acces Deezer par cookie `arl` : pas de compte a connecter, la source est
     // deja utilisable des que MPACER_DEEZER_ARL est renseigne.
     let deezer_arl_ready = state.config.deezer_arl_configured();
+    // API Deemix : mise en file de telechargement. Optionnelle, elle demande les
+    // identifiants de l'instance en plus du cookie arl.
+    let deemix_api = state.config.deemix_configured();
     let account = crate::db::get_spotify_account(&state.pool, &user.id).await?;
     let deezer_account = crate::db::get_deezer_account(&state.pool, &user.id).await?;
     let playlists = crate::db::list_music_playlist_summaries(&state.pool, &user.id).await?;
@@ -4647,6 +4675,20 @@ async fn music_page(
         .and_then(|playlist| playlist.deezer_id.as_deref())
         .map(|id| deemix_playlist_url(&deemix_base, id));
     let has_deemix_links = prepared.iter().any(|file| file.deemix_url.is_some());
+    // File de Deemix : lue seulement sur demande (`deemix=1`), pour ne pas
+    // ralentir /music quand l'instance ne repond pas.
+    let mut deemix_queue: Vec<crate::deemix::QueueEntry> = Vec::new();
+    let mut deemix_error: Option<String> = None;
+    if deemix_api && query.deemix.as_deref() == Some("1") {
+        match crate::deemix::queue(&state.http, &state.config).await {
+            Ok(entries) => deemix_queue = entries,
+            Err(error) => {
+                tracing::warn!(error = %error, "file Deemix illisible");
+                deemix_error = Some(music_error_message("deemix_refuse"));
+            }
+        }
+    }
+    let show_deemix_queue = deemix_api && query.deemix.as_deref() == Some("1");
     // Nom affiche du compte lie, quel que soit le fournisseur.
     let spotify_name = account.as_ref().and_then(|account| {
         account
@@ -4854,13 +4896,18 @@ async fn music_page(
                 }
                 @if let Some(url) = &deemix_playlist {
                     p class="muted" {
-                        "Telechargez la playlist dans Deemix ("
+                        "Les MP3 se telechargent dans Deemix ("
                         (deemix_base)
-                        "), puis copiez les MP3 sur la montre avec mpacer-music."
+                        "), puis se copient sur la montre avec mpacer-music."
                     }
                     div class="actions" {
-                        a class="button" target="_blank" rel="noopener" href=(url) {
-                            "Telecharger toute la playlist dans Deemix"
+                        @if deemix_api {
+                            form method="post" action={ "/music/playlists/" (playlist.id) "/deemix" } {
+                                button type="submit" { "Telecharger dans Deemix" }
+                            }
+                        }
+                        a class="button ghost" target="_blank" rel="noopener" href=(url) {
+                            "Ouvrir dans Deemix"
                         }
                     }
                 }
@@ -4873,6 +4920,59 @@ async fn music_page(
                             "Liste Deemix (.txt)"
                         }
                     }
+                    @if deemix_api {
+                        a class="button ghost" href={ "/music?playlist=" (playlist.id) "&deemix=1" } {
+                            "File Deemix"
+                        }
+                    }
+                }
+                @if show_deemix_queue {
+                    @if let Some(error) = &deemix_error {
+                        p class="alert" {
+                            span class="icon icon-alert" {}
+                            span { (error) }
+                        }
+                    } @else if deemix_queue.is_empty() {
+                        p class="muted" { "La file de Deemix est vide." }
+                    } @else {
+                        div class="table-wrap" {
+                            table {
+                                thead {
+                                    tr {
+                                        th { "File Deemix" }
+                                        th { "Artiste" }
+                                        th { "Progression" }
+                                    }
+                                }
+                                tbody {
+                                    @for entry in &deemix_queue {
+                                        tr {
+                                            td {
+                                                (entry.title)
+                                                span class="tiny muted" { " " (entry.kind) }
+                                            }
+                                            td { (entry.artist.clone().unwrap_or_else(|| "-".to_string())) }
+                                            td {
+                                                @if entry.has_failed() {
+                                                    span class="pill off" { "erreur" }
+                                                    span class="tiny muted" {
+                                                        " " (entry.downloaded) "/" (entry.size)
+                                                    }
+                                                } @else if entry.is_done() {
+                                                    span class="pill on" { "termine" }
+                                                } @else {
+                                                    (entry.progress) " %"
+                                                    span class="tiny muted" {
+                                                        " (" (entry.downloaded) "/" (entry.size) ")"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 div class="table-wrap" {
                     table {
@@ -4882,7 +4982,7 @@ async fn music_page(
                                 th { "Titre" }
                                 th { "Artiste" }
                                 th { "Fichier MP3 attendu" }
-                                @if has_deemix_links {
+                                @if has_deemix_links || deemix_api {
                                     th { "Telecharger" }
                                 }
                             }
@@ -4894,11 +4994,18 @@ async fn music_page(
                                     td { (file.title) }
                                     td { (file.artist.clone().unwrap_or_else(|| "-".to_string())) }
                                     td { code { (file.file_name) } }
-                                    @if has_deemix_links {
+                                    @if has_deemix_links || deemix_api {
                                         td {
                                             @if let Some(url) = &file.deemix_url {
-                                                a class="button small" target="_blank" rel="noopener" href=(url) {
-                                                    "Deemix"
+                                                a class="button small ghost" target="_blank" rel="noopener" href=(url) {
+                                                    "Ouvrir"
+                                                }
+                                                @if deemix_api {
+                                                    form class="inline-form" method="post"
+                                                         action={ "/music/playlists/" (playlist.id) "/deemix/track" } {
+                                                        input type="hidden" name="track_id" value=(file.id);
+                                                        button class="small" type="submit" { "Envoyer" }
+                                                    }
                                                 }
                                             } @else {
                                                 span class="muted" { "-" }
@@ -5757,6 +5864,118 @@ async fn music_files(
         .map_err(|error| AppError::internal(error.to_string()))
 }
 
+/// Envoie toute la playlist dans la file de telechargement de Deemix.
+///
+/// M-pacer ne telecharge aucun audio : il remet la reference Deezer a
+/// l'instance Deemix de l'utilisateur, qui ecrit les MP3 dans son dossier
+/// `downloads`, d'ou `mpacer-music` les copie ensuite sur la montre.
+async fn music_deemix_enqueue(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let playlist = crate::db::get_music_playlist(&state.pool, &user.id, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if !state.config.deemix_configured() {
+        return Ok(
+            Redirect::to(&format!("/music?playlist={id}&erreur=deemix_non_configure"))
+                .into_response(),
+        );
+    }
+    let Some(deezer_id) = playlist
+        .deezer_id
+        .as_deref()
+        .filter(|_| playlist.source == "deezer")
+    else {
+        return Ok(
+            Redirect::to(&format!("/music?playlist={id}&erreur=deemix_source")).into_response(),
+        );
+    };
+
+    match crate::deemix::add_to_queue(
+        &state.http,
+        &state.config,
+        &crate::deemix::playlist_url(deezer_id),
+    )
+    .await
+    {
+        Ok(added) => {
+            tracing::info!(
+                user = %user.email,
+                playlist = %playlist.id,
+                entrees = added,
+                "playlist envoyee dans Deemix"
+            );
+            Ok(
+                Redirect::to(&format!("/music?playlist={id}&deemix=1&ok=deemix_envoye"))
+                    .into_response(),
+            )
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "envoi dans Deemix refuse");
+            Ok(Redirect::to(&format!(
+                "/music?playlist={id}&deemix=1&erreur=deemix_refuse"
+            ))
+            .into_response())
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct DeemixTrackForm {
+    /// Piste de la playlist (identifiant interne) : son identifiant Deezer part
+    /// dans la file.
+    #[serde(default)]
+    track_id: String,
+}
+
+/// Envoie une piste de la playlist dans la file de Deemix.
+async fn music_deemix_enqueue_track(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Form(form): Form<DeemixTrackForm>,
+) -> AppResult<Response> {
+    if !state.config.deemix_configured() {
+        return Ok(
+            Redirect::to(&format!("/music?playlist={id}&erreur=deemix_non_configure"))
+                .into_response(),
+        );
+    }
+    let tracks = crate::db::list_music_tracks(&state.pool, &user.id, &id).await?;
+    let track = tracks
+        .iter()
+        .find(|track| track.id == form.track_id)
+        .ok_or(AppError::NotFound)?;
+    let Some(deezer_id) = track.deezer_track_id.as_deref() else {
+        return Ok(Redirect::to(&format!(
+            "/music?playlist={id}&deemix=1&erreur=deemix_identifiant"
+        ))
+        .into_response());
+    };
+
+    match crate::deemix::add_to_queue(
+        &state.http,
+        &state.config,
+        &crate::deemix::track_url(deezer_id),
+    )
+    .await
+    {
+        Ok(_) => Ok(Redirect::to(&format!(
+            "/music?playlist={id}&deemix=1&ok=deemix_piste_envoyee"
+        ))
+        .into_response()),
+        Err(error) => {
+            tracing::warn!(error = %error, "envoi d'une piste dans Deemix refuse");
+            Ok(Redirect::to(&format!(
+                "/music?playlist={id}&deemix=1&erreur=deemix_refuse"
+            ))
+            .into_response())
+        }
+    }
+}
+
 /// Liste de telechargement Deemix (piece jointe `.txt`).
 ///
 /// Un fichier attendu par ligne, suivi du lien Deemix de la piste : c'est la
@@ -6584,30 +6803,49 @@ mod music_web_tests {
         assert!(music_error_message("source_inconnue").contains("Spotify"));
         assert!(music_ok_message("deezer_connecte").contains("Deezer"));
         assert!(music_ok_message("deezer_arl").contains("ARL"));
+        // Deemix : l'envoi dans la file et son mode de configuration.
+        assert!(music_error_message("deemix_non_configure").contains("MPACER_DEEMIX_USER"));
+        assert!(music_error_message("deemix_non_configure").contains("MPACER_DEEZER_ARL"));
+        assert!(music_error_message("deemix_refuse").contains("Deemix"));
+        assert!(music_error_message("deemix_source").contains("Deezer"));
+        assert!(music_error_message("deemix_identifiant").contains("reimportez"));
+        assert!(music_ok_message("deemix_envoye").contains("Deemix"));
+        assert!(music_ok_message("deemix_piste_envoyee").contains("Titre"));
     }
 
     #[test]
     fn prepared_files_follow_the_watch_scheme() {
+        // Positions 0, 1, 2 en base : la montre attend 01, 02, 03 (1-based).
         let tracks = vec![
             music_track(Some(249.0), None),
             MusicTrack {
                 artist: None,
                 title: "Levels".into(),
-                position: 4,
+                position: 1,
                 ..music_track(Some(200.0), None)
+            },
+            MusicTrack {
+                title: "Troisieme".into(),
+                position: 2,
+                ..music_track(Some(180.0), None)
             },
         ];
         let files = prepared_files(&tracks, DEFAULT_DEEMIX_URL);
-        assert_eq!(files.len(), 2);
+        assert_eq!(files.len(), 3);
         assert_eq!(files[0].file_name, "01 - Artiste - Titre.mp3");
-        assert_eq!(files[1].file_name, "04 - Levels.mp3");
+        assert_eq!(files[1].file_name, "02 - Levels.mp3");
+        assert_eq!(
+            files[2].file_name, "03 - Artiste - Troisieme.mp3",
+            "deux pistes consecutives ne portent jamais le meme numero"
+        );
         // Sans identifiant Deezer, aucune piste n'a de lien de telechargement.
         assert!(files.iter().all(|file| file.deemix_url.is_none()));
 
         let text = prepared_files_text("Run 170", &files);
-        assert!(text.contains("# Run 170 : 2 fichier(s) MP3 a mettre en place"));
+        assert!(text.contains("# Run 170 : 3 fichier(s) MP3 a mettre en place"));
         assert!(text.contains("01 - Artiste - Titre.mp3"));
-        assert!(text.contains("04 - Levels.mp3"));
+        assert!(text.contains("02 - Levels.mp3"));
+        assert!(text.contains("03 - Artiste - Troisieme.mp3"));
 
         let empty = prepared_files_text("Vide", &[]);
         assert!(empty.contains("0 fichier(s) MP3"));
@@ -6664,9 +6902,10 @@ mod music_web_tests {
             ),
             "{text}"
         );
-        // Une piste sans identifiant garde sa ligne, sans lien.
+        // Une piste sans identifiant garde sa ligne, sans lien. La position 2 en
+        // base devient la piste 3 de la montre (numerotation 1-based).
         assert!(
-            text.contains("02 - Artiste - Sans identifiant.mp3	-"),
+            text.contains("03 - Artiste - Sans identifiant.mp3	-"),
             "{text}"
         );
     }
@@ -6724,6 +6963,7 @@ mod music_web_tests {
             distance_km: Some(distance_km.into()),
             allure: Some(allure.into()),
             temps: None,
+            deemix: None,
             erreur: None,
             ok: None,
         }

@@ -1746,7 +1746,9 @@ async fn music_api_publishes_playlists_and_the_transfer_manifest() {
         ],
         "file et size_bytes ne sont ecrits que par mpacer-music"
     );
-    assert_eq!(manifest["tracks"][1]["position"], 1);
+    // Position 1-based : la base numerote depuis 0, la montre depuis 1.
+    assert_eq!(manifest["tracks"][0]["position"], 1);
+    assert_eq!(manifest["tracks"][1]["position"], 2);
 
     // 4. Playlist inconnue et jeton obligatoire.
     let response = app

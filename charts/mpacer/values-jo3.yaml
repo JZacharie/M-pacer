@@ -44,6 +44,14 @@ externalSecrets:
     #   vault kv patch apps/mpacer MPACER_DEEZER_ARL="<cookie arl>"
     # puis : keys.deezerArl: MPACER_DEEZER_ARL
     deezerArl: ""
+    # Identifiants de l'instance Deemix (authentification basique Traefik) :
+    # meme regle, a renseigner apres les avoir scelles dans Vault.
+    #   vault kv patch apps/mpacer MPACER_DEEMIX_USER="joseph" \
+    #     MPACER_DEEMIX_PASSWORD="<mot de passe>"
+    # puis : keys.deemixUser: MPACER_DEEMIX_USER
+    #        keys.deemixPassword: MPACER_DEEMIX_PASSWORD
+    deemixUser: ""
+    deemixPassword: ""
 
 # Le chart ne cree pas de Secret : il consomme celui produit par ESO
 auth:

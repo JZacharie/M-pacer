@@ -660,6 +660,17 @@ pub struct ManifestTrack {
     pub size_bytes: Option<u64>,
 }
 
+/// Position **1-based** d'une piste dans un manifeste de transfert.
+///
+/// La base numerote les pistes a partir de 0 (`enumerate()` a l'import), alors
+/// que le schema des noms de fichiers de la montre est 1-based
+/// (`01 - Artiste - Titre.mp3`, voir `mpacer_core::music::suggested_file_name`).
+/// Sans cette conversion, les deux premieres pistes d'une playlist recevaient le
+/// meme prefixe `01` — et la liste des MP3 ne correspondait plus a l'ordre.
+pub fn manifest_position(position: i32) -> u32 {
+    position.max(0) as u32 + 1
+}
+
 /// Manifeste de transfert : ce que `mpacer-music` copie sur la montre par USB.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferManifest {
@@ -685,7 +696,7 @@ impl TransferManifest {
                 .iter()
                 .map(|track| ManifestTrack {
                     id: track.id.clone(),
-                    position: track.position.max(0) as u32,
+                    position: manifest_position(track.position),
                     title: track.title.clone(),
                     artist: track.artist.clone(),
                     album: track.album.clone(),
@@ -923,7 +934,22 @@ mod music_tests {
             ],
             "file et size_bytes ne sont ecrits que par mpacer-music"
         );
-        assert_eq!(value["tracks"][1]["position"], 1);
+        // Position 1-based : la premiere piste de la base (0) est la piste 1 du
+        // manifeste, celle que mpacer-music ecrit "01 - ...".
+        assert_eq!(value["tracks"][0]["position"], 1);
+        assert_eq!(value["tracks"][1]["position"], 2);
+    }
+
+    #[test]
+    fn manifest_positions_are_one_based() {
+        // Le schema des noms de fichiers de la montre est 1-based (voir
+        // `suggested_file_name`) : deux pistes consecutives ne doivent jamais
+        // porter le meme numero.
+        assert_eq!(manifest_position(0), 1);
+        assert_eq!(manifest_position(1), 2);
+        assert_eq!(manifest_position(2), 3);
+        // Une position negative (donnee inattendue) retombe sur la premiere.
+        assert_eq!(manifest_position(-1), 1);
     }
 
     #[test]

@@ -46,7 +46,7 @@ expressions sont alignées sur celles des autres applications du cluster.
 
 | Secret Kubernetes | ClusterSecretStore | Clé `remoteRef` | Chemin Vault réel | Contenu |
 |---|---|---|---|---|
-| `mpacer-secrets` | `vault-apps` | `mpacer` | `apps/data/mpacer` | `MPACER_SESSION_SECRET`, `MPACER_GOOGLE_CLIENT_ID`, `MPACER_GOOGLE_CLIENT_SECRET` — et, si Spotify est active, `MPACER_SPOTIFY_CLIENT_ID`, `MPACER_SPOTIFY_CLIENT_SECRET` ; si Deezer est active, `MPACER_DEEZER_ARL` (cookie arl, voie recommandee) et/ou `MPACER_DEEZER_APP_ID`, `MPACER_DEEZER_APP_SECRET` ; si le broker MQTT du suivi en direct demande un mot de passe, `MPACER_MQTT_PASSWORD` |
+| `mpacer-secrets` | `vault-apps` | `mpacer` | `apps/data/mpacer` | `MPACER_SESSION_SECRET`, `MPACER_GOOGLE_CLIENT_ID`, `MPACER_GOOGLE_CLIENT_SECRET` — et, si Spotify est active, `MPACER_SPOTIFY_CLIENT_ID`, `MPACER_SPOTIFY_CLIENT_SECRET` ; si Deezer est active, `MPACER_DEEZER_ARL` (cookie arl, voie recommandee) et/ou `MPACER_DEEZER_APP_ID`, `MPACER_DEEZER_APP_SECRET` ; si l'envoi dans la file de Deemix est active, `MPACER_DEEMIX_USER`, `MPACER_DEEMIX_PASSWORD` ; si le broker MQTT du suivi en direct demande un mot de passe, `MPACER_MQTT_PASSWORD` |
 
 > **Attention au piège** : dans un `ClusterSecretStore`, `provider.vault.path` désigne le
 > **montage** KV, pas un préfixe de chemin. Sur jo3, `vault-apps` est monté sur `apps/`
@@ -71,6 +71,8 @@ vault kv put apps/mpacer \
   MPACER_DEEZER_APP_ID="<Application ID Deezer>" \
   MPACER_DEEZER_APP_SECRET="<Secret Key Deezer>" \
   MPACER_DEEZER_ARL="<cookie arl Deezer>" \
+  MPACER_DEEMIX_USER="<utilisateur Deemix>" \
+  MPACER_DEEMIX_PASSWORD="<mot de passe Deemix>" \
   MPACER_MQTT_PASSWORD="<mot de passe du broker MQTT>"
 ```
 
@@ -97,6 +99,21 @@ vault kv put apps/mpacer \
 > produit un lien par piste (`#/track/<id>`) et un lien pour la playlist entiere
 > (`#/playlist/<id>`). Voir
 > [docs/11](../docs/11-playlists-multi-sources-et-synchro-mp3.md).
+>
+> **Envoi dans la file de Deemix.** Avec `MPACER_DEEMIX_USER` et
+> `MPACER_DEEMIX_PASSWORD` (l'authentification HTTP basique de l'instance,
+> Traefik), `/music` ne se contente plus des liens : le bouton « Telecharger dans
+> Deemix » remet la playlist dans la file de l'instance et `File Deemix` affiche
+> la progression. Le service ouvre la session Deezer de Deemix avec le cookie
+> `arl` deja scelle, a chaque envoi. Scellez les deux valeurs puis reportez-les
+> dans `externalSecrets.keys.deemixUser` / `deemixPassword` :
+>
+> ```bash
+> vault kv patch apps/mpacer \
+>   MPACER_DEEMIX_USER="joseph" \
+>   MPACER_DEEMIX_PASSWORD="<mot de passe>"
+> kubectl -n mpacer annotate externalsecret mpacer-secrets force-sync="$(date +%s)" --overwrite
+> ```
 
 > **Suivi en direct (MQTT).** `MPACER_MQTT_PASSWORD` n'est utile que si le broker
 > demande une authentification ; l'adresse et l'identifiant vivent dans les

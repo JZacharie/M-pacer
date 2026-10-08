@@ -82,6 +82,10 @@ pub struct LocalFile {
 /// Piste attendue par un manifeste de transfert.
 pub struct WantedTrack {
     pub id: String,
+    /// Position **1-based** dans la playlist (01, 02, 03...) : c'est le prefixe
+    /// du nom de fichier ecrit sur la montre (`01 - Artiste - Titre.mp3`).
+    /// La base numerote les pistes depuis 0 ; le backend convertit
+    /// (`models::manifest_position`).
     pub position: u32,
     pub title: String,
     pub artist: Option<String>,

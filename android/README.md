@@ -330,8 +330,8 @@ fichiers presents sur son disque et remonte l'etat. Contrat complet :
   (`MusicLibrary.kt`), construit l'index `filesDir/music-index.json` et affiche le
   nombre de titres, l'espace utilise et l'espace libre. Une playlist importee peut
   etre supprimee depuis la montre.
-- **Spotify est une source de metadonnees** (page `/music` du backend) : M-pacer ne
-  pilote plus l'application Spotify et ne lit aucun flux protege par DRM.
+- **Deezer est la source de metadonnees** (page `/music` du backend) : M-pacer ne
+  pilote aucune application de lecture et ne lit aucun flux protege par DRM.
 - **Pendant la seance**, `TrackingService` applique la directive du moteur
   (`Play`, `Keep`, `Boost`, `Relax`, `SkipTo`, `Pause`, `Resume`) sur les fichiers
   locaux et remonte la piste en cours (`music_now_playing`). Le BPM cible est

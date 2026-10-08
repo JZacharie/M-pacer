@@ -37,7 +37,7 @@ data class TransferManifest(
     val version: Int = 1,
     @SerialName("playlist_id") val playlistId: String = "",
     val name: String = "",
-    /** "spotify" ou "manual" : origine des metadonnees, pas un mode de lecture. */
+    /** "deezer" ou "manual" : origine des metadonnees, pas un mode de lecture. */
     val source: String = "manual",
     @SerialName("target_bpm") val targetBpm: Double? = null,
     val tracks: List<ManifestTrack> = emptyList(),

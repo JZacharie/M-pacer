@@ -33,5 +33,4 @@ pub mod models;
 pub mod mqtt;
 pub mod race_import;
 pub mod routes;
-pub mod spotify;
 pub mod state;

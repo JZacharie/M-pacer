@@ -1,19 +1,20 @@
-# 11 - Playlists multi-sources (Spotify **ou** Deezer), liste des MP3 et push dans l'application
+# 11 - Playlists Deezer, liste des MP3 et push dans l'application
 
 > **Statut** : ajout au contrat v2/v3 de [docs/07](07-musique-bpm-et-playlists.md)
 > (7 octobre 2026). Le principe « le serveur ne stocke aucun audio » est
-> **conserve** : ce document ne fait que l'etendre a une deuxieme source de
-> metadonnees et a un envoi de fichiers dans **l'application locale**.
+> **conserve** : ce document decrit la source de metadonnees **Deezer**, le
+> telechargement des MP3 par l'instance **Deemix** de l'utilisateur et l'envoi de
+> fichiers dans **l'application locale**.
 
 ---
 
 ## 1. Ce que la fonctionnalite apporte
 
-1. **Recuperer la liste des playlists depuis Spotify ou Deezer** : chaque source
-   se connecte par OAuth, expose une **recherche** et la liste des **playlists du
-   compte** (`Mes playlists`), puis importe la fiche choisie (titres, artistes,
-   durees). Deezer n'expose aucun tempo : le BPM reste inconnu a l'import et se
-   complete par la balise du MP3, le tap-tempo ou la saisie.
+1. **Recuperer la liste des playlists depuis Deezer** : la source se connecte
+   par cookie `arl` (ou par OAuth), expose une **recherche** et la liste des
+   **playlists du compte** (`Mes playlists`), puis importe la fiche choisie
+   (titres, artistes, durees). Deezer n'expose aucun tempo : le BPM reste inconnu
+   a l'import et se complete par la balise du MP3, le tap-tempo ou la saisie.
 2. **Lister les fichiers a mettre en place en MP3** : pour la playlist
    selectionnee, la page `/music` affiche un nom de fichier attendu par piste
    (schema de la montre : `01 - Artiste - Titre.mp3`) et le propose en
@@ -75,16 +76,6 @@ valeur.
 6. permissions demandees par le code : `basic_access,email` (lecture du profil
    et des playlists, aucun droit d'ecriture).
 
-**Spotify** (source existante, rappel) :
-
-1. <https://developer.spotify.com/dashboard> -> **Create app** ;
-2. *Redirect URI* : `{public_url}/auth/spotify/callback` ;
-3. cocher **Web API**, scopes utilises : `playlist-read-private`,
-   `playlist-read-collaborative` ;
-4. noter *Client ID* et *Client secret*. Depuis le 27/11/2024,
-   `GET /v1/audio-features` est refuse aux nouvelles applications : le BPM
-   Spotify est un **bonus**, jamais une dependance.
-
 ### 3.2 Cote configuration du service
 
 | Variable | Role | Defaut |
@@ -95,8 +86,6 @@ valeur.
 | `MPACER_DEEZER_APP_ID` | identifiant de l'application Deezer (repli OAuth) | *(vide : source eteinte)* |
 | `MPACER_DEEZER_APP_SECRET` | secret applicatif Deezer (repli OAuth) | *(vide)* |
 | `MPACER_DEEZER_REDIRECT_URI` | URI enregistree chez Deezer | `{public_url}/auth/deezer/callback` |
-| `MPACER_SPOTIFY_CLIENT_ID` / `_SECRET` | OAuth Spotify | *(vide)* |
-| `MPACER_SPOTIFY_REDIRECT_URI` | URI enregistree chez Spotify | `{public_url}/auth/spotify/callback` |
 
 Sur jo3, ajouter les deux cles Deezer au secret Vault puis forcer la
 synchronisation (voir [deploy/GITOPS-ET-SECRETS.md](../deploy/GITOPS-ET-SECRETS.md)) :
@@ -106,8 +95,6 @@ vault kv put apps/mpacer \
   MPACER_SESSION_SECRET="$(openssl rand -base64 48)" \
   MPACER_GOOGLE_CLIENT_ID="<ID>.apps.googleusercontent.com" \
   MPACER_GOOGLE_CLIENT_SECRET="GOCSPX-<secret>" \
-  MPACER_SPOTIFY_CLIENT_ID="<id Spotify>" \
-  MPACER_SPOTIFY_CLIENT_SECRET="<secret Spotify>" \
   MPACER_DEEZER_APP_ID="<id Deezer>" \
   MPACER_DEEZER_APP_SECRET="<secret Deezer>"
 
@@ -128,16 +115,16 @@ Sans identifiants, la source est simplement annoncee « non configuree » sur
 | Client Deezer par cookie `arl` | meme fichier : `arl_session`, `list_user_playlists_arl`, `search_playlists_arl`, `get_playlist_arl` sur l'API privee `gw-light` (cookie de session `sid` repris apres le premier appel, pagination, identifiant Deezer de chaque piste) |
 | Telechargement Deemix | bloc 4 : lien `#/playlist/{id}` pour la playlist et `#/track/{id}` par piste (`MPACER_DEEMIX_URL`), export `GET /music/playlists/{id}/deemix` |
 | Configuration | `MPACER_DEEZER_*` + `deezer_configured()` / `deezer_redirect_uri()` / `deezer_redirect_path()` |
-| Base | migration `0006-sources-musique.sql` : colonne `music_playlists.deezer_id` + table `deezer_accounts` |
-| Page `/music` | bloc 1 a **deux panneaux** (Spotify / Deezer) : connexion, recherche, `Mes playlists`, import ; bloc 4 **Fichiers a preparer (MP3)** ; blocs 5 et 6 renumerotes |
-| Import | `POST /music/import` accepte `source` (`spotify`|`deezer`) + `ref` ; `spotify_ref` reste accepte (compatibilite) |
+| Base | migration `0006-sources-musique.sql` : colonne `music_playlists.deezer_id` + table `deezer_accounts` ; migration `0009-source-unique-deezer.sql` : retrait des restes de Spotify (table `spotify_accounts`, colonnes `spotify_id`/`spotify_uri`, valeurs `spotify` ramenees a `manual`) |
+| Page `/music` | bloc 1 : panneau **Deezer** (connexion ou cookie `arl`, recherche, `Mes playlists`, import) ; bloc 4 **Fichiers a preparer (MP3)** ; blocs 5 et 6 renumerotes |
+| Import | `POST /music/import` accepte `ref` (lien, URI ou identifiant Deezer) + `target_bpm` |
 | Export MP3 | `GET /music/playlists/{id}/files` : piece jointe `.txt`, un nom de fichier attendu par piste |
 | Application locale | `crates/mpacer-music` : bibliotheque geree (`library.json`), endpoints `POST/GET/DELETE /api/library/...`, push navigateur, statut par fichier, synchro USB |
 
 ### 3.4 Cote utilisateur (mode operatoire)
 
-1. `/music` : connecter **Spotify**, ou rien du tout pour **Deezer** quand
-   `MPACER_DEEZER_ARL` est renseigne (bloc 1) ;
+1. `/music` : rien a connecter quand `MPACER_DEEZER_ARL` est renseigne ; sinon
+   **Connecter Deezer** (OAuth, bloc 1) ;
 2. chercher une playlist ou cliquer **Mes playlists**, puis **Importer** ;
 3. bloc 4 : **Telecharger dans Deemix** remet la playlist dans la file de
    l'instance (ou **Envoyer** piste par piste), puis **File Deemix** montre la
@@ -155,34 +142,30 @@ Sans identifiants, la source est simplement annoncee « non configuree » sur
 
 `GET /api/v1/music/playlists`, `GET /api/v1/music/playlists/{id}` et
 `GET /api/v1/music/playlists/{id}/manifest` restent tels quels : la source d'une
-playlist est une chaine (`spotify`, `deezer`, `manual`) deja publiee.
+playlist est une chaine (`deezer`, `manual`) deja publiee.
 
 ### 4.2 Interface web
 
 | Methode | Chemin | Role |
 |---|---|---|
-| GET | `/music?source=spotify|deezer&q=...` | page complete (6 blocs) |
-| GET | `/music/search?source=...&q=...` | recherche dans la source |
-| GET | `/music/search?source=...&vue=mes` | **playlists du compte lie** |
+| GET | `/music?q=...` | page complete (6 blocs) |
+| GET | `/music/search?q=...` | recherche de playlists Deezer |
+| GET | `/music/search?vue=mes` | **playlists du compte Deezer** |
 | GET | `/auth/deezer` + `/auth/deezer/callback` | OAuth 2.0 Deezer |
 | POST | `/music/deezer/disconnect` | deconnecte le compte Deezer |
-| POST | `/music/import` | `source`, `ref`, `target_bpm` |
+| POST | `/music/import` | `ref`, `target_bpm` |
 | GET | `/music/playlists/{id}/files` | **liste des MP3 a preparer** (`.txt`) |
 | GET | `/music/playlists/{id}/deemix` | **liste de telechargement Deemix** (`.txt`) : un fichier attendu par ligne, suivi du lien Deemix de la piste |
 | POST | `/music/playlists/{id}/deemix` | **envoie la playlist dans la file de Deemix** (instance de l'utilisateur) |
 | POST | `/music/playlists/{id}/deemix/track` | envoie une piste (`track_id`) dans la file de Deemix |
 | GET | `/music/playlists/{id}/manifest` | manifeste de transfert (inchange) |
 
-Les routes Spotify existantes sont inchangees ; `POST /music/import` accepte en
-plus `source` et `ref`, et continue d'accepter `spotify_ref`.
-
 ### 4.3 Page `/music` (six blocs)
 
 ```text
 +------------------------------------------------------------------------------+
-| 1. Source des playlists (Spotify ou Deezer)                                  |
-|   [ Spotify ] Connecte  recherche [ running ] [Chercher] [Mes playlists]     |
-|   [ Deezer  ] Connecte  recherche [ running ] [Chercher] [Mes playlists]     |
+| 1. Source des playlists (Deezer)                                             |
+|   [ Deezer ] Connecte  recherche [ rock ] [Chercher] [Mes playlists]         |
 | 2. Playlists preparees                                                       |
 | 3. Titres (playlist selectionnee)   BPM : [tapper] [saisir]                  |
 | 4. Fichiers a preparer (MP3)                                                 |
@@ -265,7 +248,7 @@ montre n'a aucun appel reseau a faire.
 
 ## 7. Hors perimetre
 
-* lecture de l'audio Spotify ou Deezer (DRM) : jamais ;
+* lecture de l'audio Deezer (DRM) : jamais ;
 * conversion automatique d'un format vers MP3 : la liste indique **le nom attendu**,
   la conversion reste a la charge de l'utilisateur (ffmpeg, etc.) ;
 * telechargement des MP3 par M-pacer : le service **remet la reference Deezer**

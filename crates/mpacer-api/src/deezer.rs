@@ -1,13 +1,14 @@
 //! Client Deezer : OAuth 2.0 et API Web (lecture seule des metadonnees).
 //!
-//! Deezer joue exactement le meme role que Spotify dans M-pacer : une **source
-//! de metadonnees**. M-pacer ne telecharge jamais l'audio (le flux Deezer est
-//! chiffre et reserve aux applications agreees) ; il lit la fiche des playlists
-//! (titres, artistes, durees) et laisse les fichiers MP3 venir du disque de
-//! l'utilisateur, copies sur la montre par l'outil local `mpacer-music`.
+//! Deezer est la **seule source de playlists** de M-pacer (voir aussi
+//! `deemix` pour le telechargement des MP3). M-pacer ne telecharge jamais
+//! l'audio lui-meme (le flux Deezer est chiffre et reserve aux applications
+//! agreees) ; il lit la fiche des playlists (titres, artistes, durees) et laisse
+//! les fichiers MP3 venir de l'instance Deemix de l'utilisateur, copies sur la
+//! montre par l'outil local `mpacer-music`.
 //!
-//! Deux particularites par rapport a Spotify :
-//! * l'echange du code se fait en `GET` et Deezer repond par une chaine de
+//! Deux particularites :
+//! * l'echange du code OAuth se fait en `GET` et Deezer repond par une chaine de
 //!   requete (ou du JSON avec `output=json`) : voir `parse_token_body` ;
 //! * l'API Deezer n'expose **aucun tempo** : le BPM d'une playlist Deezer reste
 //!   inconnu a l'import et se complete par la balise du fichier, le tap-tempo ou
@@ -1167,8 +1168,10 @@ mod tests {
         );
         assert_eq!(playlist_id_from_ref(" 789 "), Some("789".to_string()));
         assert_eq!(playlist_id_from_ref(""), None);
+        // Seuls les liens Deezer sont acceptes : un lien d'un autre service est
+        // refuse, comme n'importe quelle chaine illisible.
         assert_eq!(
-            playlist_id_from_ref("https://open.spotify.com/playlist/abc"),
+            playlist_id_from_ref("https://exemple.org/playlist/abc"),
             None
         );
     }

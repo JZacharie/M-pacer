@@ -46,7 +46,7 @@ expressions sont alignées sur celles des autres applications du cluster.
 
 | Secret Kubernetes | ClusterSecretStore | Clé `remoteRef` | Chemin Vault réel | Contenu |
 |---|---|---|---|---|
-| `mpacer-secrets` | `vault-apps` | `mpacer` | `apps/data/mpacer` | `MPACER_SESSION_SECRET`, `MPACER_GOOGLE_CLIENT_ID`, `MPACER_GOOGLE_CLIENT_SECRET` — et, si Spotify est active, `MPACER_SPOTIFY_CLIENT_ID`, `MPACER_SPOTIFY_CLIENT_SECRET` ; si Deezer est active, `MPACER_DEEZER_ARL` (cookie arl, voie recommandee) et/ou `MPACER_DEEZER_APP_ID`, `MPACER_DEEZER_APP_SECRET` ; si l'envoi dans la file de Deemix est active, `MPACER_DEEMIX_USER`, `MPACER_DEEMIX_PASSWORD` ; si le broker MQTT du suivi en direct demande un mot de passe, `MPACER_MQTT_PASSWORD` |
+| `mpacer-secrets` | `vault-apps` | `mpacer` | `apps/data/mpacer` | `MPACER_SESSION_SECRET`, `MPACER_GOOGLE_CLIENT_ID`, `MPACER_GOOGLE_CLIENT_SECRET` — et, si Deezer est active, `MPACER_DEEZER_ARL` (cookie arl, voie recommandee) et/ou `MPACER_DEEZER_APP_ID`, `MPACER_DEEZER_APP_SECRET` ; si l'envoi dans la file de Deemix est active, `MPACER_DEEMIX_USER`, `MPACER_DEEMIX_PASSWORD` ; si le broker MQTT du suivi en direct demande un mot de passe, `MPACER_MQTT_PASSWORD` |
 
 > **Attention au piège** : dans un `ClusterSecretStore`, `provider.vault.path` désigne le
 > **montage** KV, pas un préfixe de chemin. Sur jo3, `vault-apps` est monté sur `apps/`
@@ -66,8 +66,6 @@ vault kv put apps/mpacer \
   MPACER_SESSION_SECRET="$(openssl rand -base64 48)" \
   MPACER_GOOGLE_CLIENT_ID="<ID>.apps.googleusercontent.com" \
   MPACER_GOOGLE_CLIENT_SECRET="GOCSPX-<secret>" \
-  MPACER_SPOTIFY_CLIENT_ID="<id Spotify>" \
-  MPACER_SPOTIFY_CLIENT_SECRET="<secret Spotify>" \
   MPACER_DEEZER_APP_ID="<Application ID Deezer>" \
   MPACER_DEEZER_APP_SECRET="<Secret Key Deezer>" \
   MPACER_DEEZER_ARL="<cookie arl Deezer>" \
@@ -123,10 +121,9 @@ vault kv put apps/mpacer \
 > synchronisation de l'ExternalSecret. Sur un broker interne sans mot de passe,
 > laissez la cle vide des deux cotes. Detail : [docs/10](../docs/10-suivi-temps-reel.md).
 
-> **Spotify et Deezer sont optionnels.** Si les deux cles d'un service ne sont pas
+> **Deezer est optionnel.** Si les cles d'un service ne sont pas
 > scellees dans Vault, laisser les cles correspondantes **vides** dans les valeurs
-> (`externalSecrets.keys.spotifyClientId`/`...Secret` et
-> `externalSecrets.keys.deezerAppId`/`...AppSecret`) : un `remoteRef` qui pointe
+> (`externalSecrets.keys.deezerAppId`/`...AppSecret`) : un `remoteRef` qui pointe
 > vers une propriete absente fait echouer la synchronisation de l'ExternalSecret
 > (`SecretSyncedError`). La page `/music` reste alors utilisable pour les fichiers
 > personnels et affiche que la source concernee n'est pas configuree.

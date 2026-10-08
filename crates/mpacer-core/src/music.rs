@@ -63,7 +63,6 @@ pub struct Playlist {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum BpmSource {
-    Spotify,
     Tag,
     Tap,
     Manual,
@@ -1133,7 +1132,7 @@ pub struct TransferManifest {
     pub version: u32,
     pub playlist_id: String,
     pub name: String,
-    /// "spotify" | "manual".
+    /// "deezer" | "manual".
     #[serde(default)]
     pub source: String,
     #[serde(default)]
@@ -2137,7 +2136,7 @@ mod match_tests {
             "version": 1,
             "playlist_id": "run-170",
             "name": "Run 170",
-            "source": "spotify",
+            "source": "deezer",
             "target_bpm": 170.0,
             "tracks": [
                 {
@@ -2155,7 +2154,7 @@ mod match_tests {
         assert_eq!(manifest.version, 1);
         assert_eq!(manifest.playlist_id, "run-170");
         assert_eq!(manifest.name, "Run 170");
-        assert_eq!(manifest.source, "spotify");
+        assert_eq!(manifest.source, "deezer");
         assert_eq!(manifest.target_bpm, Some(170.0));
         assert_eq!(manifest.tracks.len(), 1);
         let track = &manifest.tracks[0];

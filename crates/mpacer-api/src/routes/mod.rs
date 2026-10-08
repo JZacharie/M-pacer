@@ -30,11 +30,6 @@ pub fn router(state: AppState) -> Router {
         tracing::info!(chemin = %callback_path, "callback OAuth servi a un chemin personnalise");
         app = app.route(&callback_path, get(web::google_callback));
     }
-    let spotify_path = state.config.spotify_redirect_path();
-    if spotify_path != "/auth/spotify/callback" && spotify_path != "/" {
-        tracing::info!(chemin = %spotify_path, "callback Spotify servi a un chemin personnalise");
-        app = app.route(&spotify_path, get(web::spotify_callback));
-    }
     let deezer_path = state.config.deezer_redirect_path();
     if deezer_path != "/auth/deezer/callback" && deezer_path != "/" {
         tracing::info!(chemin = %deezer_path, "callback Deezer servi a un chemin personnalise");

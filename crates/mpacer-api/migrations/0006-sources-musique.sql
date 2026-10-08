@@ -1,4 +1,4 @@
--- Sources musicales multiples : compte Deezer en plus de Spotify.
+-- Source musicale Deezer : identifiant des playlists importees.
 -- Idempotent : rejoue a chaque demarrage, comme les migrations precedentes.
 --
 -- Deezer ne delivre pas de refresh_token : le jeton d'acces est conserve tel

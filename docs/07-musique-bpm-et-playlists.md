@@ -1,17 +1,19 @@
 # 07 - Musique, BPM et transfert USB
 
 > **Statut** : contrat d'interface **gele v2** (6 octobre 2026).
-> La v1 (pilotage de l'application Spotify et telechargement depuis le backend)
-> est **abandonnee** : M-pacer ne pilote plus Spotify, et l'audio est **copie sur
-> la montre par USB**, depuis un dossier choisi sur l'ordinateur.
+> La v1 (pilotage d'une application de streaming tierce et telechargement depuis
+> le backend) est **abandonnee** : M-pacer ne pilote plus aucune application de
+> lecture, et l'audio est **copie sur la montre par USB**, depuis un dossier
+> choisi sur l'ordinateur.
 > Toute modification d'interface doit etre reportee ici **avant** le code.
 
 ---
 
 ## 1. Principe retenu
 
-1. **Spotify est une source de metadonnees**, pas un lecteur : on y recupere des
-   playlists de course (titres, artistes, durees, BPM quand l'API le permet) ;
+1. **Deezer est la source de metadonnees**, pas un lecteur : on y recupere des
+   playlists de course (titres, artistes, durees) ; le BPM vient des balises, du
+   tap-tempo ou de la saisie (Deezer n'expose aucun tempo) ;
 2. **les fichiers audio restent sur le disque de l'utilisateur** : l'application
    locale `mpacer-music` demande *ou* sont les MP3, apparie les fichiers aux pistes
    de la playlist, puis les **copie sur la montre par USB** (`adb push`) ;
@@ -24,17 +26,16 @@
 
 | Point | v1 (abandonnee) | v2 (retenue) |
 |---|---|---|
-| Lecture Spotify | `SpotifyRemote.kt` pilotait l'app Spotify par `MediaController` | **supprime** (avec `MediaSessionAccessService.kt` et l'acces aux notifications) |
+| Lecture par une application tierce | un lecteur externe etait pilote par `MediaController` | **supprime** (avec `MediaSessionAccessService.kt` et l'acces aux notifications) |
 | Origine des fichiers | telecharges depuis le backend en Wi-Fi | **dossier local du PC**, choisi par l'utilisateur |
 | Transport | HTTP (`/api/v1/music/tracks/{id}/file`) | **USB / adb push** par `mpacer-music` |
 | Stockage serveur | `media.rs`, upload multipart, `MPACER_MEDIA_DIR` | **supprimes** |
 | Plan de telechargement | `GET/POST /api/v1/music/prepare` | **supprime** ; le manifeste est exporte et consomme par l'outil local |
-| Role de Spotify | source **et** lecteur | source de **metadonnees** uniquement |
+| Role du service de streaming | source **et** lecteur | source de **metadonnees** uniquement |
 
-Rappel utile : l'API Web Spotify ne fournit plus `tempo` (`/v1/audio-features`)
-aux nouvelles applications depuis le 27/11/2024. Le BPM vient donc, dans l'ordre :
-`spotify` (si le compte y a encore acces) puis **balises du fichier** (lues par
-l'outil local), puis **tap-tempo** ou **saisie manuelle** dans la page `/music`.
+Rappel utile : Deezer n'expose **aucun tempo**. Le BPM vient donc, dans
+l'ordre : **balises du fichier** (lues par l'outil local), puis **tap-tempo** ou
+**saisie manuelle** dans la page `/music`.
 
 ## 2. Architecture
 
@@ -42,7 +43,7 @@ l'outil local), puis **tap-tempo** ou **saisie manuelle** dans la page `/music`.
   Navigateur                  PC de l'utilisateur                      Montre Wear OS
   +-----------+    +--------------------------------------+    +----------------------+
   | /music    |    |  mpacer-music (application locale)   |    |  MusicLibrary.kt     |
-  | Spotify   |    |   - page locale 127.0.0.1:8077       |    |   scan du dossier    |
+  | Deezer    |    |   - page locale 127.0.0.1:8077       |    |   scan du dossier    |
   | playlists |    |   - choix du dossier des MP3         |    |   Music/ (USB)       |
   | BPM, tap  |    |   - appariement fichiers <-> pistes  |    |  MusicPlayer.kt      |
   | manifeste |--->|   - lecture des balises (BPM)        |    |   Media3 ExoPlayer   |
@@ -53,7 +54,7 @@ l'outil local), puis **tap-tempo** ou **saisie manuelle** dans la page `/music`.
   | mpacer-api             |                mpacer-core (FFI JSON)
   |  playlists, BPM,       |                music.rs : tempo cible,
   |  manifeste de transfert|                directeur d'orchestre,
-  |  Spotify OAuth         |                appariement, balises BPM
+  |  Deezer (arl ou OAuth) |                appariement, balises BPM
   +------------------------+
 ```
 
@@ -101,7 +102,7 @@ pub struct TransferManifest {
     pub version: u32,             // 1
     pub playlist_id: String,
     pub name: String,
-    pub source: String,           // "spotify" | "manual"
+    pub source: String,           // "deezer" | "manual"
     pub target_bpm: Option<f64>,
     pub tracks: Vec<WantedTrack>,
 }
@@ -164,8 +165,9 @@ place pour ne pas casser un schema deja deploye. `music_download_plans` n'est
 
 | Variable | Role |
 |---|---|
-| `MPACER_SPOTIFY_CLIENT_ID` / `_SECRET` | OAuth Spotify (facultatif) |
-| `MPACER_SPOTIFY_REDIRECT_URI` | defaut `{public_url}/auth/spotify/callback` |
+| `MPACER_DEEZER_ARL` | cookie `arl` du compte Deezer (voie recommandee) |
+| `MPACER_DEEZER_APP_ID` / `_SECRET` | OAuth 2.0 Deezer (facultatif) |
+| `MPACER_DEEZER_REDIRECT_URI` | defaut `{public_url}/auth/deezer/callback` |
 
 `MPACER_MEDIA_DIR` disparait (plus de stockage audio).
 
@@ -186,10 +188,10 @@ Les routes `tracks/{id}/file`, `playlists/{id}/ack`, `music/prepare`,
 | Methode | Chemin | Role |
 |---|---|---|
 | GET | `/music` | page complete (section 6.1) |
-| GET | `/auth/spotify` + `/auth/spotify/callback` | OAuth 2.0 + PKCE |
-| POST | `/music/spotify/disconnect` | deconnecte le compte |
-| GET | `/music/search?q=running` | recherche de playlists Spotify |
-| POST | `/music/import` | importe une playlist (`spotify_ref`, `target_bpm` optionnel) |
+| GET | `/auth/deezer` + `/auth/deezer/callback` | OAuth 2.0 Deezer (repli) |
+| POST | `/music/deezer/disconnect` | deconnecte le compte |
+| GET | `/music/search?q=rock` | recherche de playlists Deezer |
+| POST | `/music/import` | importe une playlist (`ref`, `target_bpm` optionnel) |
 | POST | `/music/playlists/{id}/track-bpm` | BPM d'un titre (`bpm`, `source` = manual\|tap, `taps` optionnel) |
 | POST | `/music/playlists/{id}/target` | BPM cible (vide = automatique) |
 | POST | `/music/playlists/{id}/delete` | supprime la playlist (metadonnees) |
@@ -198,12 +200,14 @@ Les routes `tracks/{id}/file`, `playlists/{id}/ack`, `music/prepare`,
 Les routes `POST /music/upload`, `POST /music/prepare` et
 `POST /music/prepare/cancel` sont **supprimees**.
 
-### 5.5 Spotify (inchange)
+### 5.5 Deezer
 
-`src/spotify.rs` : OAuth 2.0 + PKCE, `list_user_playlists`, `get_playlist`,
-`search_playlists`, `audio_features` en *best effort* (`Ok(None)` sur 403/404, le
-BPM reste alors a completer par les balises, le tap ou la saisie). Aucun appel
-reseau dans les tests.
+`src/deezer.rs` : OAuth 2.0 (repli) **et** API privee par cookie `arl`
+(`arl_session`, `list_user_playlists_arl`, `search_playlists_arl`,
+`get_playlist_arl`), plus `playlist_id_from_ref` et la detection des erreurs
+applicatives renvoyees en HTTP 200. L'API Deezer n'expose aucun tempo : le BPM se
+complete par les balises, le tap ou la saisie. Aucun appel reseau dans les tests
+(les appels reels vivent dans `tests/deezer_live.rs`, ignores par defaut).
 
 ## 6. Interface
 
@@ -213,11 +217,11 @@ reseau dans les tests.
 +------------------------------------------------------------------------------+
 | M-pacer   Seances  Courses  Planning  Statistiques  [ Musique ]  Appairer    |
 +------------------------------------------------------------------------------+
-| 1. Source Spotify (facultatif)                                               |
-|  [ Connecter Spotify ]   recherche : [ running            ]  [ Chercher ]    |
-|   - Running 170 BPM (18 titres)              [ Importer ]                    |
+| 1. Source Deezer (facultatif)                                                |
+|  [ Connecter Deezer ]   recherche : [ rock              ]  [ Chercher ]      |
+|   - Rock Workout (100 titres)                [ Importer ]                    |
 | 2. Playlists preparees                                                       |
-|  Run 170   spotify  18 titres  1:02:14  BPM cible [170]   [Manifeste] [x]    |
+|  Run 170   deezer  18 titres  1:02:14  BPM cible [170]   [Manifeste] [x]     |
 | 3. Titres (playlist selectionnee)                                            |
 |  1  Wake me up   Avicii   4:09   124 bpm (balise)   [tapper][saisir]         |
 | 4. Transfert vers la montre (USB)                                            |
@@ -310,8 +314,8 @@ dans le manifeste.
    +---------------------------+        +---------------------------+
 ```
 
-* plus aucune reference a Spotify sur la montre (pas de session tierce, pas
-  d'acces aux notifications) ;
+* aucune application de lecture tierce sur la montre (pas de session externe,
+  pas d'acces aux notifications) ;
 * « Importer (USB) » relit `getExternalFilesDir("Music")` : chaque sous-dossier
   contenant un `manifest.json` devient une playlist locale ; l'index est stocke
   dans `filesDir/music-index.json` ;
@@ -331,13 +335,13 @@ Aucun televersement, aucun envoi de fichiers par le telephone.
 |---|---|
 | Coeur | `cargo test -p mpacer-core` : tests d'appariement (titre+artiste, duree, seuil 0.6, fichier unique, determinisme, accents/majuscules, `feat.`) |
 | Outil | `cargo test -p mpacer-music` + `mpacer-music inspect` sur un dossier de test ; interface locale interrogee (browse/inspect) sans adb |
-| Backend | `cargo test -p mpacer-api --test api` avec PostgreSQL : fiches, BPM, manifeste exporte, Spotify facultatif |
+| Backend | `cargo test -p mpacer-api --test api` avec PostgreSQL : fiches, BPM, manifeste exporte, Deezer facultatif |
 | Montre | `gradlew :app:assembleDebug :companion:assembleDebug` |
 | Bout en bout | `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, relecture du diff par le Lead |
 
 ## 8. Hors perimetre
 
-* lecture de l'audio Spotify par M-pacer (DRM) : **hors sujet en v2**, la montre
+* lecture de l'audio Deezer par M-pacer (DRM) : **hors sujet en v2**, la montre
   ne joue que des fichiers presents sur son disque ;
 * analyse audio pour deviner le BPM d'un MP3 sans balise (tap-tempo et saisie
   manuelle suffisent) ;
@@ -351,8 +355,8 @@ Aucun televersement, aucun envoi de fichiers par le telephone.
 | Coeur | appariement `LocalFile`/`WantedTrack`/`match_tracks`/`parse_manifest`/`normalize_label` dans `crates/mpacer-core/src/music.rs` | `cargo test --workspace` : coeur 164 tests ; clippy propre |
 | Outil | nouveau crate `crates/mpacer-music` (CLI + interface locale 127.0.0.1:8077, planificateur unique, adb push, `--dry-run`, `--target-dir`) | `inspect` sur une fixture (3/4 appariees, scores 0.85, BPM lu dans les balises), `transfer --target-dir` verifie par le Lead : arborescence + `manifest.json` avec `file`/`size_bytes` |
 | Backend | audio supprime (upload, stockage, service de fichiers, plans) ; `GET .../playlists/{id}/manifest` + `manifest_url` ; page `/music` en 4 blocs USB | `cargo test -p mpacer-api --test api` : **27 verts, 1 ignore, 0 echec** contre PostgreSQL ; page verifiee en service (`4. Transfert vers la montre (USB)`, plus aucun formulaire de televersement) |
-| Montre | `SpotifyRemote.kt` et `MediaSessionAccessService.kt` supprimes ; `MusicLibrary` = scanner de `getExternalFilesDir("Music")` ; « Importer (USB) » ; lecture locale seule | `gradlew :app:assembleDebug :companion:assembleDebug` : BUILD SUCCESSFUL, trois `libmpacer_ffi.so` regeneres |
-| Deploiement | plus de volume applicatif ni de `MPACER_MEDIA_DIR` ; cles Spotify conservees | `helm lint` + `helm template` (valeurs par defaut et jo3) |
+| Montre | lecteur tiers et `MediaSessionAccessService.kt` supprimes ; `MusicLibrary` = scanner de `getExternalFilesDir("Music")` ; « Importer (USB) » ; lecture locale seule | `gradlew :app:assembleDebug :companion:assembleDebug` : BUILD SUCCESSFUL, trois `libmpacer_ffi.so` regeneres |
+| Deploiement | plus de volume applicatif ni de `MPACER_MEDIA_DIR` ; cles Deezer dans le secret | `helm lint` + `helm template` (valeurs par defaut et jo3) |
 
 Ecarts au contrat, tous documentes :
 
@@ -428,7 +432,7 @@ La page passe a **cinq blocs** :
 
 ```text
 +------------------------------------------------------------------------------+
-| 1. Source Spotify (facultatif)                                               |
+| 1. Source Deezer (facultatif)                                                |
 | 2. Playlists preparees   [ jouer ] [ renommer ] [ x ]                        |
 | 3. Titres de la playlist selectionnee  (BPM : [tapper] [saisir])             |
 | 4. Transfert vers la montre (USB)   [ Telecharger le manifeste ]             |

@@ -143,17 +143,11 @@ pub struct Config {
     /// URI de redirection OAuth explicitement enregistree dans la console Google.
     /// Vide => `{public_url}/auth/google/callback`.
     pub google_redirect_uri: Option<String>,
-    /// Identifiants de l'application Spotify (absents = fonctionnalite desactivee).
-    pub spotify_client_id: Option<String>,
-    pub spotify_client_secret: Option<String>,
-    /// URI de redirection Spotify explicitement enregistree dans la console.
-    /// Vide => `{public_url}/auth/spotify/callback`.
-    pub spotify_redirect_uri: Option<String>,
     /// Identifiants de l'application Deezer (absents = source desactivee).
     ///
     /// Deezer exige l'app_id **et** le secret applicatif pour echanger le code
-    /// d'autorisation : sans les deux, la source reste eteinte et la page
-    /// /music continue de fonctionner avec Spotify ou un dossier local.
+    /// d'autorisation : sans les deux, la source reste eteinte. Le cookie
+    /// `MPACER_DEEZER_ARL` rend cette inscription inutile (voie recommandee).
     pub deezer_app_id: Option<String>,
     pub deezer_app_secret: Option<String>,
     /// URI de redirection Deezer explicitement enregistree.
@@ -227,9 +221,6 @@ impl Config {
             google_client_id,
             google_client_secret,
             google_redirect_uri: env_var("MPACER_GOOGLE_REDIRECT_URI"),
-            spotify_client_id: env_var("MPACER_SPOTIFY_CLIENT_ID"),
-            spotify_client_secret: env_var("MPACER_SPOTIFY_CLIENT_SECRET"),
-            spotify_redirect_uri: env_var("MPACER_SPOTIFY_REDIRECT_URI"),
             deezer_app_id: env_var("MPACER_DEEZER_APP_ID"),
             deezer_app_secret: env_var("MPACER_DEEZER_APP_SECRET"),
             deezer_redirect_uri: env_var("MPACER_DEEZER_REDIRECT_URI"),
@@ -266,31 +257,6 @@ impl Config {
     /// Chemin (sur ce service) ou Google renverra le navigateur.
     pub fn google_redirect_path(&self) -> String {
         redirect_path_of(&self.google_redirect_uri())
-    }
-
-    /// URI de redirection OAuth declaree dans la console Spotify.
-    pub fn spotify_redirect_uri(&self) -> String {
-        self.spotify_redirect_uri
-            .clone()
-            .unwrap_or_else(|| format!("{}/auth/spotify/callback", self.public_url))
-    }
-
-    /// Chemin (sur ce service) ou Spotify renverra le navigateur.
-    pub fn spotify_redirect_path(&self) -> String {
-        redirect_path_of(&self.spotify_redirect_uri())
-    }
-
-    /// Vrai si un client Spotify **exploitable** est configure.
-    ///
-    /// Sans identifiants, la page /music reste utilisable (fichiers personnels)
-    /// et annonce explicitement que Spotify n'est pas disponible.
-    pub fn spotify_configured(&self) -> bool {
-        match (&self.spotify_client_id, &self.spotify_client_secret) {
-            (Some(id), Some(secret)) => {
-                !looks_like_placeholder(id) && !looks_like_placeholder(secret)
-            }
-            _ => false,
-        }
     }
 
     /// URI de redirection OAuth declaree dans la console Deezer.
@@ -433,9 +399,6 @@ impl Config {
             google_client_id: Some("client-de-test".to_string()),
             google_client_secret: Some("secret-de-test".to_string()),
             google_redirect_uri: None,
-            spotify_client_id: None,
-            spotify_client_secret: None,
-            spotify_redirect_uri: None,
             deezer_app_id: None,
             deezer_app_secret: None,
             deezer_redirect_uri: None,
@@ -504,36 +467,6 @@ mod tests {
         assert_eq!(
             config.google_redirect_uri(),
             "https://mpacer.p.zacharie.org/Authorized"
-        );
-    }
-
-    #[test]
-    fn spotify_is_optional_and_configurable() {
-        let mut config = Config::for_tests("http://localhost:8080", "postgresql://exemple");
-        assert!(
-            !config.spotify_configured(),
-            "sans identifiants, Spotify est desactive"
-        );
-        assert_eq!(
-            config.spotify_redirect_uri(),
-            "http://localhost:8080/auth/spotify/callback"
-        );
-        assert_eq!(config.spotify_redirect_path(), "/auth/spotify/callback");
-
-        // Un identifiant laisse au gabarit ne compte pas comme configure.
-        config.spotify_client_id = Some("REMPLACER-PAR-VOTRE-CLIENT-ID".to_string());
-        config.spotify_client_secret = Some("vrai-secret".to_string());
-        assert!(!config.spotify_configured());
-
-        config.spotify_client_id = Some("vrai-client".to_string());
-        assert!(config.spotify_configured());
-
-        config.spotify_redirect_uri =
-            Some("https://mpacer.p.zacharie.org/spotify/retour".to_string());
-        assert_eq!(config.spotify_redirect_path(), "/spotify/retour");
-        assert_eq!(
-            config.spotify_redirect_uri(),
-            "https://mpacer.p.zacharie.org/spotify/retour"
         );
     }
 

@@ -1,19 +1,15 @@
--- Musique : playlists de course, titres, plans de telechargement et comptes Spotify.
+-- Musique : playlists de course, titres et plans de telechargement.
 -- Idempotent : rejoue a chaque demarrage, comme 0001_init.sql et 0002_races.sql.
 --
--- Deux origines cohabitent :
---   * `spotify` : seules les metadonnees (fiche) sont stockees ; l'audio reste
---     dans l'application Spotify de la montre ;
---   * `upload`  : les octets sont sur le disque (MPACER_MEDIA_DIR) et sont
---     servis par GET /api/v1/music/tracks/{id}/file.
+-- Deezer est la seule source externe (voir 0006 et 0009) : le serveur ne
+-- conserve que des metadonnees, jamais d'audio.
 
 CREATE TABLE IF NOT EXISTS music_playlists (
     id            TEXT PRIMARY KEY,
     user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name          TEXT NOT NULL,
-    -- `spotify` | `upload` | `manual`
+    -- `deezer` | `manual`
     source        TEXT NOT NULL,
-    spotify_id    TEXT,
     cover_url     TEXT,
     -- Consigne fixe decidee dans l'interface ; NULL = tempo automatique.
     target_bpm    DOUBLE PRECISION,
@@ -33,9 +29,8 @@ CREATE TABLE IF NOT EXISTS music_tracks (
     album            TEXT,
     duration_s       DOUBLE PRECISION,
     bpm              DOUBLE PRECISION,
-    -- `spotify` | `tag` | `tap` | `manual` ; NULL = tempo inconnu.
+    -- `tag` | `tap` | `manual` ; NULL = tempo inconnu.
     bpm_source       TEXT,
-    spotify_uri      TEXT,
     mime             TEXT,
     size_bytes       BIGINT,
     -- Chemin relatif a MPACER_MEDIA_DIR ; NULL = aucun octet sur le serveur.
@@ -62,15 +57,3 @@ CREATE TABLE IF NOT EXISTS music_download_plans (
 CREATE INDEX IF NOT EXISTS idx_music_download_plans_user
     ON music_download_plans(user_id, acked_at_ms);
 
--- Compte Spotify lie (OAuth 2.0 + PKCE). La base est la frontiere de confiance,
--- au meme titre que les sessions : les jetons ne sortent jamais du serveur.
-CREATE TABLE IF NOT EXISTS spotify_accounts (
-    user_id         TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    spotify_user_id TEXT,
-    display_name    TEXT,
-    access_token    TEXT NOT NULL,
-    refresh_token   TEXT,
-    expires_at_ms   BIGINT NOT NULL,
-    scope           TEXT,
-    connected_at_ms BIGINT NOT NULL
-);

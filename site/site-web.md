@@ -300,7 +300,7 @@ d'image ne demande aucune intervention manuelle sur la base.
 
 <div class="note">
 <p><strong>En préparation : la musique.</strong> Une documentation technique complète décrit
-l'ajout de playlists (fichiers personnels ou Spotify), la calibration tempo / allure et le
+l'ajout de playlists Deezer et de fichiers personnels, la calibration tempo / allure et le
 directeur d'orchestre qui adapte la playlist au plan de course. Le modèle de données et l'API
 correspondants sont en cours d'ajout ; cette page sera complétée quand la fonctionnalité sera
 livrée.</p>

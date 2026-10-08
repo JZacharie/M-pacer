@@ -447,14 +447,13 @@ pub const DEFAULT_RACE_TASKS: [&str; 8] = [
 
 /// Origines d'une playlist, telles que stockees dans `music_playlists.source`.
 ///
-/// En v2 il n'y a plus de televersement : une playlist vient de Spotify ou de la
-/// saisie manuelle.
-pub const MUSIC_SOURCES: [&str; 2] = ["spotify", "manual"];
+/// Deezer est la seule source externe ; `manual` couvre les playlists saisies a
+/// la main (les playlists sans source vivante y retombent).
+pub const MUSIC_SOURCES: [&str; 2] = ["deezer", "manual"];
 
 /// Origines d'une valeur de BPM, alignees sur `mpacer_core::music::BpmSource` :
-/// `spotify` (audio-features), `tag` (balise du fichier), `tap` (tap-tempo),
-/// `manual` (saisie directe).
-pub const BPM_SOURCES: [&str; 4] = ["spotify", "tag", "tap", "manual"];
+/// `tag` (balise du fichier), `tap` (tap-tempo), `manual` (saisie directe).
+pub const BPM_SOURCES: [&str; 3] = ["tag", "tap", "manual"];
 
 /// Borne de plausibilite d'un BPM (identique au coeur Rust).
 pub const BPM_MIN: f64 = 30.0;
@@ -466,9 +465,8 @@ pub struct MusicPlaylist {
     pub id: String,
     pub user_id: String,
     pub name: String,
-    /// `spotify` | `deezer` | `manual`.
+    /// `deezer` | `manual`.
     pub source: String,
-    pub spotify_id: Option<String>,
     /// Identifiant Deezer quand la source est `deezer` (sinon `None`).
     pub deezer_id: Option<String>,
     pub cover_url: Option<String>,
@@ -483,7 +481,6 @@ pub struct MusicPlaylist {
 pub struct MusicPlaylistInput {
     pub name: String,
     pub source: String,
-    pub spotify_id: Option<String>,
     pub deezer_id: Option<String>,
     pub cover_url: Option<String>,
     pub target_bpm: Option<f64>,
@@ -502,7 +499,6 @@ pub struct MusicTrack {
     pub duration_s: Option<f64>,
     pub bpm: Option<f64>,
     pub bpm_source: Option<String>,
-    pub spotify_uri: Option<String>,
     /// Identifiant Deezer de la piste : sert a construire son lien Deemix
     /// (`{deemix}/#/track/{id}`). `None` pour une source sans identifiant.
     pub deezer_track_id: Option<String>,
@@ -529,22 +525,8 @@ pub struct MusicTrackInput {
     pub duration_s: Option<f64>,
     pub bpm: Option<f64>,
     pub bpm_source: Option<String>,
-    pub spotify_uri: Option<String>,
     /// Identifiant Deezer de la piste, quand la source est Deezer.
     pub deezer_track_id: Option<String>,
-}
-
-/// Compte Spotify lie (jetons OAuth). Jamais expose tel quel a l'interface.
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct SpotifyAccount {
-    pub user_id: String,
-    pub spotify_user_id: Option<String>,
-    pub display_name: Option<String>,
-    pub access_token: String,
-    pub refresh_token: Option<String>,
-    pub expires_at_ms: i64,
-    pub scope: Option<String>,
-    pub connected_at_ms: i64,
 }
 
 /// Compte Deezer lie (OAuth 2.0). Jamais expose tel quel a l'interface.
@@ -563,15 +545,12 @@ pub struct DeezerAccount {
     pub connected_at_ms: i64,
 }
 
-/// Playlist proposee par une source externe (Spotify ou Deezer) avant import.
-///
-/// Vue commune aux deux fournisseurs : la page /music affiche une seule liste,
-/// quel que soit le service qui a repondu.
+/// Playlist Deezer proposee a l'import (avant enregistrement).
 #[derive(Debug, Clone, Serialize)]
 pub struct SourcePlaylist {
-    /// `spotify` | `deezer`.
+    /// Toujours `deezer` : la page /music n'a qu'une source externe.
     pub source: String,
-    /// Identifiant chez le fournisseur (Spotify : base62, Deezer : numerique).
+    /// Identifiant Deezer de la playlist (numerique).
     pub id: String,
     pub name: String,
     pub track_count: i64,
@@ -677,7 +656,7 @@ pub struct TransferManifest {
     pub version: u32,
     pub playlist_id: String,
     pub name: String,
-    /// `spotify` | `manual`.
+    /// `deezer` | `manual`.
     pub source: String,
     pub target_bpm: Option<f64>,
     pub tracks: Vec<ManifestTrack>,
@@ -864,7 +843,6 @@ mod music_tests {
             duration_s: Some(249.0),
             bpm: Some(124.0),
             bpm_source: Some("tag".into()),
-            spotify_uri: Some("spotify:track:t1".into()),
             deezer_track_id: None,
             // Colonnes conservees en base mais inutilisees depuis la v2.
             mime: None,
@@ -881,9 +859,8 @@ mod music_tests {
             id: "p1".into(),
             user_id: "u1".into(),
             name: "Run 170".into(),
-            source: "spotify".into(),
-            spotify_id: Some("8f".into()),
-            deezer_id: None,
+            source: "deezer".into(),
+            deezer_id: Some("8f".into()),
             cover_url: None,
             target_bpm: Some(170.0),
             created_at_ms: 0,
@@ -895,14 +872,14 @@ mod music_tests {
         );
         assert_eq!(manifest.version, 1);
         assert_eq!(manifest.playlist_id, "p1");
-        assert_eq!(manifest.source, "spotify");
+        assert_eq!(manifest.source, "deezer");
         assert_eq!(manifest.target_bpm, Some(170.0));
 
         // L'ordre des champs du JSON suit la declaration de la structure.
         let text = serde_json::to_string(&manifest).expect("manifeste serialisable");
         assert!(
             text.starts_with(
-                r#"{"version":1,"playlist_id":"p1","name":"Run 170","source":"spotify","target_bpm":170.0,"tracks":["#
+                r#"{"version":1,"playlist_id":"p1","name":"Run 170","source":"deezer","target_bpm":170.0,"tracks":["#
             ),
             "{text}"
         );

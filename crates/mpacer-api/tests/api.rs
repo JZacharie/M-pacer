@@ -94,15 +94,15 @@ async fn test_app(dev_auth: bool) -> Option<(Router, AppState)> {
     test_app_with(dev_auth, false).await
 }
 
-/// Application de test avec un client Spotify configure.
+/// Application de test avec une application Deezer (OAuth) configuree.
 ///
 /// Aucun appel reseau ne part tant qu'aucun compte n'est lie : la page propose
 /// seulement la connexion et l'OAuth s'arrete a l'URL d'autorisation.
-async fn test_app_spotify(dev_auth: bool) -> Option<(Router, AppState)> {
+async fn test_app_deezer_oauth(dev_auth: bool) -> Option<(Router, AppState)> {
     test_app_with(dev_auth, true).await
 }
 
-async fn test_app_with(dev_auth: bool, spotify: bool) -> Option<(Router, AppState)> {
+async fn test_app_with(dev_auth: bool, deezer_oauth: bool) -> Option<(Router, AppState)> {
     let url = std::env::var("MPACER_TEST_DATABASE_URL")
         .ok()
         .filter(|value| !value.trim().is_empty())?;
@@ -133,9 +133,9 @@ async fn test_app_with(dev_auth: bool, spotify: bool) -> Option<(Router, AppStat
 
     let mut config = Config::for_tests("http://localhost:8080", &url);
     config.dev_auth = dev_auth;
-    if spotify {
-        config.spotify_client_id = Some("client-de-test".to_string());
-        config.spotify_client_secret = Some("secret-de-test".to_string());
+    if deezer_oauth {
+        config.deezer_app_id = Some("123456".to_string());
+        config.deezer_app_secret = Some("secret-de-test".to_string());
     }
     let state = AppState::with_oidc(pool, Arc::new(config), Arc::new(FakeOidc));
     Some((routes::router(state.clone()), state))
@@ -1592,15 +1592,14 @@ async fn music_api_publishes_playlists_and_the_transfer_manifest() {
     let (user, _session) = dev_user_session(&state).await;
     let token = device_token(&state, &user.id).await;
 
-    // Une playlist de metadonnees, comme apres un import Spotify.
+    // Une playlist de metadonnees, comme apres un import Deezer.
     let playlist = mpacer_api::db::insert_music_playlist(
         &state.pool,
         &user.id,
         &mpacer_api::models::MusicPlaylistInput {
             name: "Run 170".into(),
-            source: "spotify".into(),
-            spotify_id: Some("8f-playlist".into()),
-            deezer_id: None,
+            source: "deezer".into(),
+            deezer_id: Some("1924357302".into()),
             cover_url: None,
             target_bpm: Some(170.0),
         },
@@ -1625,9 +1624,8 @@ async fn music_api_publishes_playlists_and_the_transfer_manifest() {
                 album: Some("True".into()),
                 duration_s: Some(*duration_s),
                 bpm: Some(*bpm),
-                bpm_source: Some("spotify".into()),
-                spotify_uri: Some(format!("spotify:track:{position}")),
-                deezer_track_id: None,
+                bpm_source: Some("tag".into()),
+                deezer_track_id: Some(format!("42732470{position}")),
             },
             state.now_ms(),
         )
@@ -1645,7 +1643,7 @@ async fn music_api_publishes_playlists_and_the_transfer_manifest() {
     let list: serde_json::Value = serde_json::from_str(&body_text(response).await).unwrap();
     let entry = &list["playlists"][0];
     assert_eq!(entry["name"], "Run 170");
-    assert_eq!(entry["source"], "spotify");
+    assert_eq!(entry["source"], "deezer");
     assert_eq!(entry["target_bpm"], 170.0);
     assert_eq!(entry["track_count"], 2);
     assert_eq!(entry["duration_s"], 449.0);
@@ -1672,7 +1670,7 @@ async fn music_api_publishes_playlists_and_the_transfer_manifest() {
     assert_eq!(detail["tracks"][0]["title"], "Wake me up");
     assert_eq!(detail["tracks"][0]["duration_s"], 249.0);
     assert_eq!(detail["tracks"][0]["bpm"], 124.0);
-    assert_eq!(detail["tracks"][0]["bpm_source"], "spotify");
+    assert_eq!(detail["tracks"][0]["bpm_source"], "tag");
     assert!(
         detail["tracks"][0].get("download_url").is_none()
             && detail["tracks"][0].get("size_bytes").is_none()
@@ -1782,7 +1780,6 @@ async fn deemix_list_exports_the_download_links() {
         &mpacer_api::models::MusicPlaylistInput {
             name: "Rock Workout".into(),
             source: "deezer".into(),
-            spotify_id: None,
             deezer_id: Some("1924357302".into()),
             cover_url: None,
             target_bpm: None,
@@ -1807,7 +1804,6 @@ async fn deemix_list_exports_the_download_links() {
                 duration_s: Some(249.0),
                 bpm: None,
                 bpm_source: None,
-                spotify_uri: None,
                 deezer_track_id: Some((*track_id).to_string()),
             },
             state.now_ms(),
@@ -1893,13 +1889,12 @@ async fn music_page_has_six_blocks_and_downloads_the_manifest() {
     )
     .await;
     for expected in [
-        "1. Source des playlists (Spotify ou Deezer)",
+        "1. Source des playlists",
         "2. Playlists preparees",
         "3. Titres (playlist selectionnee)",
         "4. Fichiers a preparer (MP3)",
         "5. Transfert vers la montre (USB)",
         "6. Assez de musique pour la course ?",
-        "Spotify n'est pas configure",
         "Deezer n'est pas configure",
         "Aucune playlist pour l'instant",
         "Selectionnez une playlist dans le bloc 2",
@@ -1918,9 +1913,8 @@ async fn music_page_has_six_blocks_and_downloads_the_manifest() {
         &_user.id,
         &mpacer_api::models::MusicPlaylistInput {
             name: "Run 170".into(),
-            source: "spotify".into(),
-            spotify_id: Some("8f-run-170".into()),
-            deezer_id: None,
+            source: "deezer".into(),
+            deezer_id: Some("1924357302".into()),
             cover_url: None,
             target_bpm: None,
         },
@@ -1940,8 +1934,7 @@ async fn music_page_has_six_blocks_and_downloads_the_manifest() {
             duration_s: Some(249.0),
             bpm: None,
             bpm_source: None,
-            spotify_uri: Some("spotify:track:t1".into()),
-            deezer_track_id: None,
+            deezer_track_id: Some("4273247042".into()),
         },
         state.now_ms(),
     )
@@ -2110,24 +2103,24 @@ async fn music_page_has_six_blocks_and_downloads_the_manifest() {
 }
 
 #[tokio::test]
-async fn spotify_stays_optional_without_credentials() {
+async fn deezer_stays_optional_without_credentials() {
     let (app, state) = app_or_skip!(test_app(true).await);
     let (_user, session) = dev_user_session(&state).await;
 
-    // Sans identifiants, /auth/spotify renvoie vers la page avec un message clair
+    // Sans configuration, /auth/deezer renvoie vers la page avec un message clair
     // (aucun appel reseau).
     let response = app
         .clone()
-        .oneshot(get_with_cookie("/auth/spotify", &session))
+        .oneshot(get_with_cookie("/auth/deezer", &session))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert_eq!(
         response.headers()[header::LOCATION],
-        "/music?erreur=spotify_non_configure"
+        "/music?erreur=deezer_non_configure"
     );
 
-    // La recherche affiche le meme message sans contacter Spotify.
+    // La recherche affiche le meme message sans contacter Deezer.
     let body = body_text(
         app.clone()
             .oneshot(get_with_cookie("/music/search?q=running", &session))
@@ -2135,7 +2128,7 @@ async fn spotify_stays_optional_without_credentials() {
             .unwrap(),
     )
     .await;
-    assert!(body.contains("Spotify n'est pas configure"), "{body}");
+    assert!(body.contains("Deezer n'est pas configure"), "{body}");
 
     // L'import est refuse proprement.
     let response = app
@@ -2143,7 +2136,7 @@ async fn spotify_stays_optional_without_credentials() {
         .oneshot(form_request(
             "POST",
             "/music/import",
-            "spotify_ref=https%3A%2F%2Fopen.spotify.com%2Fplaylist%2F37i9dQZF1DXcBWIGoYBM5M&target_bpm=",
+            "ref=https%3A%2F%2Fwww.deezer.com%2Ffr%2Fplaylist%2F1924357302&target_bpm=",
             &session,
         ))
         .await
@@ -2151,22 +2144,22 @@ async fn spotify_stays_optional_without_credentials() {
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert_eq!(
         response.headers()[header::LOCATION],
-        "/music?erreur=spotify_non_configure"
+        "/music?erreur=deezer_non_configure"
     );
 
     // Le compte n'existe pas : rien n'a ete ecrit.
-    assert!(mpacer_api::db::get_spotify_account(&state.pool, &_user.id)
+    assert!(mpacer_api::db::get_deezer_account(&state.pool, &_user.id)
         .await
         .unwrap()
         .is_none());
 }
 
 #[tokio::test]
-async fn spotify_oauth_starts_when_configured() {
-    let (app, state) = app_or_skip!(test_app_spotify(true).await);
+async fn deezer_oauth_starts_when_configured() {
+    let (app, state) = app_or_skip!(test_app_deezer_oauth(true).await);
     let (_user, session) = dev_user_session(&state).await;
 
-    // La page propose la connexion quand le service est configure.
+    // La page propose la connexion quand le service est configure en OAuth.
     let body = body_text(
         app.clone()
             .oneshot(get_with_cookie("/music", &session))
@@ -2174,13 +2167,13 @@ async fn spotify_oauth_starts_when_configured() {
             .unwrap(),
     )
     .await;
-    assert!(body.contains("Connecter Spotify"), "{body}");
-    assert!(!body.contains("Spotify n'est pas configure"), "{body}");
+    assert!(body.contains("Connecter Deezer"), "{body}");
+    assert!(!body.contains("Deezer n'est pas configure"), "{body}");
 
-    // /auth/spotify part vers Spotify avec PKCE, sans aucun appel reseau.
+    // /auth/deezer part vers Deezer, sans aucun appel reseau.
     let response = app
         .clone()
-        .oneshot(get_with_cookie("/auth/spotify", &session))
+        .oneshot(get_with_cookie("/auth/deezer", &session))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
@@ -2189,15 +2182,11 @@ async fn spotify_oauth_starts_when_configured() {
         .unwrap()
         .to_string();
     assert!(
-        location.starts_with("https://accounts.spotify.com/authorize"),
+        location.starts_with("https://connect.deezer.com/oauth/auth.php"),
         "{location}"
     );
-    assert!(location.contains("client_id=client-de-test"), "{location}");
-    assert!(
-        location.contains("code_challenge_method=S256"),
-        "{location}"
-    );
-    assert!(location.contains("playlist-read-private"), "{location}");
+    assert!(location.contains("app_id=123456"), "{location}");
+    assert!(location.contains("perms=basic_access"), "{location}");
 
     // La recherche demande d'abord de connecter le compte.
     let body = body_text(
@@ -2206,7 +2195,7 @@ async fn spotify_oauth_starts_when_configured() {
             .unwrap(),
     )
     .await;
-    assert!(body.contains("Connectez votre compte Spotify"), "{body}");
+    assert!(body.contains("Connectez votre compte Deezer"), "{body}");
 }
 
 #[tokio::test]
@@ -3074,9 +3063,8 @@ async fn music_page_validates_the_coverage_and_renames_a_playlist() {
         &_user.id,
         &mpacer_api::models::MusicPlaylistInput {
             name: "Run 170".into(),
-            source: "spotify".into(),
-            spotify_id: None,
-            deezer_id: None,
+            source: "deezer".into(),
+            deezer_id: Some("1924357302".into()),
             cover_url: None,
             target_bpm: Some(170.0),
         },
@@ -3097,7 +3085,6 @@ async fn music_page_validates_the_coverage_and_renames_a_playlist() {
                 duration_s: Some(300.0),
                 bpm: Some(150.0),
                 bpm_source: Some("manual".into()),
-                spotify_uri: None,
                 deezer_track_id: None,
             },
             state.now_ms(),
@@ -3137,7 +3124,6 @@ async fn music_page_validates_the_coverage_and_renames_a_playlist() {
         &mpacer_api::models::MusicPlaylistInput {
             name: "Courte".into(),
             source: "manual".into(),
-            spotify_id: None,
             deezer_id: None,
             cover_url: None,
             target_bpm: None,
@@ -3158,7 +3144,6 @@ async fn music_page_validates_the_coverage_and_renames_a_playlist() {
             duration_s: Some(300.0),
             bpm: None,
             bpm_source: None,
-            spotify_uri: None,
             deezer_track_id: None,
         },
         state.now_ms(),

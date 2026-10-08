@@ -940,7 +940,7 @@ mod tests {
                 "version": 1,
                 "playlist_id": "run-170",
                 "name": "Run 170",
-                "source": "spotify",
+                "source": "deezer",
                 "target_bpm": 170.0,
                 "tracks": [
                     {"id":"t1","position":1,"title":"Wake me up","artist":"Avicii","duration_s":249.0},

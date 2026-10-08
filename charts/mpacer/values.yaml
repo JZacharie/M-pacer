@@ -54,9 +54,6 @@ config:
   # Vide => <publicUrl>/auth/google/callback. A renseigner si le client OAuth
   # utilise un autre chemin (le service sert alors le callback a ce chemin).
   googleRedirectUri: ""
-  # URI de redirection OAuth Spotify, declaree dans la console Spotify for
-  # Developers. Vide => <publicUrl>/auth/spotify/callback
-  spotifyRedirectUri: ""
   # URI de redirection OAuth Deezer, declaree dans "Application Domains" sur
   # https://developers.deezer.com/myapps. Vide => <publicUrl>/auth/deezer/callback
   # (inutile avec un cookie arl : la source est deja accessible)
@@ -81,10 +78,6 @@ auth:
   # Sinon, renseigner les identifiants Google (Console Google Cloud -> OAuth 2.0)
   googleClientId: ""
   googleClientSecret: ""
-  # OAuth Spotify (optionnel). Sans identifiants, la page /music reste utilisable
-  # pour les fichiers personnels et annonce que Spotify n'est pas configure.
-  spotifyClientId: ""
-  spotifyClientSecret: ""
   # OAuth Deezer (optionnel) : identifiant d'application et cle secrete
   # (https://developers.deezer.com/myapps). Sans les deux, la source Deezer est
   # annoncee "non configuree" et la page /music reste utilisable.
@@ -165,10 +158,6 @@ externalSecrets:
     sessionSecret: MPACER_SESSION_SECRET
     googleClientId: MPACER_GOOGLE_CLIENT_ID
     googleClientSecret: MPACER_GOOGLE_CLIENT_SECRET
-    # Renseigner ces deux cles seulement si Spotify est scelle dans Vault :
-    # un remoteRef absent fait echouer la synchronisation de l'ExternalSecret.
-    spotifyClientId: ""
-    spotifyClientSecret: ""
     # Idem pour Deezer : vides tant que MPACER_DEEZER_APP_ID et
     # MPACER_DEEZER_APP_SECRET ne sont pas scelles dans Vault.
     deezerAppId: ""

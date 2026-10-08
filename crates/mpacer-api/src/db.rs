@@ -8,7 +8,7 @@ use crate::friends::{InviteOutcome, MAX_FRIENDS};
 use crate::models::{
     ApiToken, DeezerAccount, FriendRow, ImportedRaceMeta, LiveDeviceRow, MusicPlaylist,
     MusicPlaylistInput, MusicPlaylistSummary, MusicTrack, MusicTrackInput, Race, RaceInput,
-    RaceTask, SpotifyAccount, User, WorkoutRow,
+    RaceTask, User, WorkoutRow,
 };
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{PgPool, Row};
@@ -19,7 +19,7 @@ use std::time::Duration;
 const SCHEMA: &str = include_str!("../migrations/0001_init.sql");
 /// Courses a venir et suivi : meme mecanisme, rejoue juste apres le schema initial.
 const SCHEMA_RACES: &str = include_str!("../migrations/0002_races.sql");
-/// Musique : playlists, titres, plans de telechargement et comptes Spotify.
+/// Musique : playlists, titres, plans de telechargement et compte Deezer.
 const SCHEMA_MUSIC: &str = include_str!("../migrations/0003_music.sql");
 /// Courses de reference importees (Strava/Garmin) et commentaires de seance.
 const SCHEMA_REFERENCES: &str = include_str!("../migrations/0004-references-et-commentaires.sql");
@@ -31,6 +31,8 @@ const SCHEMA_MUSIC_SOURCES: &str = include_str!("../migrations/0006-sources-musi
 const SCHEMA_FRIENDS: &str = include_str!("../migrations/0007-amis.sql");
 /// Deezer par cookie `arl` : identifiant Deezer des pistes (liens Deemix).
 const SCHEMA_DEEZER_ARL: &str = include_str!("../migrations/0008-deezer-arl.sql");
+/// Deezer seule source externe : retrait des tables et colonnes de l'ancienne source.
+const SCHEMA_DEEZER_ONLY: &str = include_str!("../migrations/0009-source-unique-deezer.sql");
 
 /// Ouvre le pool et applique le schema (idempotent).
 pub async fn connect(config: &Config) -> anyhow::Result<PgPool> {
@@ -53,6 +55,7 @@ pub async fn connect_with_options(options: PgConnectOptions) -> anyhow::Result<P
     sqlx::raw_sql(SCHEMA_MUSIC_SOURCES).execute(&pool).await?;
     sqlx::raw_sql(SCHEMA_FRIENDS).execute(&pool).await?;
     sqlx::raw_sql(SCHEMA_DEEZER_ARL).execute(&pool).await?;
+    sqlx::raw_sql(SCHEMA_DEEZER_ONLY).execute(&pool).await?;
     Ok(pool)
 }
 
@@ -853,15 +856,14 @@ pub async fn insert_music_playlist(
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO music_playlists
-             (id, user_id, name, source, spotify_id, deezer_id, cover_url, target_bpm,
+             (id, user_id, name, source, deezer_id, cover_url, target_bpm,
               created_at_ms, updated_at_ms)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(&id)
     .bind(user_id)
     .bind(&input.name)
     .bind(&input.source)
-    .bind(input.spotify_id.as_deref())
     .bind(input.deezer_id.as_deref())
     .bind(input.cover_url.as_deref())
     .bind(input.target_bpm)
@@ -885,21 +887,6 @@ pub async fn get_music_playlist(
     )
     .bind(user_id)
     .bind(id)
-    .fetch_optional(pool)
-    .await
-}
-
-/// Playlist deja importee depuis Spotify (un import deux fois ne cree pas de doublon).
-pub async fn find_music_playlist_by_spotify(
-    pool: &PgPool,
-    user_id: &str,
-    spotify_id: &str,
-) -> Result<Option<MusicPlaylist>, sqlx::Error> {
-    sqlx::query_as::<_, MusicPlaylist>(
-        "SELECT * FROM music_playlists WHERE user_id = $1 AND spotify_id = $2",
-    )
-    .bind(user_id)
-    .bind(spotify_id)
     .fetch_optional(pool)
     .await
 }
@@ -1044,8 +1031,8 @@ pub async fn insert_music_track(
     sqlx::query(
         "INSERT INTO music_tracks
              (id, playlist_id, user_id, position, title, artist, album, duration_s, bpm,
-              bpm_source, spotify_uri, deezer_track_id, created_at_ms)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+              bpm_source, deezer_track_id, created_at_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
     .bind(&id)
     .bind(playlist_id)
@@ -1057,7 +1044,6 @@ pub async fn insert_music_track(
     .bind(input.duration_s)
     .bind(input.bpm)
     .bind(input.bpm_source.as_deref())
-    .bind(input.spotify_uri.as_deref())
     .bind(input.deezer_track_id.as_deref())
     .bind(now_ms)
     .execute(pool)
@@ -1114,80 +1100,6 @@ pub async fn set_music_track_bpm(
 
 // La table music_download_plans (plan de telechargement v1) n'est plus lue ni
 // ecrite : le transfert passe par le manifeste et l'outil local mpacer-music.
-
-// ------------------------------------------------------------------ comptes Spotify
-
-/// Enregistre (ou remplace) le compte Spotify lie a l'utilisateur.
-///
-/// Un rafraichissement de jeton ne renvoie pas toujours de `refresh_token` :
-/// l'ancien est alors conserve, sinon la liaison deviendrait inutilisable.
-pub async fn upsert_spotify_account(
-    pool: &PgPool,
-    account: &SpotifyAccount,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO spotify_accounts
-             (user_id, spotify_user_id, display_name, access_token, refresh_token,
-              expires_at_ms, scope, connected_at_ms)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (user_id) DO UPDATE SET
-             spotify_user_id = EXCLUDED.spotify_user_id,
-             display_name = COALESCE(EXCLUDED.display_name, spotify_accounts.display_name),
-             access_token = EXCLUDED.access_token,
-             refresh_token = COALESCE(EXCLUDED.refresh_token, spotify_accounts.refresh_token),
-             expires_at_ms = EXCLUDED.expires_at_ms,
-             scope = COALESCE(EXCLUDED.scope, spotify_accounts.scope),
-             connected_at_ms = EXCLUDED.connected_at_ms",
-    )
-    .bind(&account.user_id)
-    .bind(account.spotify_user_id.as_deref())
-    .bind(account.display_name.as_deref())
-    .bind(&account.access_token)
-    .bind(account.refresh_token.as_deref())
-    .bind(account.expires_at_ms)
-    .bind(account.scope.as_deref())
-    .bind(account.connected_at_ms)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-pub async fn get_spotify_account(
-    pool: &PgPool,
-    user_id: &str,
-) -> Result<Option<SpotifyAccount>, sqlx::Error> {
-    sqlx::query_as::<_, SpotifyAccount>("SELECT * FROM spotify_accounts WHERE user_id = $1")
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await
-}
-
-/// Met a jour le seul jeton d'acces (rafraichissement OAuth).
-pub async fn update_spotify_access_token(
-    pool: &PgPool,
-    user_id: &str,
-    access_token: &str,
-    expires_at_ms: i64,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE spotify_accounts SET access_token = $1, expires_at_ms = $2 WHERE user_id = $3",
-    )
-    .bind(access_token)
-    .bind(expires_at_ms)
-    .bind(user_id)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-/// Supprime la liaison Spotify (les jetons sont oublies).
-pub async fn delete_spotify_account(pool: &PgPool, user_id: &str) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query("DELETE FROM spotify_accounts WHERE user_id = $1")
-        .bind(user_id)
-        .execute(pool)
-        .await?;
-    Ok(result.rows_affected() > 0)
-}
 
 // ------------------------------------------------------------------ comptes Deezer
 

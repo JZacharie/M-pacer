@@ -26,7 +26,7 @@ image:
 #   kubectl -n mpacer get pod -l app.kubernetes.io/instance=mpacer \
 #     -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'
 podAnnotations:
-  mpacer.zacharie.org/image-publiee: "sha-d1b9359@sha256:7fcb8eeded6fa55682cc7d8512bbdce09aac3f3ffb967c1f2036868361fb5fdd"
+  mpacer.zacharie.org/image-publiee: "sha-53204a9@sha256:cfcc5a6380569defadff9992bb74e36049bc0bcc7167c7b02f5c19ed57e0921f"
 
 imagePullSecrets:
   - name: regcred

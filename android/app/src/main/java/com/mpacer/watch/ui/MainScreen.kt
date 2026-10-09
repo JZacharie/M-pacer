@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -20,10 +19,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.wear.compose.material.ExperimentalWearMaterialApi
-import androidx.wear.compose.material.HorizontalPageIndicator
-import androidx.wear.compose.material.PageIndicatorState
-import androidx.wear.compose.material.PageIndicatorStyle
 import androidx.wear.compose.material.Text
 import com.mpacer.core.EngineOutput
 import com.mpacer.core.MpacerFormat
@@ -171,14 +166,6 @@ private enum class VueCourse { ALLURE, TOUR, CARDIO, OBJECTIF }
 
 private val VUES_EN_COURSE = VueCourse.entries
 
-/** Le pager de Compose, vu par l'indicateur de pages de Wear. */
-private class EtatPages(private val pager: PagerState) : PageIndicatorState {
-    override val pageOffset: Float get() = pager.currentPageOffsetFraction
-    override val selectedPage: Int get() = pager.currentPage
-    override val pageCount: Int get() = pager.pageCount
-}
-
-@OptIn(ExperimentalWearMaterialApi::class)
 @Composable
 private fun Seance(
     output: EngineOutput?,
@@ -219,17 +206,10 @@ private fun Seance(
                     }
                 }
             }
-            // Style courbe : les points suivent le bord du cadran au lieu de
-            // s'entasser dans un coin, ou le cercle les coupe.
-            HorizontalPageIndicator(
-                pageIndicatorState = EtatPages(pages),
-                modifier = Modifier.fillMaxSize(),
-                indicatorStyle = PageIndicatorStyle.Curved,
-                selectedColor = Palette.orange,
-                unselectedColor = Palette.muted2,
-            )
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
+        PageIndicator(count = VUES_EN_COURSE.size, current = pages.currentPage)
+        Spacer(Modifier.height(6.dp))
         Commandes(enPause, onPrincipal, onStop)
         Spacer(Modifier.height(4.dp))
     }

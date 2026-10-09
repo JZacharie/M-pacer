@@ -259,6 +259,32 @@ fun SettingRow(
     }
 }
 
+/**
+ * Points de pagination : une pastille par vue, la courante en orange.
+ *
+ * Dessines ici plutot que par l'indicateur de Wear : celui-ci se pose en calque
+ * plein ecran, or sur un cadran rond un tel calque intercepte le geste qu'il est
+ * cense illustrer, et ses points tombent dans le coin -- hors du cercle visible.
+ */
+@Composable
+fun PageIndicator(count: Int, current: Int, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (index in 0 until count) {
+            val actif = index == current
+            Box(
+                modifier = Modifier
+                    .size(if (actif) 7.dp else 5.dp)
+                    .clip(CircleShape)
+                    .background(if (actif) Palette.orange else Palette.muted2.copy(alpha = 0.55f)),
+            )
+        }
+    }
+}
+
 /** Retour : un rond, toujours au meme endroit, en bas du cadran. */
 @Composable
 fun BackButton(onClick: () -> Unit, modifier: Modifier = Modifier) {

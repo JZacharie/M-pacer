@@ -144,7 +144,13 @@ depuis un telephone.
 - **Chercher un compte** : adresse ou nom, resultats avec photo de profil et
   bouton *Demander en ami*.
 - **Demandes recues** : photo, nom, adresse, mot, boutons *Accepter* et
-  *Refuser* ; les demandes envoyees sont comptees.
+  *Refuser*.
+- **Demandes envoyees** : la liste des demandes en attente, avec leur photo et
+  un bouton *Annuler* (l'expediteur retire lui-meme sa demande).
+- **Notification** : une pastille sur l'onglet *Amis* (en-tete et barre
+  d'onglets) et le nombre entre parentheses dans le titre du navigateur, sur
+  toutes les pages ; le compteur vient de `users.pending_friend_requests`,
+  rempli a la resolution de la session.
 - **Inviter un ami** (raccourci) : code en grand, bouton *Copier*, lien
   `/amis?code=...`, bouton *Nouveau code*.
 - **Carte** : fond OpenStreetMap, marqueurs des amis et de soi-meme, trace de la
@@ -180,10 +186,14 @@ le partage avec les amis est indisponible.
 
 L'onglet **Amis** du telephone (module `:phone`) propose la recherche de compte
 (adresse ou nom), l'envoi d'une demande, les **demandes recues** avec *Accepter* /
-*Refuser*, la liste des amis avec **photo de profil** (`AvatarLoader` charge
-`/avatar/{id}` et affiche les initiales si le service n'a pas de photo), leurs
-chiffres et la carte OpenStreetMap en WebView. Le code d'invitation reste
-disponible comme raccourci.
+*Refuser*, les **demandes envoyees** avec *Annuler*, la liste des amis avec
+**photo de profil** (`AvatarLoader` charge `/avatar/{id}` et affiche les
+initiales si le service n'a pas de photo), leurs chiffres et la carte
+OpenStreetMap en WebView. Le code d'invitation reste disponible comme raccourci.
+
+Une **notification systeme** previent quand une demande arrive : le socle
+compare les demandes a chaque chargement et `FriendsNotifier` poste une
+notification (canal « Demandes d'amis ») pour les nouvelles seulement.
 
 Trois conditions pour que vos amis vous voient courir, toutes verifiees a
 l'ecran :

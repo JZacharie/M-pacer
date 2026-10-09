@@ -1877,13 +1877,7 @@ async fn deemix_list_exports_the_download_links() {
 #[tokio::test]
 async fn music_page_has_six_blocks_and_downloads_the_manifest() {
     let (app, state) = app_or_skip!(test_app(true).await);
-    // Compte dedie : l'etat vide de la page ne doit pas dependre du compte
-    // dev@localhost, qu'un autre test peut configurer pour Deezer en parallele.
-    let utilisateur = compte(&state, "music-blocs@example.org").await;
-    let session = format!(
-        "mpacer_session={}",
-        mpacer_api::auth::issue_session(&state.config, &utilisateur, state.now_ms()).unwrap()
-    );
+    let (_user, session) = dev_user_session(&state).await;
 
     // La page vide presente les six blocs de la maquette v4 (docs/11) et ne
     // propose toujours aucun televersement audio cote serveur.

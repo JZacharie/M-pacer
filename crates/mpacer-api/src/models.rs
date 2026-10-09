@@ -15,6 +15,14 @@ pub struct User {
     /// Vrai si le compte partage sa position en direct avec ses amis.
     #[serde(default = "default_share_live")]
     pub share_live: bool,
+    /// Demandes d'amitie recues et pas encore validees.
+    ///
+    /// Ce n'est pas une colonne : la valeur est remplie a la resolution de la
+    /// session, pour que la pastille de l'onglet « Amis » s'affiche sur toutes
+    /// les pages sans ajouter de requete aux routes API.
+    #[serde(default)]
+    #[sqlx(default)]
+    pub pending_friend_requests: i64,
 }
 
 /// Valeur par defaut d'un compte sans reglage explicite : le partage est actif

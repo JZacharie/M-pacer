@@ -62,6 +62,11 @@ pub fn router() -> Router<AppState> {
             "/amis/demandes/{id}/refuser",
             post(friends_request_decline_submit),
         )
+        // Annulation par l'expediteur : sa demande en attente disparait.
+        .route(
+            "/amis/demandes/{id}/annuler",
+            post(friends_request_cancel_submit),
+        )
         .route("/amis/{id}/retirer", post(friends_remove_submit))
         // Tableaux de bord : ecrans composes par l'utilisateur (docs/08).
         .route("/dashboards", get(dashboards_page))
@@ -2124,7 +2129,13 @@ fn layout_refresh(
                 @if let Some(secondes) = refresh_s {
                     meta http-equiv="refresh" content=(secondes);
                 }
-                title { (title) " - M-pacer" }
+                @if let Some(en_attente) = user.map(|utilisateur| utilisateur.pending_friend_requests).filter(|n| *n > 0) {
+                    // Pastille dans l'onglet du navigateur : visible depuis
+                    // n'importe quelle page, sans notification systeme.
+                    title { "(" (en_attente) ") " (title) " - M-pacer" }
+                } @else {
+                    title { (title) " - M-pacer" }
+                }
                 link rel="stylesheet" href="/static/app.css";
                 // Favicon : la marque seule, servie par le service (aucune image externe).
                 link rel="icon" type="image/svg+xml" href="/static/logo-mark.svg";
@@ -2134,11 +2145,14 @@ fn layout_refresh(
                     // Logo complet (marque + mot-cle) fourni par le chantier design.
                     a class="brand logo" href="/" { (PreEscaped(crate::assets::LOGO_SVG)) }
                     nav {
-                        @if user.is_some() {
+                        @if let Some(user) = user {
                             @for (cle, libelle, icone, chemin) in NAV {
                                 a href=(chemin) class=(if cle == active { "active" } else { "" }) {
                                     span class={ "icon " (icone) } {}
                                     (libelle)
+                                    @if cle == "amis" && user.pending_friend_requests > 0 {
+                                        span class="nav-badge" { (user.pending_friend_requests) }
+                                    }
                                 }
                             }
                         } @else {
@@ -2158,12 +2172,15 @@ fn layout_refresh(
                 // Slogan du pied de page : la promesse du projet (aucun tiers,
                 // aucune donnee qui part) et le rappel de ce qu'il reste a faire.
                 footer { "M-pacer - " (mpacer_core::VERSION) " - Vos données restent chez vous, vous courez !" }
-                @if user.is_some() {
+                @if let Some(user) = user {
                     nav class="tabbar" aria-label="Navigation principale" {
                         @for (cle, libelle, icone, chemin) in NAV {
                             a href=(chemin) class=(if cle == active { "active" } else { "" }) {
                                 span class={ "icon " (icone) } {}
                                 span { (libelle) }
+                                @if cle == "amis" && user.pending_friend_requests > 0 {
+                                    span class="nav-badge" { (user.pending_friend_requests) }
+                                }
                             }
                         }
                     }
@@ -7489,6 +7506,20 @@ async fn friends_request_decline_submit(
     }
 }
 
+/// Annule une demande envoyee : elle disparait de la liste des deux comptes.
+async fn friends_request_cancel_submit(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    if crate::db::cancel_friend_request(&state.pool, &id, &user.id).await? {
+        tracing::info!(user = %user.email, demande = %id, "demande d'amitie annulee");
+        Ok(Redirect::to("/amis?ok=annule").into_response())
+    } else {
+        Ok(Redirect::to("/amis?erreur=introuvable").into_response())
+    }
+}
+
 /// Retire un ami : plus aucune position ne circule entre les deux comptes.
 async fn friends_remove_submit(
     State(state): State<AppState>,
@@ -7624,6 +7655,20 @@ fn friends_content(page: FriendsPage) -> Markup {
             @if !page.attente.is_empty() {
                 p class="tiny muted" {
                     (page.attente.len()) " demande(s) envoyee(s), en attente de reponse."
+                }
+            }
+        }
+
+        // Demandes envoyees : on peut encore les annuler tant que l'autre n'a
+        // pas repondu.
+        @if !page.attente.is_empty() {
+            section class="panel" id="envoyees" {
+                div class="section-head" {
+                    h2 { "Demandes envoyees" }
+                    span class="pill" { (page.attente.len()) " en attente" }
+                }
+                @for demande in page.attente {
+                    (outgoing_card(demande, cercle.now_ms))
                 }
             }
         }
@@ -7801,6 +7846,30 @@ fn request_card(demande: &FriendRequestView, now_ms: i64) -> Markup {
     }
 }
 
+/// Fiche d'une demande envoyee : l'autre compte, et de quoi l'annuler.
+fn outgoing_card(demande: &FriendRequestView, now_ms: i64) -> Markup {
+    let compte = &demande.to;
+    html! {
+        section class="card live-card" {
+            div class="section-head" {
+                h2 { (compte.display_name()) }
+                span class="pill off" { "en attente" }
+            }
+            div class="ami-identite" {
+                (avatar_img(&compte.id, 40))
+                p class="tiny muted" { (compte.email) }
+            }
+            p class="tiny muted" {
+                "Demande envoyee " (since_label(now_ms - demande.created_at_ms)) "."
+            }
+            form method="post" action=(format!("/amis/demandes/{}/annuler", demande.id))
+                 data-confirm="Annuler cette demande ?" {
+                button type="submit" class="button ghost danger" { "Annuler" }
+            }
+        }
+    }
+}
+
 /// Message de confirmation (code court dans l'URL, phrase ici).
 fn friends_ok_message(code: &str) -> &'static str {
     match code {
@@ -7813,6 +7882,7 @@ fn friends_ok_message(code: &str) -> &'static str {
         "demande_directe" => "Vous vous etiez deja demande : vous etes maintenant amis.",
         "accepte" => "Demande acceptee : vous etes maintenant amis.",
         "refuse" => "Demande refusee : elle a ete retiree.",
+        "annule" => "Demande annulee : elle ne figure plus chez l'autre compte.",
         _ => "C'est fait.",
     }
 }
@@ -8019,11 +8089,88 @@ mod friends_web_tests {
         assert!(markup.contains("/avatar/u2"), "{markup}");
     }
 
+    /// Demande envoyee, en attente de la reponse de l'autre.
+    fn envoyee() -> FriendRequestView {
+        FriendRequestView {
+            id: "r2".to_string(),
+            direction: crate::friends::REQUEST_OUTGOING.to_string(),
+            from: compte("u1"),
+            to: compte("u2"),
+            message: None,
+            created_at_ms: 9_000,
+        }
+    }
+
+    #[test]
+    fn a_sent_request_is_listed_and_can_be_cancelled() {
+        let cercle = cercle(None, true);
+        let envoyees = vec![envoyee()];
+        let markup = friends_content(FriendsPage {
+            cercle: &cercle,
+            invitation: None,
+            demandes: &[],
+            attente: &envoyees,
+            recherche: "",
+            resultats: &[],
+            query: &requete(),
+        })
+        .into_string();
+        assert!(markup.contains("Demandes envoyees"), "{markup}");
+        assert!(markup.contains("Annuler"), "{markup}");
+        assert!(markup.contains("/amis/demandes/r2/annuler"), "{markup}");
+        // La fiche montre la photo du compte vise.
+        assert!(markup.contains("/avatar/u2"), "{markup}");
+    }
+
+    #[test]
+    fn the_navigation_shows_a_badge_for_pending_requests() {
+        let utilisateur = User {
+            id: "u1".into(),
+            google_sub: None,
+            share_live: true,
+            email: "coureur@example.org".into(),
+            name: Some("Coureur".into()),
+            picture_url: None,
+            created_at_ms: 0,
+            last_seen_ms: 0,
+            pending_friend_requests: 2,
+        };
+        let markup = layout("Reglages", "reglages", Some(&utilisateur), html! {}).into_string();
+        assert!(markup.contains("nav-badge"), "{markup}");
+        assert!(
+            markup.contains("href=\"/amis\""),
+            "le badge reste sur l'onglet Amis : {markup}"
+        );
+        assert!(
+            markup.contains("(2) Reglages - M-pacer"),
+            "pastille dans l'onglet du navigateur : {markup}"
+        );
+    }
+
+    #[test]
+    fn no_badge_without_a_pending_request() {
+        let utilisateur = User {
+            id: "u1".into(),
+            google_sub: None,
+            share_live: true,
+            email: "coureur@example.org".into(),
+            name: Some("Coureur".into()),
+            picture_url: None,
+            created_at_ms: 0,
+            last_seen_ms: 0,
+            pending_friend_requests: 0,
+        };
+        let markup = layout("Reglages", "reglages", Some(&utilisateur), html! {}).into_string();
+        assert!(!markup.contains("nav-badge"), "{markup}");
+        assert!(!markup.contains("(0)"), "{markup}");
+    }
+
     #[test]
     fn messages_are_written_in_plain_french() {
         assert!(friends_ok_message("ajout").contains("Ami ajoute"));
         assert!(friends_ok_message("demande").contains("Demande envoyee"));
         assert!(friends_ok_message("accepte").contains("maintenant amis"));
+        assert!(friends_ok_message("annule").contains("annulee"));
         assert!(friends_error_message("inconnu").contains("Code inconnu"));
         assert!(friends_error_message("propre").contains("votre propre code"));
         assert!(friends_error_message("deja_envoye").contains("attend deja"));
@@ -8451,6 +8598,7 @@ mod navigation_web_tests {
             picture_url: None,
             created_at_ms: 0,
             last_seen_ms: 0,
+            pending_friend_requests: 0,
         };
         let markup = layout("Reglages", "reglages", Some(&user), html! {}).into_string();
         assert!(markup.contains("href=\"/settings\""), "{markup}");

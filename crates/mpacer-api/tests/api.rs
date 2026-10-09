@@ -1877,7 +1877,13 @@ async fn deemix_list_exports_the_download_links() {
 #[tokio::test]
 async fn music_page_has_six_blocks_and_downloads_the_manifest() {
     let (app, state) = app_or_skip!(test_app(true).await);
-    let (_user, session) = dev_user_session(&state).await;
+    // Compte dedie : l'etat vide de la page ne doit pas dependre du compte
+    // dev@localhost, qu'un autre test peut configurer pour Deezer en parallele.
+    let utilisateur = compte(&state, "music-blocs@example.org").await;
+    let session = format!(
+        "mpacer_session={}",
+        mpacer_api::auth::issue_session(&state.config, &utilisateur, state.now_ms()).unwrap()
+    );
 
     // La page vide presente les six blocs de la maquette v4 (docs/11) et ne
     // propose toujours aucun televersement audio cote serveur.
@@ -1893,7 +1899,7 @@ async fn music_page_has_six_blocks_and_downloads_the_manifest() {
         "2. Playlists preparees",
         "3. Titres (playlist selectionnee)",
         "4. Fichiers a preparer (MP3)",
-        "5. Transfert vers la montre (USB)",
+        "5. Envoyer les MP3 vers l'appareil",
         "6. Assez de musique pour la course ?",
         "Deezer n'est pas configure",
         "Aucune playlist pour l'instant",
@@ -3782,5 +3788,74 @@ async fn declining_a_friend_request_leaves_no_friendship() {
         let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
         assert_eq!(corps["total"], 0, "{corps}");
         assert_eq!(corps["pending_requests"], 0, "{corps}");
+    }
+}
+
+/// Amis : une demande envoyee peut etre annulee par son expediteur.
+#[tokio::test]
+async fn cancelling_an_outgoing_request_removes_it() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let emma = compte(&state, "annule-emma@example.org").await;
+    let farid = compte(&state, "annule-farid@example.org").await;
+    let jeton_emma = device_token(&state, &emma.id).await;
+    let jeton_farid = device_token(&state, &farid.id).await;
+
+    let reponse = app
+        .clone()
+        .oneshot(json_bearer(
+            "POST",
+            "/api/v1/friends/requests",
+            r#"{"email":"annule-farid@example.org"}"#,
+            &jeton_emma,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(reponse.status(), StatusCode::OK);
+    let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+    let id = corps["request"]["id"].as_str().unwrap().to_string();
+
+    // L'expediteur voit sa demande en attente.
+    let reponse = app
+        .clone()
+        .oneshot(json_bearer(
+            "GET",
+            "/api/v1/friends/requests",
+            "",
+            &jeton_emma,
+        ))
+        .await
+        .unwrap();
+    let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+    assert_eq!(corps["outgoing"][0]["id"], id, "{corps}");
+
+    // Le destinataire ne peut pas l'annuler : c'est une demande recue, pas envoyee.
+    let annulation_farid = Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/v1/friends/requests/{id}"))
+        .header(header::AUTHORIZATION, format!("Bearer {jeton_farid}"))
+        .body(Body::empty())
+        .unwrap();
+    let reponse = app.clone().oneshot(annulation_farid).await.unwrap();
+    assert_eq!(reponse.status(), StatusCode::NOT_FOUND);
+
+    // L'expediteur annule : plus rien des deux cotes.
+    let annulation_emma = Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/v1/friends/requests/{id}"))
+        .header(header::AUTHORIZATION, format!("Bearer {jeton_emma}"))
+        .body(Body::empty())
+        .unwrap();
+    let reponse = app.clone().oneshot(annulation_emma).await.unwrap();
+    assert_eq!(reponse.status(), StatusCode::NO_CONTENT);
+
+    for jeton in [&jeton_emma, &jeton_farid] {
+        let reponse = app
+            .clone()
+            .oneshot(json_bearer("GET", "/api/v1/friends/requests", "", jeton))
+            .await
+            .unwrap();
+        let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+        assert!(corps["incoming"].as_array().unwrap().is_empty(), "{corps}");
+        assert!(corps["outgoing"].as_array().unwrap().is_empty(), "{corps}");
     }
 }

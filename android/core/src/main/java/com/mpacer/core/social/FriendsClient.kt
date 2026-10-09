@@ -187,7 +187,17 @@ object FriendsClient {
                 _state.update { it.copy(error = "Reponse illisible du serveur") }
                 return false
             }
+        // Une demande qui apparait entre deux chargements declenche une
+        // notification systeme ; la comparaison des identifiants evite de
+        // notifier deux fois la meme demande.
+        val precedentes = _state.value.requests?.incoming?.map { it.id }?.toSet()
         _state.update { it.copy(requests = demandes, error = null) }
+        if (precedentes != null) {
+            val nouvelles = demandes.incoming.filter { it.id !in precedentes }
+            if (nouvelles.isNotEmpty()) {
+                FriendsNotifier.notifyNewRequests(context, nouvelles)
+            }
+        }
         return true
     }
 
@@ -242,6 +252,14 @@ object FriendsClient {
     suspend fun declineRequest(context: Context, id: String): Boolean {
         if (!poster(context, "/api/v1/friends/requests/" + id + "/decline", null)) return false
         _state.update { it.copy(message = "Demande refusee.", error = null) }
+        loadRequests(context)
+        return true
+    }
+
+    /** Annule une demande envoyee : elle disparait, rien d'autre ne change. */
+    suspend fun cancelRequest(context: Context, id: String): Boolean {
+        if (!poster(context, "/api/v1/friends/requests/" + id, null, methode = "DELETE")) return false
+        _state.update { it.copy(message = "Demande annulee.", error = null) }
         loadRequests(context)
         return true
     }

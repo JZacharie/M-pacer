@@ -19,6 +19,8 @@
     <!-- Detection d'activite (auto-pause) et capteur cardiaque eventuel. -->
     <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <uses-permission android:name="android.permission.BODY_SENSORS" />
+    <!-- Notifications : prevenir quand une demande d'ami arrive (Android 13+). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Ceinture cardiaque Bluetooth LE. -->
     <uses-permission

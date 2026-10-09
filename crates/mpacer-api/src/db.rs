@@ -2050,6 +2050,23 @@ pub async fn decline_friend_request(
     Ok(resultat.rows_affected() > 0)
 }
 
+/// Annule une demande envoyee : elle disparait, rien d'autre ne change.
+///
+/// Seul l'expediteur peut annuler sa propre demande (la condition porte sur
+/// from_user_id) : un compte ne peut pas effacer une demande recue par erreur.
+pub async fn cancel_friend_request(
+    pool: &PgPool,
+    request_id: &str,
+    user_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let resultat = sqlx::query("DELETE FROM friend_requests WHERE id = $1 AND from_user_id = $2")
+        .bind(request_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(resultat.rows_affected() > 0)
+}
+
 /// Amitie dans les deux sens, dans une transaction deja ouverte.
 async fn add_friendship_tx(
     tx: &mut sqlx::PgConnection,

@@ -245,6 +245,7 @@ mod tests {
             picture_url: None,
             created_at_ms: 0,
             last_seen_ms: 0,
+            pending_friend_requests: 0,
         }
     }
 

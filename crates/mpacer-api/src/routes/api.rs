@@ -55,6 +55,11 @@ pub fn router() -> Router<AppState> {
             "/api/v1/friends/requests/{id}/decline",
             post(decline_friend_request),
         )
+        // Annulation par l'expediteur : sa demande en attente disparait.
+        .route(
+            "/api/v1/friends/requests/{id}",
+            delete(cancel_friend_request),
+        )
         .route("/api/v1/friends/{id}", delete(remove_friend))
         .route("/api/v1/workouts", post(upload_workout).get(list_workouts))
         .route(
@@ -1111,6 +1116,20 @@ async fn decline_friend_request(
 ) -> AppResult<axum::http::StatusCode> {
     if crate::db::decline_friend_request(&state.pool, &id, &user.id).await? {
         tracing::info!(user = %user.email, demande = %id, "demande d'amitie refusee");
+        Ok(axum::http::StatusCode::NO_CONTENT)
+    } else {
+        Err(AppError::NotFound)
+    }
+}
+
+/// Annule une demande envoyee : elle disparait de la liste des deux comptes.
+async fn cancel_friend_request(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<axum::http::StatusCode> {
+    if crate::db::cancel_friend_request(&state.pool, &id, &user.id).await? {
+        tracing::info!(user = %user.email, demande = %id, "demande d'amitie annulee");
         Ok(axum::http::StatusCode::NO_CONTENT)
     } else {
         Err(AppError::NotFound)

@@ -168,6 +168,13 @@ impl FromRequestParts<AppState> for OptionalUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        Ok(OptionalUser(resolve_user(state, parts).await?))
+        let mut utilisateur = resolve_user(state, parts).await?;
+        // Les pages affichent la pastille des demandes d'amis ; on la remplit ici
+        // pour que toutes les pages en beneficient, sans requete par gestionnaire.
+        if let Some(user) = utilisateur.as_mut() {
+            user.pending_friend_requests =
+                crate::db::count_incoming_friend_requests(&state.pool, &user.id).await?;
+        }
+        Ok(OptionalUser(utilisateur))
     }
 }

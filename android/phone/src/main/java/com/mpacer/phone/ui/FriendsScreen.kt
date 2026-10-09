@@ -288,6 +288,34 @@ fun FriendsScreen() {
             }
         }
 
+        // --------------------------------------------------- demandes envoyees
+        val envoyees = etat.requests?.outgoing.orEmpty()
+        if (envoyees.isNotEmpty()) {
+            Card(colors = CardDefaults.cardColors(containerColor = Palette.surface)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("Demandes envoyees", color = Palette.muted, fontSize = 12.sp)
+                    Text(
+                        envoyees.size.toString() + " en attente de reponse",
+                        color = Palette.muted,
+                        fontSize = 12.sp,
+                    )
+                    envoyees.forEach { demande ->
+                        CarteEnvoyee(
+                            demande = demande,
+                            onCancel = {
+                                scope.launch { FriendsClient.cancelRequest(context, demande.id) }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
         // --------------------------------------------------------- ajout d'ami
         Card(colors = CardDefaults.cardColors(containerColor = Palette.surface)) {
             Column(
@@ -493,6 +521,36 @@ private fun CarteDemande(demande: FriendRequest, onAccept: () -> Unit, onDecline
                 TextButton(onClick = onDecline) {
                     Text("Refuser", color = Palette.danger)
                 }
+            }
+        }
+    }
+}
+
+/** Fiche d'une demande envoyee : en attente, avec l'annulation. */
+@Composable
+private fun CarteEnvoyee(demande: FriendRequest, onCancel: () -> Unit) {
+    val compte = demande.to
+    Card(colors = CardDefaults.cardColors(containerColor = Palette.surface)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                PhotoProfil(id = compte.id, nom = compte.displayName, taille = 40.dp)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(compte.displayName, color = Palette.texte, fontWeight = FontWeight.Medium)
+                    Text(compte.email, color = Palette.muted, fontSize = 11.sp)
+                }
+            }
+            Text("En attente de reponse", color = Palette.muted, fontSize = 11.sp)
+            TextButton(onClick = onCancel) {
+                Text("Annuler", color = Palette.danger)
             }
         }
     }

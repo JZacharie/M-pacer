@@ -25,6 +25,7 @@ import com.mpacer.core.live.LiveProbe
 import com.mpacer.core.live.LiveSettings
 import com.mpacer.core.live.LiveTracker
 import com.mpacer.core.music.MusicConfig
+import com.mpacer.core.music.MusicPlayer
 import com.mpacer.core.music.MusicSession
 import com.mpacer.watch.ui.LiveSettingsScreen
 import com.mpacer.watch.ui.MainScreen
@@ -52,6 +53,9 @@ class MainActivity : ComponentActivity() {
         SyncClient.pairingLabel = BuildConfig.PAIRING_LABEL
         LiveSettings.deviceFallback = "montre"
         VoiceCoach.initialise(this)
+        // Lecteur pret avant la seance : la vue Musique en course doit pouvoir
+        // regler le volume des la premiere ouverture, meme sans piste chargee.
+        MusicPlayer.prepare(this)
         applyApiUrl(intent)
         requestPermissions.launch(
             arrayOf(
@@ -81,6 +85,7 @@ class MainActivity : ComponentActivity() {
         }
         val liveState by LiveTracker.state.collectAsState()
         val probeState by LiveProbe.state.collectAsState()
+        val player by MusicPlayer.state.collectAsState()
 
         // Les reglages musique partent tout de suite au moteur (ou sont gardes
         // par MusicSession si la seance n'a pas encore demarre).
@@ -139,6 +144,14 @@ class MainActivity : ComponentActivity() {
                 onSettings = { showSettings = true },
                 onSync = { showSync = true },
                 onMusic = { showMusic = true },
+                player = player,
+                // Commandes de la vue Musique en course : volume du flux media
+                // de la montre et deplacement dans la file locale (docs/07).
+                onVolumeDown = { MusicPlayer.volumeDown() },
+                onVolumeUp = { MusicPlayer.volumeUp() },
+                onMusicPrevious = { MusicPlayer.previous() },
+                onMusicNext = { MusicPlayer.next() },
+                onMusicToggle = { MusicPlayer.toggle() },
             )
         }
     }

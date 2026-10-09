@@ -7016,6 +7016,28 @@ fn live_content(
                 }
             }
         } @else {
+            // Fond de carte reutilisable (page Amis et fiche de seance) : ici il
+            // relit /live.json, qui porte la trace de chaque montre en direct.
+            section class="panel" {
+                div class="section-head" {
+                    h2 { "Carte en direct" }
+                    span class="pill brand" { "OpenStreetMap" }
+                }
+                p class="tiny muted" {
+                    "Position et trace de chaque montre, rafraichies toutes les dix secondes. "
+                    "Le fond de carte est dessine par le script du site ; seules les tuiles "
+                    "viennent d'OpenStreetMap."
+                }
+                div id="carte-live" class="carte-vue" data-carte="1" data-source="/live.json"
+                    data-periode="10000" data-zoom="14" {}
+                noscript {
+                    p class="tiny muted" {
+                        "La carte demande JavaScript ; la trace et la position de chaque montre "
+                        "restent lisibles ci-dessous."
+                    }
+                }
+                script src="/static/map.js" defer {}
+            }
             @for session in sessions {
                 (live_card(session, now_ms))
             }
@@ -7082,8 +7104,20 @@ fn live_card(session: &LiveSessionView, now_ms: i64) -> Markup {
                 (mini_card("Batterie", &option_percent(dernier.and_then(|point| point.battery_percent))))
                 (mini_card("Precision", &option_accuracy(dernier.and_then(|point| point.accuracy_m))))
                 (mini_card("Points", &session.points.to_string()))
+                @if session.progress_pct.is_some() {
+                    (mini_card(
+                        "Parcours",
+                        &option_parcours(
+                            session.progress_pct,
+                            session.route_total_m,
+                            session.route_remaining_m,
+                            session.off_route_m,
+                        ),
+                    ))
+                }
             }
             (trace_svg(&session.trace))
+            (live_denivele_chart(&session.trace))
             @if let Some(point) = dernier {
                 div class="live-foot" {
                     p class="tiny muted" {
@@ -7175,6 +7209,109 @@ fn trace_svg(points: &[LivePoint]) -> Markup {
     }
 }
 
+/// Profil de denivele de la trace en direct : altitude en fonction de la distance.
+///
+/// La montre publie l'altitude depuis peu ([LivePoint::altitude_m]) : sans elle,
+/// la fonction ne rend rien et la page garde exactement l'aspect d'avant. Le
+/// gain et la perte sont cumules avec un seuil de 1 m, pour ne pas additionner
+/// le bruit du GPS en denivele.
+fn live_denivele_chart(points: &[LivePoint]) -> Markup {
+    const LARGEUR: f64 = 1000.0;
+    const HAUTEUR: f64 = 180.0;
+    const MARGE: f64 = 14.0;
+    /// Variation ignoree : sous ce seuil, c'est le GPS qui tremble.
+    const SEUIL_M: f64 = 1.0;
+
+    let mesures: Vec<(&LivePoint, f64)> = points
+        .iter()
+        .filter_map(|point| {
+            point
+                .altitude_m
+                .filter(|altitude| altitude.is_finite())
+                .map(|altitude| (point, altitude))
+        })
+        .collect();
+    if mesures.len() < 2 {
+        return html! {};
+    }
+    // Si chaque point porte une distance, l'axe des x est la distance reelle ;
+    // sinon on retombe sur le rang du point (la forme reste juste).
+    let distances_connues = mesures
+        .iter()
+        .all(|(point, _)| point.distance_m.is_some_and(|distance| distance.is_finite()));
+    let profil: Vec<(f64, f64)> = mesures
+        .iter()
+        .enumerate()
+        .map(|(rang, (point, altitude))| {
+            let x = if distances_connues {
+                point.distance_m.unwrap_or(0.0)
+            } else {
+                rang as f64
+            };
+            (x, *altitude)
+        })
+        .collect();
+    let fin = profil.last().map(|(x, _)| *x).unwrap_or(0.0);
+    if fin <= 0.0 {
+        return html! {};
+    }
+
+    let altitude_min = profil.iter().map(|(_, alt)| *alt).fold(f64::INFINITY, f64::min);
+    let altitude_max = profil.iter().map(|(_, alt)| *alt).fold(f64::NEG_INFINITY, f64::max);
+    let marge = ((altitude_max - altitude_min) * 0.1).max(3.0);
+    let bas = altitude_min - marge;
+    let etendue = (altitude_max + marge - bas).max(1e-6);
+    let x_de = |distance: f64| MARGE + (distance / fin).clamp(0.0, 1.0) * (LARGEUR - 2.0 * MARGE);
+    let y_de = |altitude: f64| HAUTEUR - MARGE - ((altitude - bas) / etendue) * (HAUTEUR - 2.0 * MARGE);
+
+    let mut ligne = String::with_capacity(profil.len() * 14);
+    for (distance, altitude) in &profil {
+        let _ = write!(ligne, "{:.1},{:.1} ", x_de(*distance), y_de(*altitude));
+    }
+    let ligne = ligne.trim_end().to_string();
+    // Aire fermee : la meme ligne, refermee sur la base du cadre.
+    let aire = format!(
+        "{:.1},{:.1} {} {:.1},{:.1}",
+        x_de(profil[0].0),
+        HAUTEUR - MARGE,
+        ligne,
+        x_de(fin),
+        HAUTEUR - MARGE
+    );
+
+    let (mut gain, mut perte) = (0.0_f64, 0.0_f64);
+    for fenetre in profil.windows(2) {
+        let delta = fenetre[1].1 - fenetre[0].1;
+        if delta >= SEUIL_M {
+            gain += delta;
+        } else if delta <= -SEUIL_M {
+            perte -= delta;
+        }
+    }
+
+    html! {
+        div class="chart-block" {
+            svg class="chart" viewBox=(format!("0 0 {LARGEUR:.0} {HAUTEUR:.0}"))
+                preserveAspectRatio="none" role="img"
+                aria-label="Profil de denivele de la seance en cours" {
+                polygon class="aire denivele" points=(aire) {}
+                polyline class="trace denivele" points=(ligne) {}
+                text class="chart-label" x="4" y="13" { (format!("{altitude_max:.0} m")) }
+                text class="chart-label" x="4" y=(format!("{:.0}", HAUTEUR - 4.0)) {
+                    (format!("{altitude_min:.0} m"))
+                }
+            }
+            p class="tiny muted" {
+                "Denivele : D+ " (format!("{gain:.0} m"))
+                " - D- " (format!("{perte:.0} m"))
+                " - de " (format!("{altitude_min:.0} m"))
+                " a " (format!("{altitude_max:.0} m"))
+                " sur " (format!("{:.2} km", fin / 1000.0))
+            }
+        }
+    }
+}
+
 /// Lien OpenStreetMap sur la derniere position connue.
 fn osm_url(lat: f64, lon: f64) -> String {
     format!("https://www.openstreetmap.org/?mlat={lat:.6}&mlon={lon:.6}#map=16/{lat:.6}/{lon:.6}")
@@ -7230,6 +7367,33 @@ fn option_percent(valeur: Option<i64>) -> String {
     valeur
         .map(|pourcent| format!("{pourcent} %"))
         .unwrap_or_else(|| "-".to_string())
+}
+
+/// Avancement sur le parcours planifie : « 42 % (3,1 / 7,6 km) ».
+///
+/// Quand le coureur s'ecarte du trace, l'ecart est affiche : c'est l'information
+/// qui manque a un suiveur qui voit un point loin du parcours.
+fn option_parcours(
+    progress_pct: Option<f64>,
+    total_m: Option<f64>,
+    remaining_m: Option<f64>,
+    off_route_m: Option<f64>,
+) -> String {
+    let Some(pct) = progress_pct else {
+        return "-".to_string();
+    };
+    let base = match (total_m, remaining_m) {
+        (Some(total), Some(reste)) => format!(
+            "{pct:.0} % ({:.1} / {:.1} km)",
+            ((total - reste) / 1000.0).max(0.0),
+            total / 1000.0
+        ),
+        _ => format!("{pct:.0} %"),
+    };
+    match off_route_m {
+        Some(ecart) if ecart > 50.0 => format!("{base} - hors trace {ecart:.0} m"),
+        _ => base,
+    }
 }
 
 fn option_accuracy(valeur: Option<f64>) -> String {
@@ -7760,6 +7924,17 @@ fn friend_card(ami: &crate::friends::FriendView, now_ms: i64) -> Markup {
                     (mini_card("Batterie", &option_percent(position.battery_percent)))
                     (mini_card("Tour", &position.lap.map(|tour| tour.to_string()).unwrap_or_else(|| "-".to_string())))
                     (mini_card("Precision", &option_accuracy(position.accuracy_m)))
+                    @if position.progress_pct.is_some() {
+                        (mini_card(
+                            "Parcours",
+                            &option_parcours(
+                                position.progress_pct,
+                                position.route_total_m,
+                                position.route_remaining_m,
+                                position.off_route_m,
+                            ),
+                        ))
+                    }
                 }
                 div class="live-foot" {
                     p class="tiny muted" {
@@ -7959,6 +8134,11 @@ mod friends_web_tests {
             battery_percent: Some(76),
             lap: Some(2),
             trace: vec![[48.85, 2.35]],
+            route: Vec::new(),
+            route_total_m: None,
+            progress_pct: None,
+            route_remaining_m: None,
+            off_route_m: None,
         }
     }
 
@@ -8635,6 +8815,7 @@ mod live_web_tests {
             lat,
             lon,
             accuracy_m: Some(4.0),
+            altitude_m: None,
             distance_m: Some(1_200.0),
             pace_s_per_km: Some(300.0),
             heart_rate_bpm: Some(145),
@@ -8659,6 +8840,11 @@ mod live_web_tests {
             duration_s: Some(600.0),
             pace_s_per_km: Some(300.0),
             last: dernier,
+            route: Vec::new(),
+            route_total_m: None,
+            progress_pct: None,
+            route_remaining_m: None,
+            off_route_m: None,
         }
     }
 
@@ -8720,6 +8906,57 @@ mod live_web_tests {
         let (x, y) = points.last().unwrap();
         assert!(markup.contains(&format!("cx=\"{x:.1}\"")), "{markup}");
         assert!(markup.contains(&format!("cy=\"{y:.1}\"")), "{markup}");
+    }
+
+    #[test]
+    fn the_elevation_profile_is_drawn_when_the_watch_publishes_altitudes() {
+        let mut depart = point(0, 48.85, 2.35);
+        depart.distance_m = Some(0.0);
+        depart.altitude_m = Some(100.0);
+        let mut arrivee = point(1, 48.86, 2.36);
+        arrivee.distance_m = Some(1_000.0);
+        arrivee.altitude_m = Some(140.0);
+
+        let markup = live_denivele_chart(&[depart, arrivee]).into_string();
+        assert!(markup.contains("trace denivele"), "{markup}");
+        assert!(markup.contains("aire denivele"), "{markup}");
+        assert!(markup.contains("D+ 40 m"), "{markup}");
+        assert!(markup.contains("1.00 km"), "{markup}");
+
+        // Sans altitude, aucune courbe inventee : la page reste celle d'avant.
+        let sans_altitude = live_denivele_chart(&[point(0, 48.85, 2.35), point(1, 48.86, 2.36)]);
+        assert!(sans_altitude.into_string().is_empty());
+    }
+
+    #[test]
+    fn the_live_page_carries_the_openstreetmap_layer_when_a_watch_publishes() {
+        let markup = live_content(
+            &[session(vec![point(10, 48.85, 2.35)])],
+            &MqttStatus::default(),
+            &config(),
+            20,
+        )
+        .into_string();
+        assert!(markup.contains("data-source=\"/live.json\""), "{markup}");
+        assert!(markup.contains("/static/map.js"), "{markup}");
+        assert!(markup.contains("OpenStreetMap"), "{markup}");
+    }
+
+    #[test]
+    fn the_live_card_shows_where_the_runner_is_on_the_planned_route() {
+        let mut vue = session(vec![point(10, 48.85, 2.35)]);
+        vue.route = vec![[48.85, 2.35], [48.90, 2.40]];
+        vue.route_total_m = Some(7_600.0);
+        vue.route_remaining_m = Some(4_400.0);
+        vue.progress_pct = Some(42.0);
+        vue.off_route_m = Some(12.0);
+
+        let markup = live_content(&[vue], &MqttStatus::default(), &config(), 20).into_string();
+        assert!(markup.contains("Parcours"), "{markup}");
+        assert!(markup.contains("42 %"), "{markup}");
+        assert!(markup.contains("3.2 / 7.6 km"), "{markup}");
+        // Pres du trace : aucun avertissement d'ecart.
+        assert!(!markup.contains("hors trace"), "{markup}");
     }
 
     #[test]

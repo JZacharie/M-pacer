@@ -1107,6 +1107,9 @@ hr { border: none; border-top: 1px solid var(--border); margin: 22px 0; }
 .chart .trace.pace { stroke: var(--orange); }
 .chart .trace.cardio { stroke: var(--info); }
 .chart .trace.elevation { stroke: var(--muted); }
+/* Page /live : profil de denivele de la seance en cours, avec son aire. */
+.chart .trace.denivele { stroke: var(--orange); }
+.chart .aire.denivele { fill: var(--orange); opacity: .16; stroke: none; }
 
 /* Profil altimetrique : chaque portion porte la couleur de sa pente, comme le
    profil de VisuGPX. Le trait garde une epaisseur constante malgre le viewBox. */

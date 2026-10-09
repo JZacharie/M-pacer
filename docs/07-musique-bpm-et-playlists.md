@@ -323,6 +323,20 @@ dans le manifeste.
   supprimer une playlist importee ;
 * l'ecran principal conserve la pastille BPM cible / Boost / Relax.
 
+**En course** (vue ajoutee a l'ecran principal, a cote de l'allure, du tour, du
+cardio et de l'objectif) :
+
+* la vue **Musique** regle le **volume** du flux media de la montre — deux ronds
+  (un cran = 10 %), le pourcentage au centre — et change de **piste** :
+  precedente, lecture/pause, suivante. Aucune sortie de la seance, aucun
+  telephone ;
+* le volume est celui du systeme (`STREAM_MUSIC`), donc celui que baissent et
+  montent les boutons physiques. Un recepteur de diffusion
+  (`android.media.VOLUME_CHANGED_ACTION`, constante `@hide` du framework)
+  remet l'affichage a jour quand le volume change ailleurs ;
+* la vue **Heure** donne l'heure courante, les secondes, la date et le temps de
+  course deja ecoule : de quoi situer la sortie sans interrompre l'enregistrement.
+
 ### 6.5 Application compagnon
 
 L'onglet Musique devient **informatif** : liste des playlists du backend et

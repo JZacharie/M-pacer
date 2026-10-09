@@ -27,7 +27,8 @@ import javax.net.ssl.SSLSocketFactory
  *    l'arrivee ; aucun reveil, aucun verrou de sommeil, aucune minuterie ;
  *  * une file de 16 paquets au maximum : si le reseau tombe, la montre perd les
  *    positions anciennes au lieu de consommer de la memoire et de la radio ;
- *  * QoS 0 et charge utile de 116 octets : moins de 70 ko par heure, en-tetes compris.
+ *  * QoS 0 et charge utile de 116 octets (132 avec l'altitude) : moins de 70 ko
+ *    par heure, en-tetes compris.
  *
  * Sans adresse de broker ([LiveConfig.configured] faux), [start] ne fait rien :
  * le suivi en direct ne coute rien tant qu'il n'est pas configure.
@@ -72,6 +73,7 @@ object LiveTracker {
         val lat: Double,
         val lon: Double,
         val accuracyM: Double?,
+        val altitudeM: Double?,
         val distanceM: Double?,
         val paceSPerKm: Double?,
         val heartRateBpm: Int?,
@@ -103,6 +105,16 @@ object LiveTracker {
             config.deviceName(deviceId),
             label = android.os.Build.MODEL,
         )
+        // Parcours planifie : publie une fois, au depart. Les suiveurs voient
+        // alors le trace prevu et le pourcentage deja couvert, pas seulement
+        // le point courant.
+        PlannedRouteStore.load(application)?.let { route ->
+            com.mpacer.core.social.FriendsClient.publishRoute(
+                application,
+                config.deviceName(deviceId),
+                route.points,
+            )
+        }
         etat = etatInitial
         enPause = false
         dernierMs = 0L
@@ -128,6 +140,7 @@ object LiveTracker {
         paceSPerKm: Double?,
         heartRateBpm: Int?,
         engineState: String?,
+        altitudeM: Double? = null,
     ) {
         if (!actif) return
         synchroniserEtat(engineState)
@@ -135,7 +148,7 @@ object LiveTracker {
         val decision = LivePolicy.decide(maintenant, dernierMs, enPause, accuracyM, config)
         if (decision != LivePolicy.Decision.Publish) return
         val point = Position(
-            tMs, lat, lon, accuracyM, distanceM, paceSPerKm, heartRateBpm, batteryPercent(),
+            tMs, lat, lon, accuracyM, altitudeM, distanceM, paceSPerKm, heartRateBpm, batteryPercent(),
         )
         derniere = point
         dernierMs = maintenant
@@ -345,6 +358,7 @@ object LiveTracker {
             point.batteryPercent,
             etatPublie,
             config.device,
+            point.altitudeM,
         )
         val paquet = MqttCodec.publish(sujet, charge, config.retain)
         synchronized(verrou) {

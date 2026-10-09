@@ -6,7 +6,7 @@ meme backend auto-heberge :
 | Module | Identifiant | Role |
 |---|---|---|
 | `:core` | `com.mpacer.core` | Bibliotheque commune : pont JNI vers `mpacer-core`, service de seance (GPS 1 Hz), voix, archive locale, synchronisation backend, suivi MQTT, musique, amis et partage de position. Aucune interface. |
-| `:app` | `com.mpacer.watch` | Application Wear OS : ecrans ronds, capteur cardiaque de la montre, Data Layer (reception des seances envoyees par le telephone). |
+| `:app` | `com.mpacer.watch` | Application Wear OS : ecrans ronds, six vues de course (allure, tour, cardio, objectif, **musique avec volume et changement de piste**, **heure**), capteur cardiaque de la montre, Data Layer (reception des seances envoyees par le telephone). |
 | `:phone` | `com.mpacer.phone` | Application telephone (Android 8+) pour **courir avec le telephone** : ecrans Material 3, ceinture cardiaque Bluetooth LE, historique, synchronisation, MQTT, musique, onglet Amis (carte OpenStreetMap des proches). |
 | `:companion` | `com.mpacer.companion` | Application telephone d'appoint : connexion au backend, liste et detail des seances, import de fichier `.pac`/JSON, envoi vers la montre. **Ne fait pas de seance.** |
 
@@ -42,7 +42,8 @@ android/
       SessionConfig.kt     reglages assistant + voix gardes hors seance
       HeartRateSensor.kt   capteur integre + interface HeartRateSource (ceinture BLE)
       social/FriendsClient.kt  amis et partage de position (API du backend)
-      live/                MQTT : config, politique de cadence, charge utile, codec, tracker, test, persistance
+      live/                MQTT : config, politique de cadence, charge utile, codec, tracker, test, persistance ;
+                           parcours planifie (lecture GPX, stockage, publication)
       music/               Media3 : bibliotheque USB, lecteur, session, modeles du contrat docs/07 v2
       ui/Palette.kt        palette et voyant GPS partages par les deux interfaces
     src/test/java/com/mpacer/core/live/      tests unitaires JVM (paquets, cadence, charge utile)
@@ -62,8 +63,11 @@ android/
       MainActivity.kt      permissions + navigation a cinq onglets
       PhoneSettings.kt     reglages persistants (assistant, voix, musique, cardio, ecran)
       hr/BleHeartRate.kt   ceinture cardiaque Bluetooth LE (0x180D / 0x2A37) + recherche
-      ui/                  Theme, RunScreen, FriendsScreen (carte OSM), HistoryScreen,
-                           MusicScreen, SyncScreen, SettingsScreen
+      ui/                  Theme, RunScreen (parcours planifie GPX), FriendsScreen
+                           (carte OSM), HistoryScreen,
+                           MusicScreen (lecteur a icones et volume), SyncScreen,
+                           SettingsScreen, PhoneIcons (jeu d icones maison, sans
+                           material-icons-extended)
   companion/                                 module telephone
     build.gradle.kts                         Material 3, Compose, OkHttp, Wearable
     proguard-rules.pro

@@ -1,8 +1,13 @@
 package com.mpacer.core.music
 
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.media.AudioManager
 import android.net.Uri
+import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
@@ -55,6 +60,10 @@ object MusicPlayer {
         controller?.let { return it }
         if (connecting) return null
         connecting = true
+        // Le volume media est reglable meme quand aucune piste ne joue : la vue
+        // Musique en course doit pouvoir le montrer des l'ouverture.
+        suivreVolume(application)
+        refreshVolume()
         val token = SessionToken(application, ComponentName(application, MusicPlaybackService::class.java))
         val future = MediaController.Builder(application, token).buildAsync()
         future.addListener({
@@ -152,6 +161,105 @@ object MusicPlayer {
         withController { it.seekToPreviousMediaItem() }
     }
 
+    // ------------------------------------------------------------------ volume
+
+    /** Pas d'un appui sur les commandes de volume (10 % du maximum du flux media). */
+    private const val PAS_VOLUME = 10
+
+    private var volumeReceiver: BroadcastReceiver? = null
+
+    private fun audio(): AudioManager? =
+        appContext?.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+
+    /**
+     * Volume media courant, en pourcentage du maximum (0 a 100).
+     *
+     * C'est le volume du flux STREAM_MUSIC, celui que baissent et montent les
+     * boutons de la montre : la valeur affichee correspond donc au son entendu,
+     * que la lecture soit pilotee par M-pacer ou par le systeme.
+     */
+    fun volumePercent(): Int {
+        val gestionnaire = audio() ?: return _state.value.volumePercent
+        val maximum = gestionnaire.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        if (maximum <= 0) return 0
+        return (gestionnaire.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 + maximum / 2) / maximum
+    }
+
+    /** Relit le volume du systeme (boutons de la montre, autre application). */
+    fun refreshVolume() {
+        val gestionnaire = audio() ?: return
+        val maximum = gestionnaire.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        _state.update { it.copy(volumePercent = volumePercent(), volumeMax = maximum) }
+    }
+
+    fun volumeUp() = changerVolume(PAS_VOLUME)
+
+    fun volumeDown() = changerVolume(-PAS_VOLUME)
+
+    /**
+     * Regle le volume media a un pourcentage precis (0 a 100).
+     *
+     * C'est le point d'entree du curseur de l'application telephone : la montre,
+     * elle, n'a que les deux ronds + et -.
+     */
+    fun setVolumePercent(percent: Int) {
+        val gestionnaire = audio() ?: return
+        val maximum = gestionnaire.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        if (maximum <= 0) return
+        val cible = (percent.coerceIn(0, 100) * maximum + 50) / 100
+        // Un appareil sans flux media ne doit jamais faire tomber l'ecran : le
+        // reglage est un confort, pas une condition de la seance.
+        runCatching { gestionnaire.setStreamVolume(AudioManager.STREAM_MUSIC, cible, 0) }
+        refreshVolume()
+    }
+
+    private fun changerVolume(pas: Int) = setVolumePercent(volumePercent() + pas)
+
+    /**
+     * Garde l'affichage juste quand le volume change ailleurs : boutons
+     * physiques de la montre, ou fin de la lecture d'une autre application.
+     * Un seul recepteur pour la duree de vie du processus.
+     */
+    private fun suivreVolume(application: Context) {
+        if (volumeReceiver != null) return
+        val recepteur = object : BroadcastReceiver() {
+            override fun onReceive(contexte: Context?, intention: Intent?) {
+                when (intention?.action) {
+                    ACTION_VOLUME_CHANGED -> {
+                        val flux = intention.getIntExtra(EXTRA_VOLUME_STREAM_TYPE, -1)
+                        if (flux == AudioManager.STREAM_MUSIC) refreshVolume()
+                    }
+                    ACTION_STREAM_MUTE_CHANGED -> refreshVolume()
+                }
+            }
+        }
+        val filtre = IntentFilter().apply {
+            addAction(ACTION_VOLUME_CHANGED)
+            addAction(ACTION_STREAM_MUTE_CHANGED)
+        }
+        // Diffusions du systeme : le drapeau NOT_EXPORTED evite d'exposer le
+        // recepteur, comme l'exige Android 14 pour tout enregistrement dynamique.
+        runCatching {
+            ContextCompat.registerReceiver(
+                application,
+                recepteur,
+                filtre,
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+        }.onSuccess { volumeReceiver = recepteur }
+    }
+
+    /**
+     * Diffusions du systeme qui informent d'un changement de volume.
+     *
+     * Les constantes [AudioManager] correspondantes ne sont pas dans l'API
+     * publique (annotations @hide) : les valeurs sont celles du framework,
+     * stables depuis Android 5.
+     */
+    private const val ACTION_VOLUME_CHANGED = "android.media.VOLUME_CHANGED_ACTION"
+    private const val ACTION_STREAM_MUTE_CHANGED = "android.media.STREAM_MUTE_CHANGED_ACTION"
+    private const val EXTRA_VOLUME_STREAM_TYPE = "android.media.EXTRA_VOLUME_STREAM_TYPE"
+
     /** Position de lecture en secondes (0 si rien ne joue). */
     fun currentPositionS(): Double {
         val position = controller?.currentPosition ?: 0L
@@ -215,4 +323,8 @@ data class MusicPlayerState(
     val index: Int = 0,
     val count: Int = 0,
     val message: String? = null,
+    /** Volume media du systeme, en pourcentage (0 a 100). */
+    val volumePercent: Int = 0,
+    /** Maximum du flux media, pour l'echelle des commandes. */
+    val volumeMax: Int = 0,
 )

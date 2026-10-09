@@ -28,6 +28,15 @@ class LivePayloadTest {
     }
 
     @Test
+    fun theAltitudeAccompaniesThePositionWhenTheGpsProvidesOne() {
+        val texte = String(
+            LivePayload.encode(1, 48.0, 2.0, 4.0, 1200.0, 300.0, 140, 70, "run", "", 154.3),
+            Charsets.UTF_8,
+        )
+        assertTrue(texte, texte.contains("\"alt\":154.3"))
+    }
+
+    @Test
     fun optionalFieldsAreOmitted() {
         val texte = String(
             LivePayload.encode(1, 48.0, 2.0, null, null, null, null, null, "stop", ""),

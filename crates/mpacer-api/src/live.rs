@@ -29,6 +29,22 @@ pub const MAX_POINTS: usize = 4096;
 /// Nombre de points transmis a l'affichage : borne le cout de rendu.
 pub const MAX_TRACE_POINTS: usize = 700;
 
+/// Nombre maximal de points acceptes pour un parcours planifie.
+///
+/// Un parcours est publie une fois par seance, pas une fois par position : on
+/// peut donc en garder plus qu'une trace, tout en bornant la memoire du service
+/// (2000 points x 2 f64 = 32 ko par appareil) et la taille du JSON envoye.
+pub const MAX_ROUTE_POINTS: usize = 2000;
+
+/// Nombre de points du parcours transmis a la carte.
+///
+/// La forme du trace reste juste a cette resolution, et la charge utile d'une
+/// page de suivi reste raisonnable.
+pub const MAX_ROUTE_DISPLAY: usize = 400;
+
+/// Duree de conservation d'un parcours planifie sans nouvelle seance.
+pub const ROUTE_TTL_MS: i64 = 24 * 60 * 60 * 1000;
+
 /// Ecart au-dela duquel deux points appartiennent a deux seances differentes.
 pub const SESSION_GAP_MS: i64 = 6 * 60 * 60 * 1000;
 
@@ -52,6 +68,9 @@ pub struct LivePoint {
     /// Precision annoncee par le GPS (m).
     #[serde(rename = "acc", default, skip_serializing_if = "Option::is_none")]
     pub accuracy_m: Option<f64>,
+    /// Altitude (m) : elle alimente le profil de denivele de la page /live.
+    #[serde(rename = "alt", default, skip_serializing_if = "Option::is_none")]
+    pub altitude_m: Option<f64>,
     /// Distance parcourue depuis le depart (m).
     #[serde(rename = "dist", default, skip_serializing_if = "Option::is_none")]
     pub distance_m: Option<f64>,
@@ -83,6 +102,143 @@ impl LivePoint {
             && (-180.0..=180.0).contains(&self.lon)
             && self.t_ms > 0
             && self.accuracy_m.is_none_or(|v| v.is_finite() && v >= 0.0)
+            && self.altitude_m.is_none_or(|v| v.is_finite())
+    }
+}
+
+/// Parcours planifie d'un appareil : la trace que le coureur compte suivre.
+///
+/// Le coureur le publie une fois au depart (PUT /api/v1/live/route) ; les
+/// suiveurs voient alors, sur la meme carte, **le parcours prevu** et la
+/// position courante, avec le pourcentage de parcours deja couvert.
+#[derive(Debug, Clone)]
+pub struct PlannedRoute {
+    pub device: String,
+    /// Points du parcours, dans l'ordre.
+    pub points: Vec<[f64; 2]>,
+    pub updated_ms: i64,
+    /// Distance cumulee a chaque point (m), calculee a la reception.
+    cumul_m: Vec<f64>,
+    /// Longueur totale du parcours (m).
+    pub total_m: f64,
+}
+
+/// Avancement d'une position sur un parcours planifie.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RouteProgress {
+    /// Distance parcourue le long du parcours (m).
+    pub along_m: f64,
+    /// Distance restante le long du parcours (m).
+    pub remaining_m: f64,
+    /// Ecart perpendiculaire au parcours (m) : dit si l'on suit bien le trace.
+    pub off_m: f64,
+    /// Pourcentage du parcours couvert (0 a 100).
+    pub pct: f64,
+    /// Rang du point de depart du segment courant (pour situer sur la trace).
+    pub from_index: usize,
+}
+
+impl PlannedRoute {
+    /// Valide et construit un parcours. `None` si les points sont inutilisables.
+    pub fn new(device: &str, points: Vec<[f64; 2]>, updated_ms: i64) -> Option<Self> {
+        if points.len() < 2 || points.len() > MAX_ROUTE_POINTS {
+            return None;
+        }
+        if !points.iter().all(|point| {
+            point[0].is_finite()
+                && point[1].is_finite()
+                && (-90.0..=90.0).contains(&point[0])
+                && (-180.0..=180.0).contains(&point[1])
+        }) {
+            return None;
+        }
+        let mut cumul_m = Vec::with_capacity(points.len());
+        let mut total = 0.0;
+        cumul_m.push(0.0);
+        for fenetre in points.windows(2) {
+            total += mpacer_core::geo::haversine_m(
+                mpacer_core::geo::Position::new(fenetre[0][0], fenetre[0][1]),
+                mpacer_core::geo::Position::new(fenetre[1][0], fenetre[1][1]),
+            );
+            cumul_m.push(total);
+        }
+        if total <= 1.0 {
+            // Un parcours de moins d'un metre n'est pas un parcours.
+            return None;
+        }
+        Some(Self {
+            device: device.to_string(),
+            points,
+            updated_ms,
+            cumul_m,
+            total_m: total,
+        })
+    }
+
+    /// Parcours sous-echantillonne pour l'affichage.
+    pub fn display_points(&self) -> Vec<[f64; 2]> {
+        if self.points.len() <= MAX_ROUTE_DISPLAY {
+            return self.points.clone();
+        }
+        let pas = self.points.len().div_ceil(MAX_ROUTE_DISPLAY);
+        let mut sortie: Vec<[f64; 2]> = self.points.iter().step_by(pas).copied().collect();
+        // Le dernier point compte : c'est l'arrivee du parcours.
+        if let Some(dernier) = self.points.last() {
+            if sortie.last() != Some(dernier) {
+                sortie.push(*dernier);
+            }
+        }
+        sortie
+    }
+
+    /// Position la plus proche du parcours et avancement correspondant.
+    ///
+    /// Projection en plan local (metres) autour de la position : sur quelques
+    /// centaines de metres, l'ecart avec la sphere est negligeable, et c'est le
+    /// seul calcul dont la carte a besoin.
+    pub fn nearest(&self, lat: f64, lon: f64) -> RouteProgress {
+        let lat0 = lat.to_radians();
+        let metres_par_degre_lat = mpacer_core::geo::EARTH_RADIUS_M * std::f64::consts::PI / 180.0;
+        let metres_par_degre_lon = metres_par_degre_lat * lat0.cos().abs().max(0.02);
+        let vers_plan = |point: [f64; 2]| {
+            (
+                (point[1] - lon) * metres_par_degre_lon,
+                (point[0] - lat) * metres_par_degre_lat,
+            )
+        };
+        let (px, py) = (0.0_f64, 0.0_f64);
+        let mut meilleur = RouteProgress {
+            along_m: 0.0,
+            remaining_m: self.total_m,
+            off_m: f64::INFINITY,
+            pct: 0.0,
+            from_index: 0,
+        };
+        for (index, fenetre) in self.points.windows(2).enumerate() {
+            let (ax, ay) = vers_plan(fenetre[0]);
+            let (bx, by) = vers_plan(fenetre[1]);
+            let (dx, dy) = (bx - ax, by - ay);
+            let longueur2 = dx * dx + dy * dy;
+            let t = if longueur2 <= 1e-9 {
+                0.0
+            } else {
+                (((px - ax) * dx + (py - ay) * dy) / longueur2).clamp(0.0, 1.0)
+            };
+            let (cx, cy) = (ax + t * dx, ay + t * dy);
+            let distance = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+            if distance < meilleur.off_m {
+                let segment_m = self.cumul_m[index + 1] - self.cumul_m[index];
+                let along_m = self.cumul_m[index] + t * segment_m;
+                meilleur = RouteProgress {
+                    along_m,
+                    remaining_m: (self.total_m - along_m).max(0.0),
+                    off_m: distance,
+                    pct: (along_m / self.total_m * 100.0).clamp(0.0, 100.0),
+                    from_index: index,
+                };
+            }
+        }
+        meilleur
     }
 }
 
@@ -171,6 +327,21 @@ pub struct LiveSessionView {
     pub duration_s: Option<f64>,
     pub pace_s_per_km: Option<f64>,
     pub last: Option<LivePoint>,
+    /// Parcours planifie du coureur, sous-echantillonne (vide s'il n'en a pas).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub route: Vec<[f64; 2]>,
+    /// Longueur du parcours planifie (m).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_total_m: Option<f64>,
+    /// Pourcentage du parcours planifie deja couvert (0 a 100).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_pct: Option<f64>,
+    /// Distance restante sur le parcours planifie (m).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_remaining_m: Option<f64>,
+    /// Ecart au parcours planifie (m) : dit si le coureur suit bien son trace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off_route_m: Option<f64>,
 }
 
 impl LiveSessionView {
@@ -184,6 +355,8 @@ impl LiveSessionView {
 #[derive(Debug)]
 pub struct LiveStore {
     sessions: RwLock<HashMap<String, LiveSession>>,
+    /// Parcours planifies, par nom d'appareil : publies une fois au depart.
+    routes: RwLock<HashMap<String, PlannedRoute>>,
     status: Arc<MqttStatus>,
 }
 
@@ -197,6 +370,7 @@ impl LiveStore {
     pub fn new() -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
+            routes: RwLock::new(HashMap::new()),
             status: Arc::new(MqttStatus::default()),
         }
     }
@@ -204,6 +378,81 @@ impl LiveStore {
     /// Etat de la liaison avec le broker.
     pub fn status(&self) -> &Arc<MqttStatus> {
         &self.status
+    }
+
+    // ------------------------------------------------------- parcours planifie
+
+    /// Enregistre le parcours planifie d'un appareil.
+    ///
+    /// Renvoie une erreur lisible quand le trace est inexploitable : le
+    /// coureur le saura tout de suite, au lieu de croire qu'il partage.
+    pub fn set_route(
+        &self,
+        device: &str,
+        points: Vec<[f64; 2]>,
+        now_ms: i64,
+    ) -> Result<PlannedRoute, String> {
+        if device.trim().is_empty() {
+            return Err("appareil sans nom".to_string());
+        }
+        if points.len() > MAX_ROUTE_POINTS {
+            return Err(format!(
+                "parcours trop long : {} points (maximum {})",
+                points.len(),
+                MAX_ROUTE_POINTS
+            ));
+        }
+        let route = PlannedRoute::new(device, points, now_ms)
+            .ok_or_else(|| "parcours inexploitable : deux points valides au minimum".to_string())?;
+        let mut routes = self
+            .routes
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        routes.insert(device.to_string(), route.clone());
+        Ok(route)
+    }
+
+    /// Oublie le parcours d'un appareil (fin de seance, changement de trace).
+    pub fn clear_route(&self, device: &str) -> bool {
+        let mut routes = self
+            .routes
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        routes.remove(device).is_some()
+    }
+
+    /// Parcours planifie d'un appareil, s'il en a publie un.
+    pub fn route(&self, device: &str) -> Option<PlannedRoute> {
+        let routes = self
+            .routes
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        routes.get(device).cloned()
+    }
+
+    /// Nombre de parcours planifies en memoire (diagnostic).
+    pub fn routes_len(&self) -> usize {
+        self.routes
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+
+    /// Vue d'une session, parcours planifie et avancement compris.
+    fn vue(&self, session: &LiveSession) -> LiveSessionView {
+        let mut vue = resume(session);
+        let Some(route) = self.route(&session.device) else {
+            return vue;
+        };
+        vue.route = route.display_points();
+        vue.route_total_m = Some(route.total_m);
+        if let Some(dernier) = session.points.back() {
+            let avancement = route.nearest(dernier.lat, dernier.lon);
+            vue.progress_pct = Some(avancement.pct);
+            vue.route_remaining_m = Some(avancement.remaining_m);
+            vue.off_route_m = Some(avancement.off_m);
+        }
+        vue
     }
 
     /// Enregistre un message MQTT (sujet + charge utile JSON).
@@ -248,6 +497,14 @@ impl LiveStore {
 
     /// Oublie les montres silencieuses depuis plus de [SESSION_TTL_MS].
     pub fn prune(&self, now_ms: i64) -> usize {
+        // Un parcours planifie suit la meme duree de vie que la seance : au-dela
+        // de 24 h sans publication, il n'interesse plus personne.
+        let mut routes = self
+            .routes
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        routes.retain(|_, route| now_ms - route.updated_ms <= ROUTE_TTL_MS);
+        drop(routes);
         let mut sessions = self
             .sessions
             .write()
@@ -264,7 +521,7 @@ impl LiveStore {
             .sessions
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut vues: Vec<LiveSessionView> = sessions.values().map(resume).collect();
+        let mut vues: Vec<LiveSessionView> = sessions.values().map(|session| self.vue(session)).collect();
         vues.sort_by_key(|vue| std::cmp::Reverse(vue.last_ms));
         vues.truncate(max_sessions);
         vues
@@ -279,7 +536,7 @@ impl LiveStore {
             .sessions
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        sessions.get(device).map(resume)
+        sessions.get(device).map(|session| self.vue(session))
     }
 
     /// Nombre de montres suivies.
@@ -320,6 +577,12 @@ fn resume(session: &LiveSession) -> LiveSessionView {
         distance_m,
         duration_s: Some(duree_s),
         pace_s_per_km: allure,
+        // Remplis par `vue()` quand l'appareil a publie un parcours planifie.
+        route: Vec::new(),
+        route_total_m: None,
+        progress_pct: None,
+        route_remaining_m: None,
+        off_route_m: None,
     }
 }
 
@@ -373,6 +636,7 @@ mod tests {
             lat,
             lon,
             accuracy_m: Some(5.0),
+            altitude_m: Some(120.0),
             distance_m: dist,
             pace_s_per_km: Some(300.0),
             heart_rate_bpm: Some(140),
@@ -402,6 +666,33 @@ mod tests {
         assert_eq!(vues[0].distance_m, Some(120.0));
         // Le nom de la montre n'est pas duplique sur chaque point.
         assert_eq!(vues[0].last.as_ref().unwrap().device, None);
+    }
+
+    #[test]
+    fn the_altitude_is_kept_for_the_elevation_profile() {
+        let store = LiveStore::new();
+        store
+            .ingest(
+                "mpacer/live/montre-a1b2",
+                br#"{"t":1000,"lat":48.85,"lon":2.35,"alt":152.5,"st":"run"}"#,
+            )
+            .unwrap();
+        let vue = &store.snapshot(2_000, 4)[0];
+        assert_eq!(vue.last.as_ref().unwrap().altitude_m, Some(152.5));
+    }
+
+    #[test]
+    fn an_altitude_that_is_not_a_number_is_rejected() {
+        let store = LiveStore::new();
+        // Un JSON ne peut pas porter NaN, mais une altitude infinie arriverait
+        // d'un publish mal forme : le point est ecarte, pas la montre.
+        assert!(store
+            .ingest(
+                "mpacer/live/montre",
+                br#"{"t":1,"lat":48.0,"lon":2.0,"alt":1e400}"#,
+            )
+            .is_err());
+        assert_eq!(store.len(), 0);
     }
 
     #[test]
@@ -545,6 +836,104 @@ mod tests {
         assert_eq!(vue.points, 2_000);
         assert!(vue.trace.len() <= MAX_TRACE_POINTS + 1);
         assert_eq!(vue.trace.last().unwrap().t_ms, 1_000 + 1_999);
+    }
+
+    #[test]
+    fn a_planned_route_gives_the_position_and_the_percentage() {
+        // Deux kilometres plein est : le point median doit tomber a mi-parcours.
+        let route = PlannedRoute::new(
+            "montre",
+            vec![[48.0, 2.0], [48.0, 2.02]],
+            1_000,
+        )
+        .expect("parcours valide");
+        assert!(route.total_m > 1_000.0, "total = {}", route.total_m);
+
+        let milieu = route.nearest(48.0, 2.01);
+        assert!((milieu.pct - 50.0).abs() < 3.0, "pct = {}", milieu.pct);
+        assert!(milieu.off_m < 30.0, "ecart = {}", milieu.off_m);
+        assert!((milieu.along_m + milieu.remaining_m - route.total_m).abs() < 1.0);
+
+        let debut = route.nearest(48.0, 2.0);
+        assert!(debut.pct < 2.0, "debut = {}", debut.pct);
+        let fin = route.nearest(48.0, 2.02);
+        assert!(fin.pct > 98.0, "fin = {}", fin.pct);
+    }
+
+    #[test]
+    fn a_run_that_leaves_the_route_is_measured_against_it() {
+        let route = PlannedRoute::new("montre", vec![[48.0, 2.0], [48.0, 2.02]], 1_000).unwrap();
+        // 300 m au nord du trace, a mi-parcours : le pourcentage reste juste,
+        // et l'ecart est signale.
+        let ecarte = route.nearest(48.0027, 2.01);
+        assert!((ecarte.pct - 50.0).abs() < 3.0, "pct = {}", ecarte.pct);
+        assert!(ecarte.off_m > 250.0, "ecart = {}", ecarte.off_m);
+    }
+
+    #[test]
+    fn unusable_routes_are_rejected() {
+        assert!(PlannedRoute::new("m", vec![], 1).is_none());
+        assert!(PlannedRoute::new("m", vec![[48.0, 2.0]], 1).is_none());
+        assert!(PlannedRoute::new("m", vec![[91.0, 2.0], [48.0, 2.0]], 1).is_none());
+        assert!(PlannedRoute::new("m", vec![[48.0, 2.0], [48.0, 2.0]], 1).is_none());
+        let trop = vec![[48.0, 2.0], [48.0, 2.02]]
+            .into_iter()
+            .cycle()
+            .take(MAX_ROUTE_POINTS + 1)
+            .collect();
+        assert!(PlannedRoute::new("m", trop, 1).is_none());
+    }
+
+    #[test]
+    fn the_store_keeps_the_route_and_computes_the_progress() {
+        let store = LiveStore::new();
+        assert!(store.routes_len() == 0);
+        let route = store
+            .set_route("montre-a", vec![[48.0, 2.0], [48.0, 2.02]], 1_000)
+            .expect("parcours accepte");
+        assert!(route.total_m > 1_000.0);
+        assert_eq!(store.routes_len(), 1);
+
+        store
+            .ingest(
+                "mpacer/live/montre-a",
+                br#"{"t":1000,"lat":48.0,"lon":2.01,"st":"run"}"#,
+            )
+            .unwrap();
+        let vue = &store.snapshot(2_000, 4)[0];
+        assert!(!vue.route.is_empty(), "le parcours voyage avec la session");
+        assert_eq!(vue.route_total_m, Some(route.total_m));
+        let pct = vue.progress_pct.expect("pourcentage calcule");
+        assert!((pct - 50.0).abs() < 3.0, "pct = {pct}");
+        assert!(vue.route_remaining_m.unwrap() > 300.0);
+        assert!(vue.off_route_m.unwrap() < 30.0);
+
+        // Sans position, le parcours reste visible mais sans pourcentage.
+        let seule = LiveStore::new();
+        seule
+            .set_route("montre-b", vec![[48.0, 2.0], [48.0, 2.02]], 1_000)
+            .unwrap();
+        seule
+            .ingest("mpacer/live/montre-b", br#"{"t":1,"lat":48.0,"lon":2.0}"#)
+            .unwrap();
+        let vue_b = &seule.snapshot(2, 4)[0];
+        assert!(vue_b.progress_pct.is_some());
+
+        assert!(store.clear_route("montre-a"));
+        assert_eq!(store.routes_len(), 0);
+        let apres = &store.snapshot(3_000, 4)[0];
+        assert!(apres.route.is_empty(), "parcours efface");
+        assert!(apres.progress_pct.is_none());
+    }
+
+    #[test]
+    fn a_stale_route_is_forgotten_like_a_stale_session() {
+        let store = LiveStore::new();
+        store
+            .set_route("montre", vec![[48.0, 2.0], [48.0, 2.02]], 1_000)
+            .unwrap();
+        store.prune(1_000 + ROUTE_TTL_MS + 1);
+        assert_eq!(store.routes_len(), 0);
     }
 
     #[test]

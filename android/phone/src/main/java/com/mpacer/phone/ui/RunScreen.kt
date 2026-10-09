@@ -1,5 +1,7 @@
 package com.mpacer.phone.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -17,12 +21,20 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -30,11 +42,16 @@ import com.mpacer.core.EngineOutput
 import com.mpacer.core.MpacerFormat
 import com.mpacer.core.SessionState
 import com.mpacer.core.live.LiveState
+import com.mpacer.core.live.PlannedRouteStore
 import com.mpacer.core.music.MusicDirective
 import com.mpacer.core.music.MusicState
 import com.mpacer.core.ui.GpsLight
 import com.mpacer.core.ui.Palette
+import com.mpacer.core.social.FriendsClient
 import com.mpacer.phone.PhoneSettings
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -72,17 +89,118 @@ fun RunScreen(
         PaceBlock(output, settings)
         StatsRow(output, settings)
         AssistantCard(output, settings)
+        ParcoursCard()
         MusicCard(output?.music)
 
         if (enSeance) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = onAnnounce) { Text("Annonce vocale") }
-                TextButton(onClick = onResetPaceWindow) { Text("Fenetre d'allure") }
+                TextButton(onClick = onAnnounce) {
+                    Icon(PhoneIcons.VolumeUp, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Annonce vocale")
+                }
+                TextButton(onClick = onResetPaceWindow) {
+                    Icon(PhoneIcons.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Fenetre d'allure")
+                }
             }
         }
 
         Controls(output, onStart, onArm, onPause, onResume, onStop)
         Spacer(Modifier.height(4.dp))
+    }
+}
+
+/**
+ * Parcours planifie : le trace que le coureur compte suivre.
+ *
+ * Le fichier GPX est choisi une fois ; il est garde par l'application et
+ * publie au depart de chaque seance, pour que les suiveurs voient le trace
+ * prevu **et** la position, avec le pourcentage deja couvert. Tant qu'aucun
+ * parcours n'est choisi, seuls les points de la seance circulent.
+ */
+@Composable
+private fun ParcoursCard() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val cercle by FriendsClient.state.collectAsState()
+    var version by remember { mutableStateOf(0) }
+    var message by remember { mutableStateOf<String?>(null) }
+    val route = remember(version) { PlannedRouteStore.load(context) }
+
+    val choisir = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val texte = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                }.getOrNull()
+            }
+            val points = texte?.let(PlannedRouteStore::parseGpx).orEmpty()
+            if (points.size >= 2) {
+                val nom = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+                    ?: "parcours.gpx"
+                val retenu = PlannedRouteStore.Route(nom, points)
+                PlannedRouteStore.save(context, retenu)
+                message = "Parcours retenu : " + retenu.resume
+                version++
+            } else {
+                message = "GPX illisible : aucun point latitude/longitude trouve."
+            }
+        }
+    }
+
+    Card(colors = CardDefaults.cardColors(containerColor = Palette.surface)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Icon(PhoneIcons.Location, contentDescription = null, tint = Palette.muted, modifier = Modifier.size(14.dp))
+                Text("Parcours planifie", color = Palette.muted, fontSize = 12.sp)
+            }
+            Text(
+                route?.let { it.name + "  -  " + it.resume }
+                    ?: "Aucun parcours : vos suiveurs ne verront que votre position.",
+                color = if (route == null) Palette.muted else Palette.texte,
+                fontSize = 13.sp,
+            )
+            cercle?.circle?.me?.parcoursResume?.let { avancement ->
+                Text("Avancement : " + avancement, color = Palette.ok, fontSize = 13.sp)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    onClick = {
+                        choisir.launch(
+                            arrayOf("application/gpx+xml", "application/xml", "text/xml", "*/*"),
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (route == null) Palette.orange else Palette.surface2,
+                        contentColor = if (route == null) Color.White else Palette.texte,
+                    ),
+                ) {
+                    Icon(PhoneIcons.Upload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (route == null) "Choisir un GPX" else "Changer de GPX")
+                }
+                if (route != null) {
+                    TextButton(onClick = {
+                        PlannedRouteStore.clear(context)
+                        message = "Parcours retire."
+                        version++
+                    }) {
+                        Icon(PhoneIcons.Delete, contentDescription = null, tint = Palette.danger, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Retirer", color = Palette.danger)
+                    }
+                }
+            }
+            message?.let { Text(it, color = Palette.muted, fontSize = 12.sp) }
+        }
     }
 }
 
@@ -347,6 +465,8 @@ private fun Controls(
                     .fillMaxWidth()
                     .height(56.dp),
             ) {
+                Icon(PhoneIcons.Play, contentDescription = null, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(8.dp))
                 Text("Demarrer la course", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
             }
             Button(
@@ -354,6 +474,8 @@ private fun Controls(
                 colors = secondaire,
                 modifier = Modifier.fillMaxWidth(),
             ) {
+                Icon(PhoneIcons.Flag, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
                 Text("Preparer (depart au premier pas)")
             }
         }
@@ -366,6 +488,8 @@ private fun Controls(
                     .weight(1f)
                     .height(56.dp),
             ) {
+                Icon(PhoneIcons.Pause, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
                 Text("Pause", fontSize = 17.sp)
             }
             Button(
@@ -375,6 +499,8 @@ private fun Controls(
                     .weight(1f)
                     .height(56.dp),
             ) {
+                Icon(PhoneIcons.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
                 Text("Arreter", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             }
         }
@@ -387,6 +513,8 @@ private fun Controls(
                     .weight(1f)
                     .height(56.dp),
             ) {
+                Icon(PhoneIcons.Play, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
                 Text("Reprendre", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
             }
             Button(
@@ -396,6 +524,8 @@ private fun Controls(
                     .weight(1f)
                     .height(56.dp),
             ) {
+                Icon(PhoneIcons.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
                 Text("Arreter", fontSize = 17.sp)
             }
         }

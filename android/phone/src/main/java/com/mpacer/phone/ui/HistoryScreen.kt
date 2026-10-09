@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,6 +20,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -162,7 +164,11 @@ private fun CarteMontre(sync: SyncState, onPull: () -> Unit) {
                 )
             }
             if (sync.paired) {
-                TextButton(onClick = onPull) { Text("Chercher maintenant") }
+                TextButton(onClick = onPull) {
+                    Icon(PhoneIcons.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Chercher maintenant")
+                }
             }
         }
     }
@@ -205,7 +211,11 @@ private fun CarteSeance(summary: JSONObject, onOpen: () -> Unit) {
                     Text(capteurs.joinToString("   "), color = Palette.muted2, fontSize = 11.sp)
                 }
             }
-            TextButton(onClick = onOpen) { Text("Ouvrir") }
+            TextButton(onClick = onOpen) {
+                Icon(PhoneIcons.ChevronRight, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Ouvrir")
+            }
         }
     }
 }
@@ -307,6 +317,8 @@ private fun FicheSeance(
                     )
                 }
                 TextButton(onClick = { ouvrirCarteExterne(context, summary) }) {
+                    Icon(PhoneIcons.Location, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
                     Text("Ouvrir sur OpenStreetMap")
                 }
             }
@@ -459,9 +471,21 @@ private fun FicheSeance(
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            TextButton(onClick = onBack) { Text("Retour") }
-            TextButton(onClick = onShare) { Text("Partager (.pac)") }
-            TextButton(onClick = onDelete) { Text("Supprimer", color = Palette.danger) }
+            TextButton(onClick = onBack) {
+                Icon(PhoneIcons.Back, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Retour")
+            }
+            TextButton(onClick = onShare) {
+                Icon(PhoneIcons.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Partager (.pac)")
+            }
+            TextButton(onClick = onDelete) {
+                Icon(PhoneIcons.Delete, contentDescription = null, tint = Palette.danger, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Supprimer", color = Palette.danger)
+            }
         }
         Spacer(Modifier.height(8.dp))
     }

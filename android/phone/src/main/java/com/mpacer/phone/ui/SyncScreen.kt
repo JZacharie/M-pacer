@@ -6,15 +6,19 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -62,7 +66,11 @@ fun SyncScreen(onBack: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text("Synchronisation", fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = Palette.texte)
-        TextButton(onClick = onBack) { Text("Retour aux reglages") }
+        TextButton(onClick = onBack) {
+            Icon(PhoneIcons.Back, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Retour aux reglages")
+        }
 
         Card(colors = CardDefaults.cardColors(containerColor = Palette.surface)) {
             Column(
@@ -86,9 +94,15 @@ fun SyncScreen(onBack: () -> Unit) {
                             SyncClient.refresh(context)
                         },
                     ) {
+                        Icon(PhoneIcons.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
                         Text("Enregistrer")
                     }
-                    TextButton(onClick = { SyncClient.refresh(context) }) { Text("Rafraichir l'etat") }
+                    TextButton(onClick = { SyncClient.refresh(context) }) {
+                        Icon(PhoneIcons.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Rafraichir l'etat")
+                    }
                 }
                 Text(
                     text = if (state.paired) "Appareil appaire" else "Appareil non appaire",
@@ -119,6 +133,8 @@ fun SyncScreen(onBack: () -> Unit) {
                     TextButton(onClick = {
                         ouvrirOnglet(context, code.verificationUriComplete.ifBlank { code.verificationUri })
                     }) {
+                        Icon(PhoneIcons.ChevronRight, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
                         Text("Ouvrir la page d'appairage")
                     }
                 }
@@ -148,6 +164,8 @@ fun SyncScreen(onBack: () -> Unit) {
                 ),
                 modifier = Modifier.fillMaxWidth(),
             ) {
+                Icon(PhoneIcons.ChevronRight, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
                 Text(
                     when (state.phase) {
                         SyncPhase.RequestingCode -> "Demande du code..."
@@ -167,9 +185,13 @@ fun SyncScreen(onBack: () -> Unit) {
                 ),
                 modifier = Modifier.fillMaxWidth(),
             ) {
+                Icon(PhoneIcons.Upload, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
                 Text(if (state.phase == SyncPhase.Syncing) "Envoi en cours..." else "Envoyer les seances", fontSize = 16.sp)
             }
             TextButton(onClick = { SyncClient.disconnect(context) }) {
+                Icon(PhoneIcons.Close, contentDescription = null, tint = Palette.danger, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
                 Text("Se deconnecter", color = Palette.danger)
             }
         }

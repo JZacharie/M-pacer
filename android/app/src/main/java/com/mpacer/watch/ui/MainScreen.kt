@@ -13,6 +13,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -24,9 +29,14 @@ import com.mpacer.core.EngineOutput
 import com.mpacer.core.MpacerFormat
 import com.mpacer.core.SessionState
 import com.mpacer.core.music.MusicDirective
+import com.mpacer.core.music.MusicPlayerState
 import com.mpacer.core.music.MusicState
 import com.mpacer.core.ui.GpsLight
 import com.mpacer.core.ui.Palette
+import kotlinx.coroutines.delay
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -59,6 +69,12 @@ fun MainScreen(
     onSettings: () -> Unit,
     onSync: () -> Unit,
     onMusic: () -> Unit,
+    player: MusicPlayerState = MusicPlayerState(),
+    onVolumeDown: () -> Unit = {},
+    onVolumeUp: () -> Unit = {},
+    onMusicPrevious: () -> Unit = {},
+    onMusicNext: () -> Unit = {},
+    onMusicToggle: () -> Unit = {},
 ) {
     val output = state.output
     Box(
@@ -68,8 +84,8 @@ fun MainScreen(
         contentAlignment = Alignment.Center,
     ) {
         when (output?.state) {
-            "Running" -> Seance(output, metric, enPause = false, onPrincipal = onPause, onStop = onStop)
-            "Paused", "AutoPaused" -> Seance(output, metric, enPause = true, onPrincipal = onResume, onStop = onStop)
+            "Running" -> Seance(output, metric, enPause = false, onPrincipal = onPause, onStop = onStop, player = player, onVolumeDown = onVolumeDown, onVolumeUp = onVolumeUp, onMusicPrevious = onMusicPrevious, onMusicNext = onMusicNext, onMusicToggle = onMusicToggle)
+            "Paused", "AutoPaused" -> Seance(output, metric, enPause = true, onPrincipal = onResume, onStop = onStop, player = player, onVolumeDown = onVolumeDown, onVolumeUp = onVolumeUp, onMusicPrevious = onMusicPrevious, onMusicNext = onMusicNext, onMusicToggle = onMusicToggle)
             else -> AuRepos(output, metric, onStart, onStop, onMusic, onSync, onSettings)
         }
     }
@@ -161,8 +177,13 @@ private fun AuRepos(
  *
  * Les commandes, elles, ne defilent pas : arreter une seance ne doit jamais
  * obliger a chercher la bonne page.
+ *
+ * Deux vues supplementaires repondent aux besoins d'une sortie longue : la
+ * **musique** (volume et changement de piste, pour ne pas sortir le telephone)
+ * et l'**heure** (l'heure courante et le temps de course, pour savoir ou l'on
+ * en est sans quitter la seance).
  */
-private enum class VueCourse { ALLURE, TOUR, CARDIO, OBJECTIF }
+private enum class VueCourse { ALLURE, TOUR, CARDIO, OBJECTIF, MUSIQUE, HEURE }
 
 private val VUES_EN_COURSE = VueCourse.entries
 
@@ -173,6 +194,12 @@ private fun Seance(
     enPause: Boolean,
     onPrincipal: () -> Unit,
     onStop: () -> Unit,
+    player: MusicPlayerState,
+    onVolumeDown: () -> Unit,
+    onVolumeUp: () -> Unit,
+    onMusicPrevious: () -> Unit,
+    onMusicNext: () -> Unit,
+    onMusicToggle: () -> Unit,
 ) {
     val pages = rememberPagerState(pageCount = { VUES_EN_COURSE.size })
     Column(
@@ -203,6 +230,15 @@ private fun Seance(
                         VueCourse.TOUR -> VueTour(output, metric)
                         VueCourse.CARDIO -> VueCardio(output)
                         VueCourse.OBJECTIF -> VueObjectif(output, metric)
+                        VueCourse.MUSIQUE -> VueMusique(
+                            player = player,
+                            onVolumeDown = onVolumeDown,
+                            onVolumeUp = onVolumeUp,
+                            onPrevious = onMusicPrevious,
+                            onToggle = onMusicToggle,
+                            onNext = onMusicNext,
+                        )
+                        VueCourse.HEURE -> VueHeure(output)
                     }
                 }
             }
@@ -353,6 +389,170 @@ private fun VueObjectif(output: EngineOutput?, metric: Boolean) {
         Spacer(Modifier.height(4.dp))
         PastilleAssistant(output, enPause = false)
     }
+}
+
+/**
+ * Cinquieme vue : la musique, sans quitter la seance.
+ *
+ * Trois commandes suffisent pendant l'effort : le volume (deux ronds, un
+ * pourcentage lisible au centre) et le changement de piste (precedente,
+ * lecture/pause, suivante). Le titre reste sur une ligne : c'est un repere, pas
+ * une fiche. Le volume est celui du flux media de la montre, donc celui que
+ * baissent et montent les boutons physiques.
+ */
+@Composable
+private fun VueMusique(
+    player: MusicPlayerState,
+    onVolumeDown: () -> Unit,
+    onVolumeUp: () -> Unit,
+    onPrevious: () -> Unit,
+    onToggle: () -> Unit,
+    onNext: () -> Unit,
+) {
+    val volumeReglable = player.volumeMax > 0
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        SectionTitle("Musique")
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = player.track?.title ?: "Aucune piste",
+            color = Palette.texte,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+        )
+        player.track?.artist?.takeIf { it.isNotBlank() }?.let {
+            Text(text = it, color = Palette.muted2, fontSize = 11.sp, maxLines = 1)
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
+        ) {
+            RoundButton(
+                icon = WatchIcons.Minus,
+                label = "Baisser le volume",
+                onClick = onVolumeDown,
+                size = 38.dp,
+                iconSize = 19.dp,
+                enabled = volumeReglable,
+            )
+            Text(
+                text = if (volumeReglable) player.volumePercent.toString() + " %" else "--",
+                color = Palette.texte,
+                fontSize = 26.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+            )
+            RoundButton(
+                icon = WatchIcons.Plus,
+                label = "Monter le volume",
+                onClick = onVolumeUp,
+                size = 38.dp,
+                iconSize = 19.dp,
+                enabled = volumeReglable,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            RoundButton(
+                icon = WatchIcons.Previous,
+                label = "Piste precedente",
+                onClick = onPrevious,
+                size = 38.dp,
+                iconSize = 19.dp,
+            )
+            RoundButton(
+                icon = if (player.playing) WatchIcons.Pause else WatchIcons.Play,
+                label = if (player.playing) "Pause" else "Lire",
+                onClick = onToggle,
+                size = 46.dp,
+                iconSize = 23.dp,
+                background = Palette.orange,
+                contentColor = Color.White,
+            )
+            RoundButton(
+                icon = WatchIcons.Next,
+                label = "Piste suivante",
+                onClick = onNext,
+                size = 38.dp,
+                iconSize = 19.dp,
+            )
+        }
+    }
+}
+
+/**
+ * Sixieme vue : l'heure.
+ *
+ * En course, le telephone reste dans la ceinture : cette vue donne l'heure
+ * courante (et les secondes), la date, puis le temps de course deja ecoule,
+ * pour situer la sortie dans la journee sans interrompre l'enregistrement.
+ */
+@Composable
+private fun VueHeure(output: EngineOutput?) {
+    val maintenant = heureCourante()
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        SectionTitle("Heure")
+        Row(
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = maintenant.format(HEURE_MINUTES),
+                color = Palette.texte,
+                fontSize = 46.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+            )
+            Text(
+                text = maintenant.format(HEURE_SECONDES),
+                color = Palette.muted2,
+                fontSize = 16.sp,
+                modifier = Modifier.padding(bottom = 8.dp),
+                maxLines = 1,
+            )
+        }
+        Text(
+            text = maintenant.format(DATE_FRANCAISE),
+            color = Palette.muted,
+            fontSize = 12.sp,
+            maxLines = 1,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "en course " + MpacerFormat.duration(output?.elapsedS ?: 0.0),
+            color = Palette.muted2,
+            fontSize = 12.sp,
+            maxLines = 1,
+        )
+    }
+}
+
+private val HEURE_MINUTES: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+private val HEURE_SECONDES: DateTimeFormatter = DateTimeFormatter.ofPattern("ss")
+private val DATE_FRANCAISE: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.FRENCH)
+
+/**
+ * Horloge de la vue Heure : l'ecran se rafraichit a la seconde.
+ *
+ * Le reveil est porte par la page, pas par un service : quand la vue n'est plus
+ * composee, plus rien ne tourne. Une seconde de latence au pire a l'ouverture,
+ * invisible pour une montre.
+ */
+@Composable
+private fun heureCourante(): LocalDateTime {
+    var heure by remember { mutableStateOf(LocalDateTime.now()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            heure = LocalDateTime.now()
+            delay(1_000L)
+        }
+    }
+    return heure
 }
 
 /** Les deux commandes de seance : elles restent visibles sur toutes les vues. */

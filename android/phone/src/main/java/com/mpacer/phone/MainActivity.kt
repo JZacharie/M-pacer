@@ -9,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -23,6 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
 import com.mpacer.core.HeartRateSources
@@ -39,6 +41,7 @@ import com.mpacer.phone.ui.FriendsScreen
 import com.mpacer.phone.ui.HistoryScreen
 import com.mpacer.phone.ui.MpacerTheme
 import com.mpacer.phone.ui.MusicScreen
+import com.mpacer.phone.ui.PhoneIcons
 import com.mpacer.phone.ui.RunScreen
 import com.mpacer.phone.ui.SettingsScreen
 import com.mpacer.phone.ui.SyncScreen
@@ -121,12 +124,12 @@ private fun appliquerReglages(context: android.content.Context, settings: PhoneS
  * Cinq destinations au maximum (conseil Material) : l'appairage du backend vit
  * dans Reglages, comme dans l'interface web ou il a rejoint /settings.
  */
-private enum class Onglet(val libelle: String, val icone: String) {
-    Course("Course", "\u25B6"),
-    Amis("Amis", "\uD83D\uDC65"),
-    Historique("Historique", "\u2261"),
-    Musique("Musique", "\u266B"),
-    Reglages("Reglages", "\u2699"),
+private enum class Onglet(val libelle: String, val icone: ImageVector) {
+    Course("Course", PhoneIcons.Run),
+    Amis("Amis", PhoneIcons.Group),
+    Historique("Historique", PhoneIcons.Chart),
+    Musique("Musique", PhoneIcons.Music),
+    Reglages("Reglages", PhoneIcons.Settings),
 }
 
 @Composable
@@ -178,7 +181,12 @@ private fun MpacerApp() {
                     NavigationBarItem(
                         selected = onglet == destination,
                         onClick = { onglet = destination },
-                        icon = { Text(destination.icone, fontSize = 16.sp) },
+                        icon = {
+                            Icon(
+                                imageVector = destination.icone,
+                                contentDescription = destination.libelle,
+                            )
+                        },
                         label = { Text(destination.libelle, fontSize = 11.sp) },
                     )
                 }

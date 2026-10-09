@@ -34,6 +34,7 @@ pub fn router() -> Router<AppState> {
         // revendique d'abord son nom (sujet MQTT), puis ses amis voient la
         // position tant que la seance dure et que le partage est actif.
         .route("/api/v1/live/register", post(register_live_device))
+        .route("/api/v1/live/route", put(set_live_route))
         .route("/api/v1/friends", get(list_friends))
         .route("/api/v1/friends/invite", post(create_friend_invite))
         .route("/api/v1/friends/accept", post(accept_friend_invite))
@@ -769,6 +770,74 @@ async fn register_live_device(
     Ok(Json(
         serde_json::json!({ "device": device, "registered": true }),
     ))
+}
+
+/// Parcours planifie publie par un appareil au depart d'une seance.
+#[derive(Debug, Deserialize)]
+struct LiveRouteRequest {
+    /// Nom de l'appareil, deja revendique par ce compte.
+    device: String,
+    /// Points du parcours, dans l'ordre : `[[lat, lon], ...]`.
+    ///
+    /// Une liste vide efface le parcours (fin de seance, changement de trace).
+    #[serde(default)]
+    points: Vec<[f64; 2]>,
+}
+
+/// Enregistre (ou efface) le parcours planifie d'un appareil.
+///
+/// Les suiveurs voient alors le trace prevu **et** la position courante, avec
+/// le pourcentage de parcours deja couvert : c'est ce qui repond a « ou en
+/// est-il sur son parcours ? ».
+///
+/// Le nom d'appareil doit etre revendique par le compte (`/api/v1/live/register`)
+/// avant d'y accrocher un parcours : personne ne peut ainsi planter un faux
+/// trace sous le nom d'un autre coureur.
+async fn set_live_route(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Json(request): Json<LiveRouteRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    let device = crate::friends::clean_device_name(&request.device);
+    if device.is_empty() {
+        return Err(AppError::bad_request(
+            "nom d'appareil vide : renseignez le nom de l'appareil dans les reglages",
+        ));
+    }
+    let appareils = crate::db::list_live_devices(&state.pool, &[user.id.clone()]).await?;
+    if !appareils.iter().any(|appareil| appareil.device == device) {
+        return Err(AppError::bad_request(
+            "revendiquez d'abord l'appareil (POST /api/v1/live/register) avant de publier un parcours",
+        ));
+    }
+    if request.points.is_empty() {
+        let efface = state.live.clear_route(&device);
+        return Ok(Json(serde_json::json!({
+            "device": device,
+            "points": 0,
+            "cleared": efface,
+        })));
+    }
+    match state
+        .live
+        .set_route(&device, request.points, state.now_ms())
+    {
+        Ok(route) => {
+            tracing::info!(
+                user = %user.email,
+                appareil = %device,
+                points = route.points.len(),
+                metres = route.total_m.round(),
+                "parcours planifie publie"
+            );
+            Ok(Json(serde_json::json!({
+                "device": device,
+                "points": route.points.len(),
+                "total_m": route.total_m,
+            })))
+        }
+        Err(message) => Err(AppError::bad_request(message)),
+    }
 }
 
 /// Liste du cercle : profils, partage et positions courantes.

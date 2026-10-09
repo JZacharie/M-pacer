@@ -181,6 +181,9 @@ class TrackingService : Service() {
             paceSPerKm = output.currentPace,
             heartRateBpm = output.heartRateBpm,
             engineState = output.state,
+            // L'altitude accompagne la position : elle alimente le profil de
+            // denivele de la page /live. Absente, elle n'est pas publiee.
+            altitudeM = location.altitude.takeIf { location.hasAltitude() && it.isFinite() },
         )
         publish(output, location)
     }

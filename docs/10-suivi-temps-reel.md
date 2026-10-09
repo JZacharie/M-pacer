@@ -1,7 +1,8 @@
 # 10 — Suivi en direct (MQTT)
 
 Pendant une séance, la montre publie sa position sur un **broker MQTT** ; le
-service s'y abonne et la page **/live** affiche la trace en temps réel. Les
+service s'y abonne et la page **/live** affiche la trace en temps réel sur un
+**fond de carte OpenStreetMap**, avec le **profil de dénivelé** de la séance. Les
 proches (ou vous-même, depuis un autre appareil) suivez la course sans que la
 montre ait à parler HTTP, et sans que la séance dépende du réseau : le suivi en
 direct est un **confort**, l'enregistrement reste local puis synchronisé à la
@@ -17,9 +18,9 @@ fonctionnalité, et ce qui n'est pas fait.
 ```text
 Montre Wear OS                 Broker MQTT            mpacer-api                Navigateur
 ┌──────────────┐   PUBLISH    ┌──────────┐  SUBSCRIBE ┌──────────────┐   GET    ┌───────────┐
-│ GPS 1 Hz     │  QoS 0       │ mosquitto│  QoS 1     │ LiveStore    │  /live   │ trace SVG │
+│ GPS 1 Hz     │  QoS 0       │ mosquitto│  QoS 1     │ LiveStore    │  /live   │ carte OSM │
 │ LiveTracker  │─────────────▶│ (cluster)│───────────▶│ (mémoire)    │─────────▶│ 10 s      │
-│ 1 point/10 s │  ~130 o      │          │            │ 4096 pts max │          │ auto-     │
+│ 1 point/10 s │  ~145 o      │          │            │ 4096 pts max │          │ auto-     │
 └──────────────┘              └──────────┘            └──────────────┘          │ rafraîchi │
                                                                                └───────────┘
 ```
@@ -53,14 +54,16 @@ hasard.
 
 ### 2.2 Charge utile
 
-JSON compact, champs courts — un point pèse **116 octets** (136 si le nom de la
-montre voyage avec lui ; par défaut il n'est que dans le sujet) :
+JSON compact, champs courts — un point pèse **116 octets** (132 avec l'altitude,
+152 si le nom de la montre voyage aussi avec lui ; par défaut il n'est que dans
+le sujet) :
 
 | Champ | Sens | Exemple |
 |---|---|---|
 | `t` | horodatage de la mesure (ms epoch) | `1728222000000` |
 | `lat`, `lon` | position (6 décimales, ~0,1 m) | `48.856600`, `2.352200` |
 | `acc` | précision annoncée par le GPS (m) | `4.0` |
+| `alt` | altitude (m) : profil de dénivelé de la page `/live` | `154.3` |
 | `dist` | distance parcourue depuis le départ (m) | `1234.5` |
 | `pace` | allure lissée du cœur (s/km) | `300.0` |
 | `hr` | fréquence cardiaque (bpm) | `142` |
@@ -71,8 +74,8 @@ montre voyage avec lui ; par défaut il n'est que dans le sujet) :
 Exemple complet :
 
 ```json
-{"t":1728222000000,"lat":48.856600,"lon":2.352200,"acc":4.0,"dist":1234.5,
- "pace":300.0,"hr":142,"bat":78,"st":"run","dev":"montre-a1b2"}
+{"t":1728222000000,"lat":48.856600,"lon":2.352200,"acc":4.0,"alt":154.3,
+ "dist":1234.5,"pace":300.0,"hr":142,"bat":78,"st":"run","dev":"montre-a1b2"}
 ```
 
 > Le champ `lap` (numéro de tour) est prévu par le format côté service mais
@@ -195,12 +198,28 @@ Le chart Helm expose `config.mqttUrl`, `config.mqttTopic`,
 
 | Route | Accès | Contenu |
 |---|---|---|
-| `GET /live` | session (cookie) | trace en SVG, chiffres clés, lien OpenStreetMap, rafraîchissement automatique de 10 s |
-| `GET /live.json` | session (cookie) | même contenu en JSON, pour un tableau de bord ou un script |
+| `GET /live` | session (cookie) | carte OpenStreetMap, profil de dénivelé (D+ / D-), trace SVG de repli, chiffres clés, rafraîchissement automatique de 10 s |
+| `GET /live.json` | session (cookie) | même contenu en JSON, pour un tableau de bord ou un script (la carte du site le relit toutes les 10 s) |
 
-La page ne charge **aucune ressource tierce** : la trace est une `<polyline>`
-SVG calculée par le service, pas un fond de carte. Un lien ouvre OpenStreetMap
-sur la position exacte si l'on veut du contexte.
+Chaque session porte aussi le **parcours planifié** publié par le coureur
+(`PUT /api/v1/live/route`, voir [13](13-amis-partage-position.md)) et
+l'avancement calculé par le service : la carte dessine le parcours en bleu sous
+la trace, et le marqueur affiche « 42 % ».
+
+La page dessine **deux lectures complémentaires** de la trace en cours :
+
+1. une **carte** : le fond de tuiles OpenStreetMap est affiché par le script
+   maison `/static/map.js` (le même que les pages Amis et la fiche de séance,
+   sans Leaflet ni CDN), la trace et la position courante viennent de
+   `/live.json` ; c'est la réponse à « où en est-il ? » ;
+2. un **profil de dénivelé** : l'altitude publiée (`alt`) est tracée en fonction
+   de la distance, avec le cumul D+ / D- (variations sous 1 m ignorées, c'est du
+   bruit GPS) ; c'est la réponse à « qu'a-t-il grimpé ? ».
+
+Sans altitude dans la charge utile (ancienne montre, ou GPS muet), la carte
+reste seule : rien n'est inventé. La trace SVG est conservée en repli, pour
+lire la forme du parcours même sans JavaScript. Un lien ouvre OpenStreetMap sur
+la position exacte.
 
 ---
 
@@ -286,7 +305,8 @@ une position d'il y a trois minutes n'intéresse personne.
 | Aucun historique du suivi | choix assumé : la base reçoit la séance à la fin ; le direct est volatil |
 | Aucun lien de partage public | la page demande une session ; le cercle d'amis ([13](13-amis-partage-position.md)) répond au besoin sans lien ouvert |
 | Pas de « dernier point reçu » dans l'en-tête de la page de séance | la page `/live` suffit pour l'instant |
-| Pas de fond de carte sur `/live` | la trace SVG suffit pour une séance ; la page `/amis` a un fond **OpenStreetMap** (tuiles publiques, [13](13-amis-partage-position.md)) |
+| Le fond de carte `/live` charge des tuiles publiques `tile.openstreetmap.org` | c'est le seul appel sortant de la page ; aucune position n'est envoyée au serveur de tuiles, seules les coordonnées des tuiles visibles le sont. Hors ligne, la trace SVG reste dessinée |
+| Pas de profil de dénivelé pour une montre qui ne publie pas `alt` | le champ est facultatif : sans lui, rien n'est inventé, la carte reste seule |
 
 ---
 

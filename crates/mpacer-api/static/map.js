@@ -208,6 +208,11 @@
     };
     this.points.forEach(function (point) {
       ajouter(point.lat, point.lon);
+      // Le parcours planifie fait partie de ce qu'il faut voir : sans lui, la
+      // vue ne cadrerait que la position courante.
+      (point.route || []).forEach(function (couple) {
+        ajouter(couple[0], couple[1]);
+      });
     });
     (this.trace || []).forEach(function (couple) {
       ajouter(couple[0], couple[1]);
@@ -316,6 +321,9 @@
   Carte.prototype.dessinerTraces = function (gauche, haut) {
     var carte = this;
     this.calque.innerHTML = "";
+    // Le parcours planifie passe sous la trace enregistree : on voit d'abord ou
+    // le coureur est alle, et le trace qu'il suit reste lisible autour.
+    this.dessinerRoutes(gauche, haut);
     this.points.forEach(function (point) {
       if (!point.trace || point.trace.length < 2) return;
       var chemin = point.trace
@@ -332,6 +340,34 @@
       ligne.setAttribute("stroke-linejoin", "round");
       ligne.setAttribute("stroke-linecap", "round");
       ligne.setAttribute("opacity", point.vivant ? "0.95" : "0.4");
+      carte.calque.appendChild(ligne);
+    });
+  };
+
+  /**
+   * Parcours planifie de chaque coureur : la trace qu'il compte suivre.
+   *
+   * Bleu et plus epais que la trace enregistree : sur la carte, on distingue
+   * d'un coup d'oeil le trace prevu (ce qui reste a faire) de la trace faite.
+   */
+  Carte.prototype.dessinerRoutes = function (gauche, haut) {
+    var carte = this;
+    this.points.forEach(function (point) {
+      if (!point.route || point.route.length < 2) return;
+      var chemin = point.route
+        .map(function (couple) {
+          var pixel = projeter(couple[0], couple[1], carte.zoom);
+          return Math.round(pixel.x - gauche) + "," + Math.round(pixel.y - haut);
+        })
+        .join(" ");
+      var ligne = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      ligne.setAttribute("points", chemin);
+      ligne.setAttribute("fill", "none");
+      ligne.setAttribute("stroke", "#4c8dff");
+      ligne.setAttribute("stroke-width", "5");
+      ligne.setAttribute("stroke-opacity", "0.5");
+      ligne.setAttribute("stroke-linejoin", "round");
+      ligne.setAttribute("stroke-linecap", "round");
       carte.calque.appendChild(ligne);
     });
   };
@@ -396,6 +432,11 @@
       var etiquette = marqueur.querySelector(".carte-etiquette");
       var texte = point.nom || "Ami";
       if (point.age_texte) texte += " - " + point.age_texte;
+      // Avancement sur le parcours planifie : le suiveur sait ou en est le
+      // coureur sans ouvrir sa fiche.
+      if (typeof point.progress_pct === "number") {
+        texte += " - " + Math.round(point.progress_pct) + " %";
+      }
       etiquette.textContent = texte;
     });
 
@@ -408,11 +449,40 @@
     });
   };
 
-  /** Applique une charge utile /amis.json (ou /api/v1/friends/live). */
+  /** Applique une charge utile /amis.json, /live.json ou /api/v1/friends/live. */
   Carte.prototype.mettreAJour = function (donnees) {
     var points = [];
-    if (donnees && donnees.me && donnees.me.live) {
-      points.push(this.pointDe(donnees.me.live, "Ma position", true));
+    // Suivi en direct (/live.json) : une montre par session, sa trace et sa
+    // position courante. Le cercle d'amis (/amis.json) suit le meme chemin,
+    // plus bas, sans que l'un soit confondu avec l'autre.
+    if (donnees && donnees.sessions) {
+      var maintenant = donnees.now_ms || Date.now();
+      donnees.sessions.forEach(function (session) {
+        var trace = (session.trace || []).map(function (point) {
+          return [point.lat, point.lon];
+        });
+        var dernier = session.last || (trace.length ? { lat: trace[trace.length - 1][0], lon: trace[trace.length - 1][1] } : null);
+        if (!dernier) return;
+        points.push({
+          cle: "session:" + session.device,
+          nom: session.device,
+          moi: false,
+          lat: dernier.lat,
+          lon: dernier.lon,
+          trace: trace,
+          route: session.route || [],
+          progress_pct: typeof session.progress_pct === "number" ? session.progress_pct : null,
+          vivant: session.state !== "stop",
+          age_texte: age(Math.round((maintenant - session.last_ms) / 1000)),
+          couleur: couleurEtat(session.state),
+        });
+      });
+    }
+    // /amis.json renvoie « me » comme une position ; d'anciennes formes
+    // l'imbriquaient sous « live ». Les deux sont acceptees.
+    var moi = donnees && donnees.me ? donnees.me.live || donnees.me : null;
+    if (moi) {
+      points.push(this.pointDe(moi, "Ma position", true));
     }
     var amis = (donnees && donnees.friends) || [];
     amis.forEach(
@@ -448,6 +518,8 @@
       lat: position.lat,
       lon: position.lon,
       trace: position.trace || [],
+      route: position.route || [],
+      progress_pct: typeof position.progress_pct === "number" ? position.progress_pct : null,
       vivant: position.state !== "stop",
       age_texte: age(position.age_s),
       couleur: moi ? "#2f2fbf" : couleurEtat(position.state),

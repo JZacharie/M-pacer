@@ -292,6 +292,28 @@ object FriendsClient {
         }
     }
 
+    /**
+     * Publie le parcours planifie de l'appareil (une fois, au depart).
+     *
+     * L'appel est fait au mieux, comme la revendication : sans jeton ni reseau,
+     * la seance continue — les suiveurs voient seulement la position.
+     */
+    fun publishRoute(context: Context, device: String, points: List<Pair<Double, Double>>) {
+        if (device.isBlank() || points.size < 2) return
+        val application = context.applicationContext
+        val route = com.mpacer.core.live.PlannedRouteStore.Route(device, points)
+        portee.launch {
+            val token = SyncClient.token(application)
+            if (token == null) {
+                Log.i(TAG, "parcours non publie : appareil non appaire")
+                return@launch
+            }
+            val corps = com.mpacer.core.live.PlannedRouteStore.payload(device, route)
+            val envoye = poster(application, "/api/v1/live/route", corps, methode = "PUT", tokenForce = token)
+            if (envoye) Log.i(TAG, "parcours planifie publie : " + route.points.size + " points")
+        }
+    }
+
     // ------------------------------------------------------------------ reseau
 
     private suspend fun poster(
@@ -467,9 +489,39 @@ data class FriendPosition(
     @SerialName("battery_percent") val batteryPercent: Int? = null,
     val lap: Int? = null,
     val trace: List<List<Double>> = emptyList(),
+    /** Parcours planifie du coureur, sous-echantillonne (vide s'il n'en a pas). */
+    val route: List<List<Double>> = emptyList(),
+    @SerialName("route_total_m") val routeTotalM: Double? = null,
+    @SerialName("progress_pct") val progressPct: Double? = null,
+    @SerialName("route_remaining_m") val routeRemainingM: Double? = null,
+    @SerialName("off_route_m") val offRouteM: Double? = null,
 ) {
     /** Vrai si la seance est en cours (l'ami court encore). */
     val enCourse: Boolean get() = state != "stop" && state != "pause"
+
+    /** Resume de l'avancement sur le parcours planifie, ou null s'il n'y en a pas. */
+    val parcoursResume: String?
+        get() {
+            val pct = progressPct ?: return null
+            val total = routeTotalM
+            val reste = routeRemainingM
+            val base = if (total != null && reste != null) {
+                String.format(
+                    java.util.Locale.ROOT,
+                    "%.0f %% (%.1f / %.1f km)",
+                    pct,
+                    ((total - reste) / 1000.0).coerceAtLeast(0.0),
+                    total / 1000.0,
+                )
+            } else {
+                String.format(java.util.Locale.ROOT, "%.0f %%", pct)
+            }
+            return if (offRouteM != null && offRouteM!! > 50.0) {
+                base + " - hors trace " + String.format(java.util.Locale.ROOT, "%.0f m", offRouteM)
+            } else {
+                base
+            }
+        }
 }
 
 /** Code d'invitation renvoye par le backend. */

@@ -11,11 +11,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -23,6 +25,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -184,13 +187,23 @@ fun FriendsScreen() {
                         TextButton(onClick = {
                             copier(context, invitation.code)
                             Toast.makeText(context, "Code copie", Toast.LENGTH_SHORT).show()
-                        }) { Text("Copier") }
+                        }) {
+                            Icon(PhoneIcons.Copy, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Copier")
+                        }
                         TextButton(onClick = { partagerInvitation(context, invitation) }) {
+                            Icon(PhoneIcons.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
                             Text("Partager")
                         }
                         TextButton(onClick = {
                             scope.launch { FriendsClient.createInvite(context, nouvelle = true) }
-                        }) { Text("Nouveau code") }
+                        }) {
+                            Icon(PhoneIcons.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Nouveau code")
+                        }
                     }
                 } else {
                     Text("Aucun code pour l'instant.", color = Palette.muted, fontSize = 13.sp)
@@ -232,7 +245,11 @@ fun FriendsScreen() {
                             containerColor = Palette.orange,
                             contentColor = Color.White,
                         ),
-                    ) { Text("Chercher") }
+                    ) {
+                        Icon(PhoneIcons.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Chercher")
+                    }
                 }
                 etat.search.forEach { compte ->
                     CarteCompte(
@@ -344,6 +361,8 @@ fun FriendsScreen() {
                         contentColor = Color.White,
                     ),
                 ) {
+                    Icon(PhoneIcons.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
                     Text("Ajouter")
                 }
             }
@@ -455,7 +474,11 @@ private fun CarteAmi(ami: Friend, onRemove: () -> Unit) {
                     fontSize = 11.sp,
                 )
             }
-            TextButton(onClick = onRemove) { Text("Retirer", color = Palette.danger) }
+            TextButton(onClick = onRemove) {
+                Icon(PhoneIcons.Delete, contentDescription = null, tint = Palette.danger, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Retirer", color = Palette.danger)
+            }
         }
     }
 }
@@ -479,7 +502,11 @@ private fun CarteCompte(compte: UserSummary, onAsk: () -> Unit) {
                 containerColor = Palette.orange,
                 contentColor = Color.White,
             ),
-        ) { Text("Demander") }
+        ) {
+            Icon(PhoneIcons.Send, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Demander")
+        }
     }
 }
 
@@ -517,8 +544,14 @@ private fun CarteDemande(demande: FriendRequest, onAccept: () -> Unit, onDecline
                         containerColor = Palette.orange,
                         contentColor = Color.White,
                     ),
-                ) { Text("Accepter") }
+                ) {
+                    Icon(PhoneIcons.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Accepter")
+                }
                 TextButton(onClick = onDecline) {
+                    Icon(PhoneIcons.Close, contentDescription = null, tint = Palette.danger, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
                     Text("Refuser", color = Palette.danger)
                 }
             }
@@ -550,6 +583,8 @@ private fun CarteEnvoyee(demande: FriendRequest, onCancel: () -> Unit) {
             }
             Text("En attente de reponse", color = Palette.muted, fontSize = 11.sp)
             TextButton(onClick = onCancel) {
+                Icon(PhoneIcons.Close, contentDescription = null, tint = Palette.danger, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
                 Text("Annuler", color = Palette.danger)
             }
         }

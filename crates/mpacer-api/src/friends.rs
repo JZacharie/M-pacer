@@ -316,6 +316,21 @@ pub struct FriendLive {
     pub lap: Option<i64>,
     /// Trace de la seance en cours, sous-echantillonnee : `[[lat, lon], ...]`.
     pub trace: Vec<[f64; 2]>,
+    /// Parcours planifie du coureur, sous-echantillonne (vide s'il n'en a pas).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub route: Vec<[f64; 2]>,
+    /// Longueur du parcours planifie (m).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_total_m: Option<f64>,
+    /// Pourcentage du parcours planifie deja couvert (0 a 100).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_pct: Option<f64>,
+    /// Distance restante sur le parcours planifie (m).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_remaining_m: Option<f64>,
+    /// Ecart au parcours planifie (m).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub off_route_m: Option<f64>,
 }
 
 impl FriendLive {
@@ -350,6 +365,11 @@ impl FriendLive {
                 .iter()
                 .map(|point| [point.lat, point.lon])
                 .collect(),
+            route: session.route.clone(),
+            route_total_m: session.route_total_m,
+            progress_pct: session.progress_pct,
+            route_remaining_m: session.route_remaining_m,
+            off_route_m: session.off_route_m,
         })
     }
 }
@@ -482,6 +502,7 @@ pub async fn payload(
         for ami in &mut amis {
             if let Some(position) = ami.live.as_mut() {
                 position.trace.clear();
+                position.route.clear();
             }
         }
     }
@@ -489,6 +510,7 @@ pub async fn payload(
     if !with_trace {
         if let Some(position) = moi.as_mut() {
             position.trace.clear();
+            position.route.clear();
         }
     }
     // La pastille des demandes recues est lue avec le cercle : un client qui
@@ -537,6 +559,7 @@ mod tests {
             lat,
             lon,
             accuracy_m: Some(4.0),
+            altitude_m: None,
             distance_m: Some(1_500.0),
             pace_s_per_km: Some(300.0),
             heart_rate_bpm: Some(148),

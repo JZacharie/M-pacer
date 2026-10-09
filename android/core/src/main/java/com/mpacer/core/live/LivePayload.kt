@@ -27,6 +27,7 @@ internal object LivePayload {
         batteryPercent: Int?,
         state: String,
         device: String,
+        altitudeM: Double? = null,
     ): ByteArray {
         val json = StringBuilder(160)
         json.append("{\"t\":").append(tMs)
@@ -34,6 +35,9 @@ internal object LivePayload {
         json.append(",\"lat\":").append(decimal(lat, 6))
         json.append(",\"lon\":").append(decimal(lon, 6))
         accuracyM?.let { json.append(",\"acc\":").append(decimal(it, 1)) }
+        // Altitude publiee avec les memes garanties de locale que le reste :
+        // elle alimente le profil de denivele de la page /live.
+        altitudeM?.let { json.append(",\"alt\":").append(decimal(it, 1)) }
         distanceM?.let { json.append(",\"dist\":").append(decimal(it, 1)) }
         paceSPerKm?.let { json.append(",\"pace\":").append(decimal(it, 1)) }
         heartRateBpm?.let { json.append(",\"hr\":").append(it) }

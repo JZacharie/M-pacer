@@ -100,6 +100,7 @@ la synchronisation des seances (ou session navigateur pour la page web).
 | `POST /api/v1/live/register` | revendique un appareil pour le compte |
 | `GET /api/v1/friends` | cercle : amis, partage, positions courantes, demandes en attente |
 | `GET /api/v1/friends/live?trace=1` | idem, avec la trace de la seance (carte) |
+| `PUT /api/v1/live/route` | publie (ou efface) le **parcours planifie** de l'appareil : `{"device":"...","points":[[lat,lon],...]}` ; une liste vide efface |
 | `GET /api/v1/friends/search?q=` | comptes M-pacer par adresse ou nom (2 caracteres minimum) |
 | `POST /api/v1/friends/requests` | envoie une demande : `{"email":"ami@example.org","message":"..."}` |
 | `GET /api/v1/friends/requests` | demandes recues et envoyees |
@@ -134,9 +135,47 @@ Reponse du cercle (extrait) :
 }
 ```
 
-Sans `trace=1`, la trace est videe : la reponse pese quelques centaines
-d'octets par ami, ce qui permet un rafraichissement toutes les dix secondes
-depuis un telephone.
+Sans `trace=1`, la trace **et le parcours** sont vides : la reponse pese
+quelques centaines d'octets par ami, ce qui permet un rafraichissement toutes
+les dix secondes depuis un telephone. L'avancement (`progress_pct`) reste
+toujours transmis : c'est lui qui dit « 42 % du parcours ».
+
+## 4 bis. Le parcours planifie
+
+Un coureur qui suit un trace prepare (une course, une boucle) le **publie au
+depart de la seance** : les suiveurs voient alors, sur la meme carte, le
+parcours prevu **et** la position courante, avec le pourcentage deja couvert.
+
+```text
+   Application                 Backend                     Suiveur
+   fichier GPX choisi          PUT /api/v1/live/route      carte /amis ou /live
+   (RunScreen, carte            -> LiveStore (memoire,       trace bleue = parcours
+    « Parcours planifie »)         24 h, 2000 points max)     point = position
+        |                                                     42 % (3,2 / 7,6 km)
+        |  au depart de chaque seance                            hors trace 120 m
+        v
+   POST /api/v1/live/register  puis  PUT /api/v1/live/route
+```
+
+Regles tenues :
+
+1. **Le nom d'appareil doit etre revendique** avant qu'un parcours puisse y etre
+   accroche : personne ne peut planter un faux trace sous le nom d'un autre
+   coureur (le service repond 400 si l'appareil n'appartient pas au compte).
+2. **Rien n'est ecrit en base** : le parcours vit dans le meme magasin en memoire
+   que les positions, et disparait apres 24 h sans seance (comme la trace).
+3. **Le pourcentage vient du service**, pas de l'application : la position
+   courante est projetee sur le parcours (plan local en metres), ce qui donne la
+   distance parcourue, la distance restante et l'ecart au trace. Le calcul est
+   teste dans `crates/mpacer-api/src/live.rs` (mi-parcours = 50 %, sortie de
+   trace mesuree).
+4. **Le parcours ne remplace pas la position** : sans seance en cours, il n'est
+   pas publie ; le partage reste « seulement pendant la course ».
+
+Cote application telephone, le parcours se choisit dans **Course ▸ Parcours
+planifie** (fichier `.gpx`, lu sur l'appareil, garde localement) ; l'avancement
+s'affiche sur la meme carte, en course. La trace est sous-echantillonnee a 400
+points pour la carte, 2000 points au maximum en memoire.
 
 ## 5. Page web /amis
 
@@ -168,7 +207,9 @@ bibliotheque, aucun CDN) :
   exigee par la politique d'usage (OpenStreetMap contributeurs, cliquable) ;
 - projection Web Mercator, deplacement a la souris ou au doigt, zoom (boutons,
   molette, pincement) ;
-- marqueurs colores par etat (en course, en pause, pret) et polylignes de trace ;
+- marqueurs colores par etat (en course, en pause, pret), polylignes de trace et
+  **parcours planifie** dessine en bleu sous la trace enregistree (ce qui reste a
+  faire reste visible) ; le marqueur porte le pourcentage de parcours couvert ;
 - chargement paresseux des tuiles, nettoyage de celles sorties de l'ecran.
 
 Le meme fichier sert le navigateur et **l'application Android** : la vue Carte de
@@ -232,3 +273,9 @@ l'ecran :
   jeton d'appairage et le mot de passe du broker restent chiffres sur l'appareil.
 - **Pas de notification d'arrivee** ni d'historique partage : c'est volontaire,
   la fonctionnalite se limite a la position du moment.
+- **Le parcours n'est publie que par l'appareil qui le porte** : aujourd'hui le
+  telephone (choix d'un `.gpx` dans Course ▸ Parcours planifie). Une seance
+  courue avec la montre seule partage donc la position et la trace, mais pas le
+  parcours — le transfert du parcours vers la montre reste a faire.
+- **Un parcours par appareil** : le dernier publie remplace le precedent ;
+  changer de trace en cours de seance met la carte a jour au message suivant.

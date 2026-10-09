@@ -231,6 +231,32 @@ object WatchIcons {
         close()
     }
 
+    /** Plus : volume en hausse, ajout. */
+    val Plus: ImageVector = icone("Plus", PathFillType.NonZero) {
+        moveTo(19f, 13f)
+        horizontalLineToRelative(-6f)
+        verticalLineToRelative(6f)
+        horizontalLineToRelative(-2f)
+        verticalLineToRelative(-6f)
+        horizontalLineTo(5f)
+        verticalLineToRelative(-2f)
+        horizontalLineToRelative(6f)
+        verticalLineTo(5f)
+        horizontalLineToRelative(2f)
+        verticalLineToRelative(6f)
+        horizontalLineToRelative(6f)
+        close()
+    }
+
+    /** Minus : volume en baisse, retrait. */
+    val Minus: ImageVector = icone("Minus", PathFillType.NonZero) {
+        moveTo(5f, 11f)
+        horizontalLineToRelative(14f)
+        verticalLineToRelative(2f)
+        horizontalLineTo(5f)
+        close()
+    }
+
     /** Location */
     val Location: ImageVector = icone("Location", PathFillType.NonZero) {
         moveTo(12f, 2f)

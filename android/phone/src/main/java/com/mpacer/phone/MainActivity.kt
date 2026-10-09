@@ -1,8 +1,10 @@
 package com.mpacer.phone
 
 import android.Manifest
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -67,12 +69,49 @@ class MainActivity : ComponentActivity() {
         VoiceCoach.initialise(this)
         // Les reglages enregistres partent au moteur avant le premier affichage.
         appliquerReglages(this, PhoneSettingsStore.load(this))
+        // Broker MQTT surchargeable au lancement (developpement, deploiement
+        // assiste) : les valeurs sont enregistrees, donc elles survivent au
+        // redemarrage de l'application.
+        appliquerBroker(intent)
         demanderPermissions.launch(permissions())
         setContent {
             MpacerTheme {
                 MpacerApp()
             }
         }
+    }
+
+    /** Nouveau lancement sur une activite deja ouverte (mises a jour des reglages). */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        appliquerBroker(intent)
+    }
+
+    /**
+     * Reglages du broker MQTT transmis au lancement, pour le deploiement assiste :
+     *
+     *   adb shell am start -n com.mpacer.phone/.MainActivity \
+     *     --es mqtt_url mqtt://hote:1883 --es mqtt_user mpacer --es mqtt_password secret
+     *
+     * Seuls les champs fournis sont ecrits : le mot de passe seul peut etre
+     * corrige sans retaper l'adresse. Rien n'est journalise du mot de passe.
+     */
+    private fun appliquerBroker(intent: Intent?) {
+        val url = intent?.getStringExtra(EXTRA_MQTT_URL)?.takeIf { it.isNotBlank() } ?: return
+        val actuel = LiveSettings.load(this)
+        val utilisateur = intent.getStringExtra(EXTRA_MQTT_USER)
+        val motDePasse = intent.getStringExtra(EXTRA_MQTT_PASSWORD)
+        val nouveau = LiveSettings.save(
+            this,
+            actuel.copy(
+                url = url.trim(),
+                username = utilisateur ?: actuel.username,
+                password = motDePasse ?: actuel.password,
+            ),
+        )
+        LiveTracker.refresh(this)
+        Log.i(TAG, "broker MQTT applique : " + nouveau.url + " (utilisateur " + nouveau.username + ")")
     }
 
     /**
@@ -109,6 +148,13 @@ class MainActivity : ComponentActivity() {
             liste += Manifest.permission.BLUETOOTH_CONNECT
         }
         return liste.toTypedArray()
+    }
+
+    companion object {
+        private const val TAG = "MpacerConfig"
+        const val EXTRA_MQTT_URL = "mqtt_url"
+        const val EXTRA_MQTT_USER = "mqtt_user"
+        const val EXTRA_MQTT_PASSWORD = "mqtt_password"
     }
 }
 

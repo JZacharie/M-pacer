@@ -31,6 +31,9 @@ pub enum AppError {
     Network(#[from] reqwest::Error),
     #[error("erreur interne : {0}")]
     Internal(#[from] anyhow::Error),
+    /// Source externe indisponible ou desactivee (recherche Finishers...).
+    #[error("service indisponible : {0}")]
+    Unavailable(String),
     /// Erreur du flux OAuth/appairage : le code est le message (RFC 8628).
     #[error("{0}")]
     OAuth(String),
@@ -45,6 +48,10 @@ impl AppError {
         AppError::Internal(anyhow::anyhow!(message.into()))
     }
 
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        AppError::Unavailable(message.into())
+    }
+
     pub fn status(&self) -> StatusCode {
         match self {
             AppError::NotFound => StatusCode::NOT_FOUND,
@@ -55,6 +62,7 @@ impl AppError {
             AppError::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             AppError::OAuth(_) => StatusCode::BAD_REQUEST,
             AppError::Conflict(_) => StatusCode::CONFLICT,
+            AppError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             AppError::Database(_) | AppError::Network(_) | AppError::Internal(_) => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
@@ -76,6 +84,7 @@ impl AppError {
             AppError::Database(_) => "database_error".to_string(),
             AppError::Network(_) => "network_error".to_string(),
             AppError::Internal(_) => "internal_error".to_string(),
+            AppError::Unavailable(_) => "service_unavailable".to_string(),
         }
     }
 }

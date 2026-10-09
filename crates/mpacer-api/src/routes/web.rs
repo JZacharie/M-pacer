@@ -6,6 +6,10 @@
 use crate::auth::device;
 use crate::auth::{AuthUser, OptionalUser, SESSION_COOKIE};
 use crate::error::{AppError, AppResult};
+use crate::finishers::{
+    FinishersRace, RaceSearchParams, RaceSearchQuery, RaceSearchResponse, Sort, DISCIPLINES,
+    FRENCH_REGIONS, MONTHS,
+};
 use crate::friends::InviteOutcome;
 use crate::live::{LivePoint, LiveSessionView};
 use crate::models::{
@@ -92,6 +96,9 @@ pub fn router() -> Router<AppState> {
         .route("/workouts/{id}/comment", post(workout_comment))
         .route("/courses", get(races_page))
         .route("/courses/planning", get(planning_page))
+        // Recherche dans le calendrier Finishers (docs/05) : la fiche M-pacer
+        // d'une course trouvee se cree ensuite en un clic.
+        .route("/courses/recherche", get(race_search_page))
         .route("/courses/nouvelle", get(race_new_page).post(race_create))
         // Import d'une ancienne course (export Strava/Garmin) : la route fixe
         // elle-meme le plafond du corps, sans elargir le reste du service.
@@ -2979,6 +2986,34 @@ impl RaceForm {
         }
     }
 
+    /// Pre-remplit le formulaire depuis une course du calendrier Finishers.
+    ///
+    /// Seuls les champs publies par la source sont remplis : l'horaire de depart,
+    /// le dossard, l'hebergement, l'objectif et les notes privees restent vides.
+    /// L'adresse de la fiche Finishers part dans « autres informations » pour que
+    /// l'origine de la fiche reste tracable.
+    fn from_finishers(race: &FinishersRace, distance_m: Option<f64>) -> RaceForm {
+        let distance = distance_m.or(race.distance_m);
+        RaceForm {
+            name: race.name.clone(),
+            date: race.start_date.clone().unwrap_or_default(),
+            distance_km: distance
+                .map(|meters| format_number(meters / 1000.0))
+                .unwrap_or_default(),
+            discipline: race.discipline_label.clone().unwrap_or_default(),
+            location: race.city.clone().unwrap_or_default(),
+            start_location: race.city.clone().unwrap_or_default(),
+            latitude: race.latitude.map(format_number).unwrap_or_default(),
+            longitude: race.longitude.map(format_number).unwrap_or_default(),
+            registration_url: race
+                .registration_url
+                .clone()
+                .unwrap_or_else(|| race.url.clone()),
+            notes: format!("Fiche Finishers : {}", race.url),
+            ..RaceForm::default()
+        }
+    }
+
     /// Convertit la saisie en champs enregistrables.
     fn to_input(&self) -> Result<RaceInput, String> {
         Ok(RaceInput {
@@ -3140,10 +3175,28 @@ fn race_form_response(
     submit: &str,
     status: StatusCode,
 ) -> Response {
+    race_form_response_with_notice(user, heading, action, values, error, None, submit, status)
+}
+
+/// Variante avec bandeau d'information (pre-remplissage depuis Finishers).
+#[allow(clippy::too_many_arguments)]
+fn race_form_response_with_notice(
+    user: &User,
+    heading: &str,
+    action: &str,
+    values: &RaceForm,
+    error: Option<&str>,
+    notice: Option<&str>,
+    submit: &str,
+    status: StatusCode,
+) -> Response {
     let content = html! {
         section class="hero" {
             h1 { (heading) }
             p class="muted" { "Renseignez ce que vous savez : la fiche se complete au fil des semaines." }
+        }
+        @if let Some(notice) = notice {
+            p class="notice" { (notice) }
         }
         (race_form(action, values, error, submit))
     };
@@ -3281,6 +3334,10 @@ async fn races_page(
                 h2 { "Cartes des courses" }
                 div class="actions" {
                     a class="button ghost" href="/courses/planning" { "Planning" }
+                    a class="button ghost" href="/courses/recherche" {
+                        span class="icon icon-route" {}
+                        "Chercher une course"
+                    }
                     a class="button ghost" href="/courses/importer" {
                         span class="icon icon-export" {}
                         "Importer une course"
@@ -3421,6 +3478,7 @@ async fn planning_page(
             p class="muted" { "Toutes les echeances de vos prochaines courses, dans l'ordre." }
             div class="actions" {
                 a class="button ghost" href="/courses" { "Vos courses" }
+                a class="button ghost" href="/courses/recherche" { "Chercher une course" }
                 a class="button" href="/courses/nouvelle" { "Ajouter une course" }
             }
         }
@@ -3462,16 +3520,68 @@ async fn planning_page(
     Ok(page(layout("Planning", "planning", Some(&user), content)))
 }
 
-async fn race_new_page(OptionalUser(user): OptionalUser) -> AppResult<Response> {
+/// Parametres de la page de creation.
+///
+/// `finishers` (identifiant d'epreuve) et `distance` (metres) viennent du bouton
+/// « Creer la course » de la recherche : la fiche arrive pre-remplie.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct RaceNewQuery {
+    #[serde(default)]
+    finishers: Option<String>,
+    #[serde(default)]
+    distance: Option<String>,
+}
+
+/// Page de creation d'une course.
+///
+/// Avec `?finishers=<eventId>`, la fiche est pre-remplie depuis le calendrier
+/// Finishers : nom, date, distance, discipline, ville et coordonnees. Rien
+/// d'autre n'est invente (horaire, dossard, hebergement restent vides) et rien
+/// n'est enregistre avant la validation du formulaire.
+async fn race_new_page(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Query(params): Query<RaceNewQuery>,
+) -> AppResult<Response> {
     let Some(user) = user else {
         return Ok(Redirect::to("/login").into_response());
     };
-    Ok(race_form_response(
+    let mut values = RaceForm::default();
+    let mut notice = None;
+    let event = params
+        .finishers
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    if let Some(event) = event {
+        let distance = params
+            .distance
+            .as_deref()
+            .and_then(|value| value.trim().parse::<f64>().ok());
+        match state.finishers.event(event).await {
+            Ok(Some(race)) => {
+                values = RaceForm::from_finishers(&race, distance);
+                notice = Some(format!(
+                    "Fiche pre-remplie depuis Finishers : {} - verifiez la distance et l'horaire.",
+                    race.name
+                ));
+            }
+            Ok(None) => {
+                notice = Some(
+                    "Cette course n'est plus publiee par Finishers : completez la fiche."
+                        .to_string(),
+                );
+            }
+            Err(error) => notice = Some(error.to_string()),
+        }
+    }
+    Ok(race_form_response_with_notice(
         &user,
         "Nouvelle course",
         "/courses/nouvelle",
-        &RaceForm::default(),
+        &values,
         None,
+        notice.as_deref(),
         "Ajouter la course",
         StatusCode::OK,
     ))
@@ -3502,6 +3612,377 @@ async fn race_create(
     let race = crate::db::insert_race(&state.pool, &user.id, &input, state.now_ms()).await?;
     tracing::info!(user = %user.email, race = %race.id, "course ajoutee");
     Ok(Redirect::to(&format!("/courses/{}", race.id)).into_response())
+}
+
+// ------------------------------------------------- recherche de courses
+//
+// Le calendrier Finishers n'est pas recopie en base : la page interroge l'index
+// public du site a chaque recherche (docs/05). Le coureur choisit une epreuve,
+// puis sa fiche M-pacer est pre-remplie - M-pacer reste la source de verite pour
+// tout ce qui est prive : dossard, hebergement, notes, elements de suivi.
+
+/// Page de recherche dans le calendrier Finishers (France par defaut).
+async fn race_search_page(
+    State(state): State<AppState>,
+    OptionalUser(user): OptionalUser,
+    Query(params): Query<RaceSearchParams>,
+) -> AppResult<Response> {
+    let Some(user) = user else {
+        return Ok(Redirect::to("/login").into_response());
+    };
+    let query = match RaceSearchQuery::parse(&params) {
+        Ok(query) => query,
+        Err(message) => {
+            return Ok(race_search_response(
+                &user,
+                &RaceSearchQuery::default(),
+                None,
+                Some(&message),
+                StatusCode::BAD_REQUEST,
+            ));
+        }
+    };
+    // Une source injoignable n'est pas une erreur du coureur : la page reste
+    // utilisable et affiche ce qui s'est passe, formulaire compris.
+    let (results, error) = if state.finishers.configured() {
+        match state.finishers.search(&query).await {
+            Ok(results) => (Some(results), None),
+            Err(error) => (None, Some(error.to_string())),
+        }
+    } else {
+        (
+            None,
+            Some("La recherche Finishers est desactivee sur ce service.".to_string()),
+        )
+    };
+    Ok(race_search_response(
+        &user,
+        &query,
+        results.as_ref(),
+        error.as_deref(),
+        StatusCode::OK,
+    ))
+}
+
+/// Contenu de la page : formulaire, message eventuel et resultats.
+fn race_search_content(
+    query: &RaceSearchQuery,
+    results: Option<&RaceSearchResponse>,
+    error: Option<&str>,
+) -> Markup {
+    html! {
+        section class="hero" {
+            h1 { "Chercher une course" }
+            p class="muted" {
+                "Le calendrier "
+                a href="https://www.finishers.com/ou-courir/europe/france"
+                  target="_blank" rel="noopener noreferrer" { "Finishers" }
+                " : trouvez votre course, puis creez sa fiche M-pacer en un clic."
+            }
+            div class="actions" {
+                a class="button ghost" href="/courses" { "Vos courses" }
+                a class="button ghost" href="/courses/nouvelle" { "Saisir a la main" }
+            }
+        }
+        (race_search_form(query))
+        @if let Some(error) = error {
+            p class="alert" { (error) }
+        }
+        @if let Some(results) = results {
+            @if results.items.is_empty() {
+                section {
+                    p class="muted" {
+                        "Aucune course ne correspond a ces criteres. Elargissez la region, "
+                        "la distance ou la periode."
+                    }
+                }
+            } @else {
+                section {
+                    div class="section-head" {
+                        h2 { (format!("{} courses trouvees", results.total)) }
+                        span class="muted" {
+                            (format!("page {} sur {}", results.page, results.pages))
+                        }
+                    }
+                    div class="race-grid" {
+                        @for race in &results.items {
+                            (finishers_card(race))
+                        }
+                    }
+                    (race_search_pagination(query, results))
+                }
+            }
+        }
+    }
+}
+
+/// Page complete, avec sa mise en page.
+fn race_search_response(
+    user: &User,
+    query: &RaceSearchQuery,
+    results: Option<&RaceSearchResponse>,
+    error: Option<&str>,
+    status: StatusCode,
+) -> Response {
+    let content = race_search_content(query, results, error);
+    (
+        status,
+        page(layout(
+            "Chercher une course",
+            "courses",
+            Some(user),
+            content,
+        )),
+    )
+        .into_response()
+}
+
+/// Formulaire de criteres : texte, region, discipline, mois, annee, distances.
+fn race_search_form(query: &RaceSearchQuery) -> Markup {
+    let annee = query.year.map(|year| year.to_string()).unwrap_or_default();
+    let dmin = query.distance_min_m.map(km_field).unwrap_or_default();
+    let dmax = query.distance_max_m.map(km_field).unwrap_or_default();
+    let mois = query
+        .month
+        .map(|month| month.to_string())
+        .unwrap_or_default();
+    let selected_region = query.region.clone().unwrap_or_default();
+    let selected_discipline = query.discipline.clone().unwrap_or_default();
+    html! {
+        form class="search-form" method="get" action="/courses/recherche" {
+            section class="panel" {
+                h2 { "Criteres" }
+                div class="grid-2" {
+                    (text_field("q", "Mot-cle", &query.q, "search", "marathon, trail, Lyon..."))
+                    (select_field("region", "Region", region_options(), &selected_region))
+                    (select_field("discipline", "Discipline", discipline_options(), &selected_discipline))
+                    (select_field("mois", "Mois", month_options(), &mois))
+                    (text_field("annee", "Annee", &annee, "number", "2027"))
+                    (text_field("dmin", "Distance minimum (km)", &dmin, "number", "10"))
+                    (text_field("dmax", "Distance maximum (km)", &dmax, "number", "42"))
+                    (select_field("tri", "Tri", sort_options(), query.sort.code()))
+                }
+                div class="actions" {
+                    button type="submit" { "Chercher" }
+                    a class="button ghost" href="/courses/recherche" { "Reinitialiser" }
+                }
+            }
+        }
+    }
+}
+
+/// Menu deroulant d'un critere ; la premiere entree vide veut dire « tous ».
+fn select_field(name: &str, label: &str, options: Vec<(String, String)>, selected: &str) -> Markup {
+    html! {
+        div class="field" {
+            label for=(name) { (label) }
+            select id=(name) name=(name) {
+                @for (value, text) in &options {
+                    option value=(value) selected[*value == selected] { (text) }
+                }
+            }
+        }
+    }
+}
+
+/// Regions francaises proposees par le filtre.
+fn region_options() -> Vec<(String, String)> {
+    let mut options = vec![(String::new(), "Toutes les regions".to_string())];
+    for region in FRENCH_REGIONS {
+        options.push((region.to_string(), region.to_string()));
+    }
+    options
+}
+
+/// Disciplines proposees par le filtre, libellees en francais.
+fn discipline_options() -> Vec<(String, String)> {
+    let mut options = vec![(String::new(), "Toutes les disciplines".to_string())];
+    for (code, label) in DISCIPLINES {
+        options.push((code.to_string(), label.to_string()));
+    }
+    options
+}
+
+/// Mois de l'annee.
+fn month_options() -> Vec<(String, String)> {
+    let mut options = vec![(String::new(), "Tous les mois".to_string())];
+    for (index, name) in MONTHS.iter().enumerate() {
+        options.push(((index + 1).to_string(), capitalize(name)));
+    }
+    options
+}
+
+/// Ordres de tri proposes.
+fn sort_options() -> Vec<(String, String)> {
+    Sort::ALL
+        .iter()
+        .map(|sort| (sort.code().to_string(), sort.label().to_string()))
+        .collect()
+}
+
+/// Premiere lettre en majuscule (les libelles de mois sont en minuscules).
+fn capitalize(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Distance (m) telle qu'elle apparait dans l'URL, en kilometres.
+fn km_field(meters: f64) -> String {
+    let km = meters / 1000.0;
+    if (km - km.round()).abs() < 0.001 {
+        format!("{}", km.round() as i64)
+    } else {
+        format!("{km}")
+    }
+}
+
+/// Carte d'une course du calendrier Finishers.
+fn finishers_card(race: &FinishersRace) -> Markup {
+    html! {
+        article class="search-card" {
+            div class="search-card-head" {
+                h3 {
+                    a href=(race.url) target="_blank" rel="noopener noreferrer" { (race.name) }
+                }
+                @if let Some(date) = race.start_date.as_deref().and_then(french_date) {
+                    span class="search-date" { (date) }
+                }
+            }
+            p class="muted" { (finishers_place(race)) }
+            div class="search-chips" {
+                @for label in race.distances_labels() {
+                    span class="search-chip" { (label) }
+                }
+                @if let Some(discipline) = &race.discipline_label {
+                    span class="search-chip" { (discipline) }
+                }
+                @if let Some(gain) = race.elevation_gain_m {
+                    span class="search-chip" { (format!("D+ {gain:.0} m")) }
+                }
+                @if let Some(finishers) = race.finishers {
+                    span class="search-chip" { (format!("{finishers} finishers")) }
+                }
+                @if race.status.as_deref() == Some("cancelled") {
+                    span class="search-chip warn" { "Annulee" }
+                }
+            }
+            (finishers_create_form(race))
+        }
+    }
+}
+
+/// Lieu de la course : ville, puis region (sans doublon).
+fn finishers_place(race: &FinishersRace) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(city) = &race.city {
+        parts.push(city.clone());
+    }
+    if let Some(region) = &race.region {
+        if !parts.iter().any(|part| part == region) {
+            parts.push(region.clone());
+        }
+    }
+    if parts.is_empty() {
+        if let Some(country) = &race.country {
+            parts.push(country.clone());
+        }
+    }
+    parts.join(" - ")
+}
+
+/// Date publiee (AAAA-MM-JJ) au format francais.
+fn french_date(date: &str) -> Option<String> {
+    chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .ok()
+        .map(|value| value.format("%d/%m/%Y").to_string())
+}
+
+/// Bouton « Creer la course » : la fiche M-pacer s'ouvre pre-remplie.
+///
+/// Quand l'epreuve propose plusieurs distances, le coureur choisit la sienne ici
+/// plutot que de la corriger ensuite dans le formulaire.
+fn finishers_create_form(race: &FinishersRace) -> Markup {
+    let distances = race.distances_labels();
+    html! {
+        form class="inline-form" method="get" action="/courses/nouvelle" {
+            input type="hidden" name="finishers" value=(&race.id);
+            @if distances.len() > 1 {
+                select name="distance" aria-label="Distance" {
+                    @for (index, label) in distances.iter().enumerate() {
+                        option value=(format!("{:.0}", race.distances_m[index])) { (label) }
+                    }
+                }
+            } @else if let Some(distance) = race.distance_m {
+                input type="hidden" name="distance" value=(format!("{distance:.0}"));
+            }
+            button type="submit" { "Creer la course" }
+            @if let Some(url) = &race.registration_url {
+                a class="button ghost" href=(url) target="_blank" rel="noopener noreferrer" { "Inscription" }
+            }
+            a class="button ghost" href=(race.url) target="_blank" rel="noopener noreferrer" { "Fiche" }
+        }
+    }
+}
+
+/// Pagination : les criteres courants sont conserves dans le lien.
+fn race_search_pagination(query: &RaceSearchQuery, results: &RaceSearchResponse) -> Markup {
+    let base = race_search_query_string(query);
+    html! {
+        div class="actions" {
+            @if results.page > 1 {
+                a class="button ghost" href=(format!("/courses/recherche?{base}&page={}", results.page - 1)) {
+                    "Precedent"
+                }
+            }
+            span class="muted" { (format!("page {} sur {}", results.page, results.pages)) }
+            @if results.page < results.pages {
+                a class="button ghost" href=(format!("/courses/recherche?{base}&page={}", results.page + 1)) {
+                    "Suivant"
+                }
+            }
+        }
+    }
+}
+
+/// Criteres courants dans une chaine de requete, sans les valeurs vides.
+fn race_search_query_string(query: &RaceSearchQuery) -> String {
+    let fields: [(&str, String); 11] = [
+        ("q", query.q.clone()),
+        ("region", query.region.clone().unwrap_or_default()),
+        ("departement", query.department.clone().unwrap_or_default()),
+        ("ville", query.city.clone().unwrap_or_default()),
+        ("discipline", query.discipline.clone().unwrap_or_default()),
+        (
+            "mois",
+            query
+                .month
+                .map(|month| month.to_string())
+                .unwrap_or_default(),
+        ),
+        (
+            "annee",
+            query.year.map(|year| year.to_string()).unwrap_or_default(),
+        ),
+        (
+            "dmin",
+            query.distance_min_m.map(km_field).unwrap_or_default(),
+        ),
+        (
+            "dmax",
+            query.distance_max_m.map(km_field).unwrap_or_default(),
+        ),
+        ("tri", query.sort.code().to_string()),
+        ("taille", query.per_page.to_string()),
+    ];
+    fields
+        .iter()
+        .filter(|(_, value)| !value.trim().is_empty())
+        .map(|(name, value)| format!("{name}={}", percent_encode(value)))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 async fn race_edit_page(
@@ -7135,5 +7616,226 @@ mod workout_web_tests {
         assert!(markup.contains("Vitesse max"), "{markup}");
         assert!(!markup.contains("Profil altimetrique"), "{markup}");
         assert!(!markup.contains("Denivele horaire"), "{markup}");
+    }
+}
+#[cfg(test)]
+mod finishers_web_tests {
+    use super::*;
+
+    /// Une course du calendrier Finishers, telle que l'index la publie.
+    fn course() -> FinishersRace {
+        FinishersRace {
+            id: "4268923e-3361-4956-a73f-2956610bac26".to_string(),
+            name: "Trail des Trois Rochers".to_string(),
+            city: Some("Millau".to_string()),
+            region: Some("Occitanie".to_string()),
+            department: Some("Aveyron".to_string()),
+            country: Some("France".to_string()),
+            start_at_ms: None,
+            end_at_ms: None,
+            start_date: Some("2027-04-04".to_string()),
+            distance_m: Some(42000.0),
+            distances_m: vec![21000.0, 42000.0],
+            discipline: Some("trail".to_string()),
+            discipline_label: Some("Trail".to_string()),
+            elevation_gain_m: Some(1800.0),
+            latitude: Some(44.1009),
+            longitude: Some(3.0788),
+            finishers: Some(1234),
+            status: Some("confirmed".to_string()),
+            url: "https://www.finishers.com/course/trail-des-trois-rochers".to_string(),
+            registration_url: Some("https://www.finishers.com/book/event/abcd".to_string()),
+            tags: vec!["trail".to_string()],
+        }
+    }
+
+    #[test]
+    fn the_search_form_shows_every_criterion() {
+        let query = RaceSearchQuery::parse(&RaceSearchParams {
+            q: Some("trail".to_string()),
+            region: Some("Occitanie".to_string()),
+            discipline: Some("trail".to_string()),
+            mois: Some("4".to_string()),
+            tri: Some("distance".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+        let markup = race_search_form(&query).into_string();
+        assert!(markup.contains("action=\"/courses/recherche\""), "{markup}");
+        assert!(markup.contains("name=\"q\""), "{markup}");
+        // Les listes deroulantes portent toutes les regions et disciplines.
+        assert!(markup.contains("Provence-Alpes-Côte d'Azur"), "{markup}");
+        assert!(markup.contains("Cyclo-cross"), "{markup}");
+        // Les criteres courants sont selectionnes.
+        assert!(markup.contains("value=\"Occitanie\" selected"), "{markup}");
+        assert!(markup.contains("value=\"trail\" selected"), "{markup}");
+        assert!(markup.contains("value=\"4\" selected"), "{markup}");
+        assert!(markup.contains("value=\"distance\" selected"), "{markup}");
+    }
+
+    #[test]
+    fn the_result_card_offers_to_create_the_race() {
+        let markup = finishers_card(&course()).into_string();
+        assert!(markup.contains("Trail des Trois Rochers"), "{markup}");
+        assert!(markup.contains("04/04/2027"), "{markup}");
+        assert!(markup.contains("Millau - Occitanie"), "{markup}");
+        assert!(markup.contains("D+ 1800 m"), "{markup}");
+        assert!(markup.contains("1234 finishers"), "{markup}");
+        // La fiche se cree depuis l'identifiant d'epreuve, avec la distance choisie.
+        assert!(markup.contains("action=\"/courses/nouvelle\""), "{markup}");
+        assert!(
+            markup.contains("name=\"finishers\" value=\"4268923e-3361-4956-a73f-2956610bac26\""),
+            "{markup}"
+        );
+        assert!(
+            markup.contains("<option value=\"21000\">21 km</option>"),
+            "{markup}"
+        );
+        assert!(
+            markup.contains("<option value=\"42000\">42 km</option>"),
+            "{markup}"
+        );
+        assert!(
+            markup.contains("https://www.finishers.com/book/event/abcd"),
+            "{markup}"
+        );
+    }
+
+    #[test]
+    fn a_single_distance_needs_no_menu() {
+        let mut single = course();
+        single.distances_m = vec![42000.0];
+        let markup = finishers_card(&single).into_string();
+        assert!(
+            markup.contains("name=\"distance\" value=\"42000\""),
+            "{markup}"
+        );
+        assert!(!markup.contains("<select name=\"distance\""), "{markup}");
+    }
+
+    #[test]
+    fn the_page_links_keep_the_criteria() {
+        let query = RaceSearchQuery::parse(&RaceSearchParams {
+            region: Some("Occitanie".to_string()),
+            page: Some("2".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            race_search_query_string(&query),
+            "region=Occitanie&tri=date&taille=20"
+        );
+
+        let results = RaceSearchResponse {
+            source: "finishers.com",
+            total: 60,
+            page: 2,
+            pages: 3,
+            per_page: 20,
+            items: Vec::new(),
+        };
+        let markup = race_search_pagination(&query, &results).into_string();
+        assert!(markup.contains("page=1"), "{markup}");
+        assert!(markup.contains("page=3"), "{markup}");
+        assert!(markup.contains("region=Occitanie"), "{markup}");
+    }
+
+    #[test]
+    fn the_form_is_prefilled_from_finishers() {
+        let form = RaceForm::from_finishers(&course(), Some(21000.0));
+        assert_eq!(form.name, "Trail des Trois Rochers");
+        assert_eq!(form.date, "2027-04-04");
+        assert_eq!(form.distance_km, "21");
+        assert_eq!(form.discipline, "Trail");
+        assert_eq!(form.location, "Millau");
+        assert_eq!(form.start_location, "Millau");
+        assert_eq!(form.latitude, "44.1009");
+        assert_eq!(form.longitude, "3.0788");
+        assert_eq!(
+            form.registration_url,
+            "https://www.finishers.com/book/event/abcd"
+        );
+        assert!(
+            form.notes
+                .contains("https://www.finishers.com/course/trail-des-trois-rochers"),
+            "{}",
+            form.notes
+        );
+        // Ce que la source ne publie pas reste vide : rien n'est invente.
+        assert_eq!(form.time, "");
+        assert_eq!(form.bib_number, "");
+        assert_eq!(form.hotel_name, "");
+        assert_eq!(form.goal_time, "");
+        assert_eq!(form.website_url, "");
+        // La fiche pre-remplie passe la validation du formulaire.
+        let input = form.to_input().unwrap();
+        assert!(input.validate().is_ok(), "{input:?}");
+    }
+
+    #[test]
+    fn the_prefill_falls_back_on_the_featured_distance() {
+        let form = RaceForm::from_finishers(&course(), None);
+        assert_eq!(form.distance_km, "42");
+        // Sans distance annoncee, le champ reste vide et se saisit a la main.
+        let mut without = course();
+        without.distance_m = None;
+        without.distances_m = Vec::new();
+        assert_eq!(RaceForm::from_finishers(&without, None).distance_km, "");
+    }
+
+    #[test]
+    fn the_place_and_dates_are_readable() {
+        assert_eq!(finishers_place(&course()), "Millau - Occitanie");
+        let mut without_city = course();
+        without_city.city = None;
+        assert_eq!(finishers_place(&without_city), "Occitanie");
+        let mut without_region = course();
+        without_region.region = None;
+        without_region.city = None;
+        assert_eq!(finishers_place(&without_region), "France");
+        assert_eq!(french_date("2027-04-04").as_deref(), Some("04/04/2027"));
+        assert_eq!(french_date("demain"), None);
+        assert_eq!(capitalize("avril"), "Avril");
+        assert_eq!(capitalize(""), "");
+        assert_eq!(km_field(50_500.0), "50.5");
+        assert_eq!(km_field(10_000.0), "10");
+    }
+
+    #[test]
+    fn the_page_gathers_the_form_and_the_results() {
+        let query = RaceSearchQuery::parse(&RaceSearchParams {
+            region: Some("Occitanie".to_string()),
+            ..Default::default()
+        })
+        .unwrap();
+        let results = RaceSearchResponse {
+            source: "finishers.com",
+            total: 1,
+            page: 1,
+            pages: 1,
+            per_page: 20,
+            items: vec![course()],
+        };
+        let markup = race_search_content(&query, Some(&results), None).into_string();
+        assert!(markup.contains("Chercher une course"), "{markup}");
+        assert!(markup.contains("1 courses trouvees"), "{markup}");
+        assert!(markup.contains("Trail des Trois Rochers"), "{markup}");
+        assert!(markup.contains("action=\"/courses/recherche\""), "{markup}");
+
+        // Source injoignable : la page reste utilisable et le dit.
+        let error = race_search_content(&query, None, Some("recherche Finishers injoignable"))
+            .into_string();
+        assert!(error.contains("class=\"alert\""), "{error}");
+        assert!(error.contains("recherche Finishers injoignable"), "{error}");
+
+        // Aucun resultat : la page l'annonce, sans inventer de course.
+        let empty = RaceSearchResponse {
+            total: 0,
+            items: Vec::new(),
+            ..results
+        };
+        let markup = race_search_content(&query, Some(&empty), None).into_string();
+        assert!(markup.contains("Aucune course ne correspond"), "{markup}");
+        assert!(!markup.contains("Trail des Trois Rochers"), "{markup}");
     }
 }

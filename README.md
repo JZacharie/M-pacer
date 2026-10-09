@@ -38,7 +38,8 @@ avant d'être envoyée au backend.
 **Sur le site**, chaque séance s'ouvre sur une analyse complète (résumé, courbes
 allure / cardio / altitude, plan contre réalisé, zones de fréquence cardiaque,
 chronologie des pauses), les écrans se composent à partir de **neuf widgets**, les
-courses à venir ont leur fiche et leur planning, et la page `/music` prépare la
+courses à venir ont leur fiche, leur planning et une **recherche dans le calendrier
+Finishers** (la fiche d'une course trouvée arrive pré-remplie), et la page `/music` prépare la
 bande-son (playlists Deezer par cookie `arl`, BPM cible, liste des MP3 à
 télécharger, envoi dans la file **Deemix** et manifeste à copier sur la montre).
 

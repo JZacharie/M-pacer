@@ -3,6 +3,7 @@
 use crate::auth::google::{GoogleOidc, OidcProvider, UnconfiguredOidc};
 use crate::avatar::AvatarCache;
 use crate::config::Config;
+use crate::finishers::Finishers;
 use crate::live::LiveStore;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -19,6 +20,8 @@ pub struct AppState {
     pub avatars: Arc<AvatarCache>,
     /// Positions recues du broker MQTT pendant les seances en cours.
     pub live: Arc<LiveStore>,
+    /// Recherche de courses a venir dans le calendrier Finishers (docs/05).
+    pub finishers: Arc<Finishers>,
 }
 
 impl AppState {
@@ -35,6 +38,7 @@ impl AppState {
                 )),
                 _ => Arc::new(UnconfiguredOidc),
             };
+        let finishers = Arc::new(Finishers::from_config(http.clone(), &config));
         Self {
             pool,
             config,
@@ -42,18 +46,22 @@ impl AppState {
             oidc,
             avatars: Arc::new(AvatarCache::new()),
             live: Arc::new(LiveStore::new()),
+            finishers,
         }
     }
 
     /// Etat avec un fournisseur d'identite impose (tests).
     pub fn with_oidc(pool: PgPool, config: Arc<Config>, oidc: Arc<dyn OidcProvider>) -> Self {
+        let http = http_client();
+        let finishers = Arc::new(Finishers::from_config(http.clone(), &config));
         Self {
             pool,
             config,
-            http: http_client(),
+            http,
             oidc,
             avatars: Arc::new(AvatarCache::new()),
             live: Arc::new(LiveStore::new()),
+            finishers,
         }
     }
 

@@ -27,6 +27,7 @@ pub mod db;
 pub mod deemix;
 pub mod deezer;
 pub mod error;
+pub mod finishers;
 pub mod friends;
 pub mod live;
 pub mod models;

@@ -8,6 +8,7 @@ use crate::auth::device::{
 };
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
+use crate::finishers::{FinishersRace, RaceSearchParams, RaceSearchQuery, RaceSearchResponse};
 use crate::friends::{CirclePayload, InviteOutcome};
 use crate::models::{
     MusicPlaylistDetail, MusicTrackView, Race, RaceInput, UploadResponse, WorkoutUpload,
@@ -55,6 +56,10 @@ pub fn router() -> Router<AppState> {
                 mpacer_core::race_import::MAX_IMPORT_BYTES,
             )),
         )
+        // Recherche dans le calendrier Finishers (docs/05) : la meme source que
+        // la page /courses/recherche, en JSON pour un client mobile ou une montre.
+        .route("/api/v1/races/search", get(search_races))
+        .route("/api/v1/races/finishers/{event}", get(finishers_race))
         .route(
             "/api/v1/races/{id}",
             get(get_race).put(update_race).delete(delete_race),
@@ -327,6 +332,34 @@ async fn create_race(
     let race = crate::db::insert_race(&state.pool, &user.id, &input, state.now_ms()).await?;
     tracing::info!(user = %user.email, race = %race.id, "course enregistree par l'API");
     Ok((axum::http::StatusCode::CREATED, Json(race)))
+}
+
+/// Recherche dans le calendrier Finishers (courses a venir en France).
+///
+/// Memes criteres que la page `/courses/recherche` (docs/05) : texte libre,
+/// region, departement, ville, discipline, mois, annee, distances, tri et
+/// pagination. Une valeur illisible est refusee avec un message explicite.
+async fn search_races(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Query(params): Query<RaceSearchParams>,
+) -> AppResult<Json<RaceSearchResponse>> {
+    let query = RaceSearchQuery::parse(&params).map_err(AppError::bad_request)?;
+    Ok(Json(state.finishers.search(&query).await?))
+}
+
+/// Fiche d'une course du calendrier Finishers, par son identifiant d'epreuve.
+async fn finishers_race(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Path(event): Path<String>,
+) -> AppResult<Json<FinishersRace>> {
+    state
+        .finishers
+        .event(&event)
+        .await?
+        .map(Json)
+        .ok_or(AppError::NotFound)
 }
 
 /// Importe une ancienne course depuis un export Strava ou Garmin.

@@ -59,6 +59,7 @@ une seule image à déployer, aucun jeton exposé au JavaScript, aucune chaîne 
 | Détail d'une séance | <code>/workouts/&#123;id&#125;</code> | L'analyse complète (voir ci-dessous) |
 | Statistiques | <code>/stats</code> | Volume hebdomadaire, graphique et tableau |
 | Courses | <code>/courses</code> | Cartes des courses à venir, courses déjà courues |
+| Rechercher une course | <code>/courses/recherche</code> | Calendrier Finishers : filtres, résultats, fiche pré-remplie |
 | Nouvelle course | <code>/courses/nouvelle</code> | Création d'une fiche |
 | Fiche de course | <code>/courses/&#123;id&#125;</code> | Toutes les informations pratiques et le suivi |
 | Planning | <code>/courses/planning</code> | Toutes les échéances à venir, mises bout à bout |
@@ -194,6 +195,13 @@ L'interface ne sert pas qu'à relire le passé : elle gère aussi ce que l'on pr
     heures et minutes), éléments encore à préparer, courses déjà courues.</p>
   </div>
   <div class="card">
+    <h3>Recherche dans le calendrier Finishers</h3>
+    <p>Mot-clé, région, discipline, mois, année et bornes de distance, dans le calendrier
+    <a href="https://www.finishers.com/ou-courir/europe/france" target="_blank" rel="noopener noreferrer">Finishers</a>.
+    Un clic sur « Créer la course » ouvre une fiche pré-remplie : nom, date, distance, discipline,
+    ville, coordonnées et lien d'inscription. Le reste se complète à la main.</p>
+  </div>
+  <div class="card">
     <h3>Fiche de course</h3>
     <p>Numéro de dossard, horaire et lieu de départ, lien du live, hôtel (nom, adresse, téléphone,
     arrivée, départ), rendez-vous de prise de dossard, autres solutions pour dormir, nutrition et
@@ -271,6 +279,8 @@ les erreurs respectent <code>{"error": "code", "message": "..."}</code>.
 | <code>GET</code> | <code>/api/v1/workouts/&#123;id&#125;/gpx</code> | Export GPX d'une séance |
 | <code>GET</code> / <code>POST</code> | <code>/api/v1/races</code> | Lister ou créer une course |
 | <code>GET</code> / <code>PUT</code> / <code>DELETE</code> | <code>/api/v1/races/&#123;id&#125;</code> | Lire, modifier ou supprimer une course |
+| <code>GET</code> | <code>/api/v1/races/search</code> | Chercher une course dans le calendrier Finishers |
+| <code>GET</code> | <code>/api/v1/races/finishers/&#123;event&#125;</code> | Fiche normalisée d'une course Finishers |
 | <code>GET</code> | <code>/api/v1/stats</code> | Statistiques agrégées |
 | <code>GET</code> | <code>/api/v1/export</code> | Export complet au format <code>.pac</code> |
 | <code>GET</code> | <code>/api/v1/version</code> | Version du service |

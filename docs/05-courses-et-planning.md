@@ -151,7 +151,88 @@ Le FIT binaire n'est pas lu : Strava et Garmin Connect proposent tous deux l'exp
 GPX ou TCX, qui porte les memes informations. Un fichier illisible revient sur la
 page d'import avec un message explicite, et rien n'est enregistre.
 
-## 8. Decisions
+## 8. Chercher une course dans le calendrier Finishers
+
+Saisir une fiche a la main est long, et la date, la distance ou les coordonnees se
+recopient mal. La page `/courses/recherche` interroge le calendrier
+[Finishers](https://www.finishers.com/ou-courir/europe/france) et propose, pour
+chaque course trouvee, un bouton **Creer la course** : la fiche s'ouvre
+pre-remplie.
+
+### 8.1 D'ou viennent les donnees
+
+La recherche de Finishers est rendue cote navigateur : elle interroge un index
+**Typesense** (collection `races` : 36 000 editions publiees, dont 18 600 en
+France) avec une cle de lecture publique, livree dans le JavaScript du site.
+M-pacer interroge le meme index, en lecture seule et sans analyser de HTML :
+
+```text
+GET https://<hote>/collections/races/documents/search
+    ?q=marathon&query_by=eventName,city
+    &filter_by=countryCode:=FR && months:=4 && raceDistance:>=40000
+    &group_by=eventId&group_limit=1&sort_by=boosted:desc,raceDate:asc
+X-TYPESENSE-API-KEY: <cle de lecture>
+```
+
+| Critere | Filtre envoye a l'index |
+|---|---|
+| Pays | `countryCode:=FR` (la France par defaut) |
+| Region | `level1:=` suivi du nom exact, entre accents graves |
+| Departement, ville | `level2:=...`, `city:=...` |
+| Discipline | `raceDiscipline:=trail` |
+| Mois | `months:=4` |
+| Annee | `raceDate:>=<1er janvier> && raceDate:<=<31 decembre>` |
+| Distances | `raceDistance:>=40000 && raceDistance:<=50000` (metres) |
+
+Le regroupement par epreuve (`group_by=eventId`) evite les doublons : une course
+qui propose plusieurs distances n'apparait qu'une fois, avec la liste de ses
+distances. Le tri par defaut est celui du site (mises en avant, puis date) ; la
+distance ou la popularite le remplacent au choix.
+
+### 8.2 Ce qui remplit la fiche
+
+| Champ M-pacer | Source |
+|---|---|
+| Nom | nom de l'epreuve |
+| Date | premier jour de l'edition, a minuit heure locale |
+| Distance | distance choisie dans la liste, sinon celle mise en avant |
+| Discipline | code de l'index, traduit en francais (trail, route, marche...) |
+| Ville, lieu de depart | ville de l'epreuve |
+| Latitude, longitude | coordonnees publiees |
+| Lien d'inscription | page d'inscription, sinon la fiche Finishers |
+| Autres informations | adresse de la fiche Finishers : l'origine reste tracable |
+
+Tout le reste — horaire de depart, dossard, hebergement, objectif, notes privees —
+reste vide et se complete a la main : rien n'est invente. Rien n'est enregistre
+non plus avant la validation du formulaire : le calendrier Finishers reste chez
+Finishers, la fiche nait dans M-pacer quand le coureur la valide.
+
+### 8.3 L'API
+
+| Methode | Chemin | Description |
+|---|---|---|
+| GET | `/api/v1/races/search` | recherche (`q`, `region`, `departement`, `ville`, `discipline`, `mois`, `annee`, `dmin`, `dmax`, `tri`, `page`, `taille`) |
+| GET | `/api/v1/races/finishers/{event}` | fiche normalisee d'une epreuve, par son `eventId` |
+
+Les criteres sont exactement ceux du formulaire web ; une valeur illisible est
+refusee avec le format d'erreur habituel. Une source injoignable ou desactivee
+repond `503 service_unavailable`, et la page web l'affiche sans casser le
+formulaire.
+
+### 8.4 Configuration
+
+| Variable | Role |
+|---|---|
+| `MPACER_FINISHERS_DISABLED=1` | eteint la recherche (aucun appel reseau) |
+| `MPACER_FINISHERS_HOST` | hote Typesense (defaut : celui de Finishers) |
+| `MPACER_FINISHERS_API_KEY` | cle de lecture (defaut : la cle publique du site) |
+| `MPACER_FINISHERS_COLLECTION` | collection interrogee (defaut `races`) |
+
+La cle par defaut est publique : elle est livree dans le JavaScript de
+finishers.com et n'autorise que la lecture. Si Finishers la remplace, la nouvelle
+se renseigne sans redeployer le code.
+
+## 9. Decisions
 
 - **Un seul formulaire, une seule validation.** Le formulaire web et l'API
   construisent la meme structure `RaceInput`, normalisee puis validee une seule fois :
@@ -165,3 +246,9 @@ page d'import avec un message explicite, et rien n'est enregistre.
   (maud), le CSS est ecrit a la main, et le JavaScript se limite au strict necessaire.
 - **Une echeance sans date ne disparait pas** : un element de suivi sans echeance
   reste sur la fiche, simplement il n'encombre pas le planning.
+- **La recherche Finishers est une source, pas une copie.** Aucune course n'est
+  stockee tant que le coureur ne l'a pas enregistree, et rien n'est complete
+  d'office : une fiche pre-remplie est une proposition, pas une verite.
+- **Une source externe ne casse jamais la page.** Injoignable ou desactivee, la
+  recherche affiche ce qui s'est passe et laisse le formulaire et le reste du site
+  utilisables ; l'API repond alors `503` avec un code stable.

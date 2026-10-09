@@ -180,6 +180,15 @@ pub struct Config {
     pub device_code_ttl: Duration,
     pub session_ttl: Duration,
     pub token_ttl_days: i64,
+    /// Recherche de courses sur Finishers : hote Typesense, cle de lecture et
+    /// collection. Les valeurs par defaut sont celles de l'index public du site
+    /// (la cle ne permet que la lecture) ; `MPACER_FINISHERS_DISABLED=1` eteint
+    /// la fonctionnalite et `MPACER_FINISHERS_HOST` / `MPACER_FINISHERS_API_KEY`
+    /// permettent de suivre un changement d'index sans redeployer le code.
+    pub finishers_enabled: bool,
+    pub finishers_host: String,
+    pub finishers_api_key: String,
+    pub finishers_collection: String,
 }
 
 impl Config {
@@ -240,6 +249,13 @@ impl Config {
             device_code_ttl: Duration::from_secs(600),
             session_ttl: Duration::from_secs(60 * 60 * 24 * 30),
             token_ttl_days: 365,
+            finishers_enabled: !env_flag("MPACER_FINISHERS_DISABLED"),
+            finishers_host: env_var("MPACER_FINISHERS_HOST")
+                .unwrap_or_else(|| crate::finishers::DEFAULT_HOST.to_string()),
+            finishers_api_key: env_var("MPACER_FINISHERS_API_KEY")
+                .unwrap_or_else(|| crate::finishers::DEFAULT_API_KEY.to_string()),
+            finishers_collection: env_var("MPACER_FINISHERS_COLLECTION")
+                .unwrap_or_else(|| crate::finishers::DEFAULT_COLLECTION.to_string()),
         })
     }
 
@@ -415,8 +431,21 @@ impl Config {
             device_code_ttl: Duration::from_secs(600),
             session_ttl: Duration::from_secs(3600),
             token_ttl_days: 365,
+            // Les tests d'integration n'appellent aucun service externe : la
+            // recherche Finishers y est eteinte par defaut.
+            finishers_enabled: false,
+            finishers_host: crate::finishers::DEFAULT_HOST.to_string(),
+            finishers_api_key: crate::finishers::DEFAULT_API_KEY.to_string(),
+            finishers_collection: crate::finishers::DEFAULT_COLLECTION.to_string(),
         }
     }
+}
+
+/// Vrai si la variable d'environnement vaut 1/true/oui.
+fn env_flag(name: &str) -> bool {
+    env_var(name).is_some_and(|value| {
+        value == "1" || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("oui")
+    })
 }
 
 fn env_var(name: &str) -> Option<String> {
@@ -567,6 +596,25 @@ mod tests {
 
         config.mqtt_url = Some("mqtt://broker.mpacer.svc:1883".to_string());
         assert!(config.mqtt_configured());
+    }
+
+    #[test]
+    fn finishers_search_has_a_default_index_and_can_be_switched_off() {
+        let mut config = Config::for_tests("http://localhost:8080", "postgresql://exemple");
+        assert_eq!(config.finishers_host, crate::finishers::DEFAULT_HOST);
+        assert_eq!(config.finishers_collection, "races");
+        assert!(
+            !config.finishers_enabled,
+            "les tests d'integration n'appellent aucun service externe"
+        );
+
+        // Activee, la source utilise l'index public avec sa cle de lecture.
+        config.finishers_enabled = true;
+        assert!(!config.finishers_api_key.is_empty());
+        assert!(
+            config.finishers_api_key.len() >= 16,
+            "une cle de lecture reelle"
+        );
     }
 
     #[test]

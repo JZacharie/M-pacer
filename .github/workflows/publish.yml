@@ -31,6 +31,10 @@ concurrency:
 jobs:
   image:
     runs-on: ubuntu-latest
+    outputs:
+      # Empreinte de l'image publiee, reportee dans values-jo3.yaml par le job
+      # « redeploiement » ci-dessous.
+      digest: ${{ steps.image.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -59,6 +63,7 @@ jobs:
             type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
 
       - name: Construction et publication
+        id: image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -69,14 +74,17 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Le cluster jo3 execute exactement l'etiquette ecrite dans
-  # charts/mpacer/values-jo3.yaml. Un nom de tag qui ne change pas (« latest »)
-  # ne modifie aucun manifeste : ArgoCD reste « Synced » sur la revision
-  # precedente et le site continue de servir une image ancienne. Ce job epingle
-  # donc le sha du commit publie : le fichier de valeurs change a chaque
-  # publication, ArgoCD synchronise et le pod redemarre sur l'image exacte.
-  epinglage:
-    name: Epinglage de l'image deployee
+  # ArgoCD ne redeploie que si le rendu Helm change. Le tag « latest » garde le
+  # meme nom d'une publication a l'autre : publier une nouvelle image ne suffit
+  # donc pas, le cluster continue de servir l'ancienne (incident du 9 octobre
+  # 2026 : 3 jours de retard alors que 7 images avaient ete publiees).
+  #
+  # Ce job ecrit l'empreinte exacte de l'image publiee dans une annotation du
+  # pod, valide le rendu du chart, puis engage la modification. Le rendu change
+  # a chaque publication : ArgoCD synchronise, le pod redemarre et le kubelet
+  # re-tire « latest ».
+  redeploiement:
+    name: Redeclenchement du deploiement (values-jo3.yaml)
     needs: image
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -85,7 +93,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: "Ecrire tag: sha-<court> dans values-jo3.yaml"
+      - uses: azure/setup-helm@v4
+
+      - name: "Ecrire l'empreinte de l'image dans values-jo3.yaml"
+        shell: bash
+        env:
+          SHA_PUBLIE: ${{ github.sha }}
+          EMPREINTE: ${{ needs.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          court="${SHA_PUBLIE:0:7}"
+          fichier="charts/mpacer/values-jo3.yaml"
+          if [ -z "$EMPREINTE" ]; then
+            echo "Empreinte d'image absente : rien n'a ete publie." >&2
+            exit 1
+          fi
+          lignes_avant="$(wc -l < "$fichier")"
+          sed -i -E "s|^(  mpacer\.zacharie\.org/image-publiee:).*|\1 \"sha-${court}@${EMPREINTE}\"|" "$fichier"
+          # Garde-fous : une seule ligne touchee, valeur bien ecrite.
+          test "$(wc -l < "$fichier")" = "$lignes_avant"
+          test "$(grep -c "^  mpacer.zacharie.org/image-publiee: \"sha-${court}@sha256:" "$fichier")" = "1"
+
+      - name: Verifier le rendu du chart
+        run: |
+          helm lint charts/mpacer -f charts/mpacer/values-jo3.yaml
+          helm template mpacer charts/mpacer -n mpacer -f charts/mpacer/values-jo3.yaml > /dev/null
+
+      - name: Engager l'epingle
         shell: bash
         env:
           SHA_PUBLIE: ${{ github.sha }}
@@ -93,18 +127,13 @@ jobs:
           set -euo pipefail
           court="${SHA_PUBLIE:0:7}"
           fichier="charts/mpacer/values-jo3.yaml"
-          lignes_avant="$(wc -l < "$fichier")"
-          sed -i -E "s|^  tag: .*$|  tag: sha-${court}|" "$fichier"
-          # Garde-fous : la substitution ne doit toucher qu'une seule ligne.
-          test "$(wc -l < "$fichier")" = "$lignes_avant"
-          test "$(grep -c "^  tag: sha-${court}$" "$fichier")" = "1"
           if git diff --quiet -- "$fichier"; then
-            echo "values-jo3.yaml pointe deja sur sha-${court} : rien a publier."
+            echo "values-jo3.yaml porte deja l'image sha-${court} : rien a publier."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "$fichier"
-          git commit -m "chore(deploy): image jo3 sha-${court} [skip ci]"
+          git commit -m "chore(deploy): image latest sha-${court} [skip ci]"
           git pull --rebase origin main
           git push origin HEAD:main

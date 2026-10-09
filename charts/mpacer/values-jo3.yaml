@@ -5,25 +5,28 @@
 
 image:
   repository: ghcr.io/jzacharie/mpacer
-  # Etiquette EXACTE executee par le cluster : c'est elle qui declenche (ou non)
-  # le redeploiement. Le job « epinglage » de .github/workflows/publish.yml la
-  # reecrit en sha-<court> du commit publie a chaque push sur main : le rendu
-  # Helm change, ArgoCD synchronise et le pod redemarre sur l'image exacte.
-  #
-  # ATTENTION : un tag qui ne change pas de nom (« latest ») ne declenche RIEN.
-  # ArgoCD reste « Synced » sur la revision precedente et le site continue de
-  # servir une image ancienne : incident du 9 octobre 2026, tag sha-1501e41
-  # reste 3 jours alors que 7 images avaient ete publiees sur main.
-  #
-  # Verifier ce qui tourne :
-  #   kubectl -n mpacer get deploy mpacer \
-  #     -o jsonpath='{.spec.template.spec.containers[0].image}'
-  #   git log -1 --format='%h' -- charts/mpacer/values-jo3.yaml
-  #
-  # Test manuel : publier la meme etiquette depuis le poste, puis reporter ici.
-  #   pwsh deploy/build-image.ps1 -Push -Tag sha-<court>
-  tag: sha-708d210
+  # « latest » : le pod tire la derniere image publiee sur main (pullPolicy
+  # Always), donc le binaire servi suit la CI sans changer de nom d'etiquette.
+  tag: latest
   pullPolicy: Always
+
+# Empreinte exacte de la derniere image publiee sur main, reecrite ici par le
+# job « redeploiement » de .github/workflows/publish.yml, puis engagee dans Git.
+#
+# Pourquoi cette annotation : ArgoCD ne redeploie que si le rendu Helm change.
+# Un tag « latest » garde le meme nom, donc publier une nouvelle image ne
+# suffit pas — le site continue de servir l'ancienne (incident du 9 octobre
+# 2026 : 3 jours de retard alors que 7 images avaient ete publiees). Cette
+# valeur change a chaque publication : le rendu change, ArgoCD synchronise et
+# le pod redemarre en tirant le nouveau « latest ».
+#
+# Verifier ce qui tourne :
+#   kubectl -n mpacer get deploy mpacer \
+#     -o jsonpath='{.spec.template.metadata.annotations}'
+#   kubectl -n mpacer get pod -l app.kubernetes.io/instance=mpacer \
+#     -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'
+podAnnotations:
+  mpacer.zacharie.org/image-publiee: "sha-708d210@sha256:de46e004d1366d7d00e8e214433780458d5ae00a45c1eeed2568bf4c2aba5b82"
 
 imagePullSecrets:
   - name: regcred

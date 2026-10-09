@@ -1,11 +1,10 @@
 # 16 - Pousser des MP3 depuis le front end vers la montre ou le telephone
 
-> **Statut** : chemin B livre le 9 octobre 2026 (serveur, page /music, Android) ;
-> chemin A documente, non implemente. Les decisions sont prises : volume audio
-> temporaire accepte sur le serveur, quota **4 Go** par compte, 200 Mo par fichier.
-> Le principe « le serveur ne stocke aucun audio » de
+> **Statut** : chemins **A et B livres** le 9 octobre 2026. Les decisions sont
+> prises : volume audio temporaire accepte sur le serveur, quota **4 Go** par
+> compte, 200 Mo par fichier. Le principe « le serveur ne stocke aucun audio » de
 > [docs/11](11-playlists-multi-sources-et-synchro-mp3.md) devient conditionnel :
-> sans `MPACER_MEDIA_DIR`, rien ne change.
+> sans `MPACER_MEDIA_DIR`, rien ne change, et le chemin A n'y touche jamais.
 
 ---
 
@@ -85,7 +84,7 @@ playlist ; le serveur M-pacer n'est pas traverse.
 * Firefox et Safari demandent une autorisation « reseau local » a la premiere
   utilisation ; c'est acceptable pour un outil auto-heberge.
 
-### 4.3 Cote mpacer-music (a ajouter)
+### 4.3 Cote mpacer-music (livre)
 
 1. **Middleware CORS/PNA** (crates/mpacer-music/src/server.rs), avec une
    **liste d'origines autorisees** (--allow-origin URL, repetable ; defaut :
@@ -117,7 +116,7 @@ Access-Control-Max-Age: 600
 4. Rien d'autre a inventer : POST /api/library/{playlist_id}?name=... et la
    pagination des jobs (/api/transfer/{job_id}) existent deja.
 
-### 4.4 Cote page /music (a ajouter)
+### 4.4 Cote page /music (livre)
 
 Dans le **bloc 5 « Transfert vers la montre »**, une zone unique :
 
@@ -262,9 +261,9 @@ FOREGROUND_SERVICE_DATA_SYNC). :core embarque deja OkHttp.
 
 | Etape | Contenu | Effort | Etat |
 |---|---|---|---|
-| **A1** | CORS/PNA + GET /api/targets + watch_dir dans /api/transfer | 0,5 j | a faire |
-| **A2** | Bloc de depot vers l'agent local dans /music | 0,5 j | a faire |
-| **A3** | Verification bout en bout montre + telephone (USB) | 0,5 j | a faire |
+| **A1** | CORS/PNA + GET /api/targets + watch_dir dans /api/transfer | 0,5 j | **livre** |
+| **A2** | Bloc de depot vers l'agent local dans /music | 0,5 j | **livre** |
+| **A3** | Verification bout en bout montre + telephone (USB) | 0,5 j | a verifier sur appareils reels |
 | **B1** | Volume + POST `/music/playlists/{id}/upload` + zone de depot du bloc 5 | 1 j | **livre** (sans migration : colonnes deja en base) |
 | **B2** | API appareil (files, flux `Range`, ack) | 0,5 j | **livre** |
 | **B3** | `MusicDownloader` + bouton « Telecharger (serveur) » (montre et telephone) | 1,5 j | **livre** ; service `dataSync` non ajoute (voir 9.4) |
@@ -318,6 +317,7 @@ fichier ne compte jamais deux fois.
 | Chantier | Fichier | Role |
 |---|---|---|
 | Telechargement | `android/core/.../music/MusicDownloader.kt` | lit `files`, telecharge avec reprise (`Range` + `.part`), ecrit le manifeste (`?files=1`), acquitte |
+| Premier plan | `android/core/.../music/MusicDownloadService.kt` | service `dataSync` + notification de progression : le lot continue ecran eteint |
 | Ecran montre | `android/app/.../ui/MusicScreen.kt` | bouton « Telecharger (serveur) » et progression |
 | Ecran telephone | `android/phone/.../ui/MusicScreen.kt` | meme bouton, meme etat |
 
@@ -334,12 +334,25 @@ fonctionne identiquement pour ce qui vient du Wi-Fi.
 `config.mediaDir`, la fonctionnalite reste eteinte et aucun octet audio n'est
 stocke.
 
-### 9.4 Limites connues
+### 9.4 Chemin A (agent local) — livre
 
-* le telechargement Android tourne dans un scope de processus : garder l'ecran
-  Musique ouvert pendant un gros lot (un service `dataSync` est l'evolution
-  naturelle, deja declaree dans le plan B3) ;
+| Chantier | Fichier | Role |
+|---|---|---|
+| CORS et Private Network Access | `crates/mpacer-music/src/server.rs` | autorise l'origine declaree (liste par defaut : localhost:8080, 127.0.0.1:8080, mpacer.p.zacharie.org), repond au preflight, refuse le reste |
+| Cibles | `GET /api/targets` | appareils adb + application presente (`pm path`) -> `watch`/`phone` et dossier `Music/` |
+| Transfert | `POST /api/transfer` | champ `watch_dir` valide (chemin absolu sous `/Android/data/`) |
+| Ligne de commande | `crates/mpacer-music/src/cli.rs` | `--allow-origin URL` (repetable, forme `=` acceptee) |
+| Page /music | panneau « Envoyer directement par USB (agent local) » | detection de `127.0.0.1:8077`, choix de l'appareil, depot, progression du job |
+| Preuves | `cargo test -p mpacer-music` | preflight autorise/refuse, meme-origine, `/api/targets` sans montre |
+
+### 9.5 Limites connues
+
 * pas d'expiration automatique des fichiers non acquittes : le quota de 4 Go est
   le garde-fou ;
-* le chemin A (depot vers l'agent local, sans serveur) n'est pas implemente.
+* le chemin A demande que l'agent local ait ete lance avec l'origine de la page
+  (`--allow-origin https://mpacer.p.zacharie.org`, deja dans la liste par defaut)
+  et un appareil autorise par adb ;
+* le telechargement Android est un service de premier plan `dataSync` : il
+  survit a l'ecran eteint, mais Android peut le retarder si l'appareil est en
+  veille profonde (Doze).
 

@@ -19,6 +19,12 @@ use serde::Serialize;
 
 /// Dossier musique de la montre (`getExternalFilesDir("Music")`).
 pub const WATCH_MUSIC_DIR: &str = "/sdcard/Android/data/com.mpacer.watch/files/Music";
+/// Dossier musique de l'application telephone (meme contrat que la montre).
+pub const PHONE_MUSIC_DIR: &str = "/sdcard/Android/data/com.mpacer.phone/files/Music";
+/// Paquet de l'application montre : sa presence distingue la cible d'un telephone.
+pub const WATCH_PACKAGE: &str = "com.mpacer.watch";
+/// Paquet de l'application telephone.
+pub const PHONE_PACKAGE: &str = "com.mpacer.phone";
 /// Octets lus au debut d'un fichier pour y chercher une balise BPM.
 pub const TAG_PROBE_BYTES: u64 = 256 * 1024;
 /// Extensions audio reconnues (contrat, section 3.1) : definies une seule

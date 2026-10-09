@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mpacer.core.music.LocalPlaylist
+import com.mpacer.core.music.MusicDownloadService
 import com.mpacer.core.music.MusicDownloader
 import com.mpacer.core.music.MusicLibrary
 import com.mpacer.core.music.MusicPlayer
@@ -120,7 +121,7 @@ fun MusicScreen() {
         // puis acquitte chaque piste pour liberer le serveur.
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Button(
-                onClick = { MusicDownloader.syncInBackground(context) },
+                onClick = { MusicDownloadService.start(context) },
                 enabled = !telechargement.busy,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Palette.surface2,

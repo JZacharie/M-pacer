@@ -5514,12 +5514,17 @@ async fn music_page(
         // --------------------------- 5. envoi vers l'appareil (Wi-Fi + USB)
         div class="section-head" { h2 { "5. Envoyer les MP3 vers l'appareil" } }
         @if let Some(playlist) = &selected_playlist {
+            // Chemin A (docs/16) : si l'agent local mpacer-music tourne sur cet
+            // ordinateur, les fichiers partent directement en USB vers la montre
+            // ou le telephone, sans passer par le serveur. Le panneau se cache
+            // tout seul quand l'agent ne repond pas.
+            (agent_panel(playlist))
             @if state.config.media_configured() {
                 (upload_panel(playlist, &tracks, state.config.media_max_file_bytes))
             } @else {
                 p class="muted" {
                     "Le depot Wi-Fi est eteint sur ce serveur (MPACER_MEDIA_DIR non renseigne). "
-                    "Les MP3 se copient par USB, comme ci-dessous."
+                    "Utilisez l'agent local ci-dessus, ou la copie USB decrite plus bas."
                 }
             }
         }
@@ -5549,8 +5554,13 @@ async fn music_page(
                     (mini_card("Playlist", &playlist.name))
                 }
                 p class="muted" {
-                    "Le serveur ne stocke aucun fichier audio : les morceaux restent sur votre "
-                    "disque et sont copies par l'outil local mpacer-music."
+                    @if state.config.media_configured() {
+                        "Les morceaux restent sur votre disque : le depot Wi-Fi ne fait qu'une "
+                        "copie temporaire, supprimee des que l'appareil l'a recuperee."
+                    } @else {
+                        "Le serveur ne stocke aucun fichier audio : les morceaux restent sur votre "
+                        "disque et sont copies par l'outil local mpacer-music."
+                    }
                 }
             }
         } @else {
@@ -6279,6 +6289,45 @@ async fn music_upload_delete(
     }
     crate::db::ack_music_tracks(&state.pool, &user.id, &id, &ids, state.now_ms()).await?;
     Ok(Redirect::to(&format!("/music?playlist={id}&ok=mp3_retire")).into_response())
+}
+
+/// Panneau de l'agent local (chemin A, docs/16).
+///
+/// Il reste cache tant que JavaScript n'a pas joint `http://127.0.0.1:8077` :
+/// sans l'outil `mpacer-music` lance sur l'ordinateur, la page ne montre rien de
+/// plus. Les noms des cibles et le dossier distant viennent de l'agent.
+fn agent_panel(playlist: &MusicPlaylist) -> Markup {
+    html! {
+        div class="panel" id="music-agent"
+            data-playlist=(playlist.id)
+            data-manifest={ "/music/playlists/" (playlist.id) "/manifest" } {
+            h3 { "Envoyer directement par USB (agent local)" }
+            p class="muted" {
+                "Si mpacer-music tourne sur cet ordinateur, il peut copier les MP3 "
+                "directement sur la montre ou le telephone, sans passer par le serveur. "
+                "Rien ne quitte votre reseau."
+            }
+            p id="music-agent-status" class="muted" { "recherche de l'agent local..." }
+            div id="music-agent-body" hidden {
+                div class="row" {
+                    label for="music-agent-target" { "Appareil" }
+                    select id="music-agent-target" {}
+                    button id="music-agent-refresh" type="button" { "Rafraichir" }
+                }
+                div class="drop" id="music-agent-drop" {
+                    p {
+                        "Glissez-deposez vos MP3 ici, ou "
+                        label for="music-agent-input" { "choisissez des fichiers" } "."
+                    }
+                    input type="file" id="music-agent-input" multiple
+                        accept=".mp3,.m4a,.ogg,.opus,.flac,.wav,audio/*";
+                }
+                div class="progress" { div id="music-agent-bar" {} }
+                p id="music-agent-progress" class="muted" {}
+                ul id="music-agent-results" class="upload-results" {}
+            }
+        }
+    }
 }
 
 /// Zone de depot des MP3 (bloc 5), affichee seulement si un volume est configure.
@@ -7844,6 +7893,28 @@ mod music_web_tests {
             "{markup}"
         );
         assert!(markup.contains("6.0 Mo"), "{markup}");
+    }
+
+    #[test]
+    fn the_agent_panel_offers_a_local_target_and_a_drop_zone() {
+        let playlist = MusicPlaylist {
+            id: "p1".into(),
+            user_id: "u1".into(),
+            name: "Run".into(),
+            source: "deezer".into(),
+            deezer_id: None,
+            cover_url: None,
+            target_bpm: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        };
+        let markup = agent_panel(&playlist).into_string();
+        assert!(markup.contains("music-agent-drop"), "{markup}");
+        assert!(markup.contains("music-agent-target"), "{markup}");
+        assert!(markup.contains("music-agent-status"), "{markup}");
+        assert!(markup.contains("/music/playlists/p1/manifest"), "{markup}");
+        // Le corps reste cache tant que l'agent local n'a pas repondu.
+        assert!(markup.contains("hidden"), "{markup}");
     }
 
     #[test]

@@ -71,7 +71,9 @@ pub fn run(args: Vec<String>) -> i32 {
 fn print_help() {
     println!("mpacer-music : copie les fichiers audio du PC vers la montre M-pacer par USB (adb)");
     println!();
-    println!("  mpacer-music [--port N] [--no-browser] [--target-dir DIR] [--library DIR]");
+    println!(
+        "  mpacer-music [--port N] [--no-browser] [--target-dir DIR] [--library DIR] [--allow-origin URL]..."
+    );
     println!("  mpacer-music devices");
     println!("  mpacer-music inspect  --manifest FICHIER --folder DOSSIER [--library DIR]");
     println!("  mpacer-music transfer --manifest FICHIER --folder DOSSIER [--library DIR] [--serial XXX]");
@@ -79,6 +81,9 @@ fn print_help() {
     println!();
     println!("Option commune : --adb CHEMIN");
     println!("--library DIR : racine de la bibliotheque locale ; sans option, dossier de donnees de l'utilisateur.");
+    println!(
+        "--allow-origin URL : origine autorisee a appeler l'agent depuis un navigateur (page /music). Repetable ; par defaut localhost:8080 et mpacer.p.zacharie.org."
+    );
     println!(
         "Codes de sortie : 0 ok, 2 usage, 3 adb introuvable, 4 aucune montre, 5 espace insuffisant, 6 titres manquants (--strict)"
     );
@@ -91,6 +96,7 @@ fn serve(args: &[String], adb: Option<PathBuf>) -> i32 {
     let mut open_browser = true;
     let mut target_dir: Option<PathBuf> = None;
     let mut library: Option<PathBuf> = Some(default_library_root());
+    let mut allow_origins: Vec<String> = Vec::new();
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -130,6 +136,25 @@ fn serve(args: &[String], adb: Option<PathBuf>) -> i32 {
                 library = Some(PathBuf::from(value));
                 index += 2;
             }
+            "--allow-origin" => {
+                let Some(value) = args.get(index + 1) else {
+                    eprintln!(
+                        "--allow-origin attend une origine (ex. https://mpacer.p.zacharie.org)"
+                    );
+                    return EXIT_USAGE;
+                };
+                allow_origins.push(value.clone());
+                index += 2;
+            }
+            other if other.starts_with("--allow-origin=") => {
+                let value = other.trim_start_matches("--allow-origin=");
+                if value.is_empty() {
+                    eprintln!("--allow-origin attend une origine");
+                    return EXIT_USAGE;
+                }
+                allow_origins.push(value.to_string());
+                index += 1;
+            }
             other => {
                 eprintln!("option inconnue : {other}");
                 return EXIT_USAGE;
@@ -156,6 +181,7 @@ fn serve(args: &[String], adb: Option<PathBuf>) -> i32 {
         adb,
         target_dir,
         library,
+        allow_origins,
     };
     match runtime.block_on(server::serve(port, bootstrap)) {
         Ok(()) => EXIT_OK,

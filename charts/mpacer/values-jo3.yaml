@@ -25,12 +25,12 @@ image:
 #     -o jsonpath='{.spec.template.metadata.annotations}'
 #   kubectl -n mpacer get pod -l app.kubernetes.io/instance=mpacer \
 #     -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'
+# Empreinte de l'image publiee pour le commit courant de main (88fa0da,
+# construite le 9 octobre 2026 a 10:27 UTC) : c'est exactement l'image que porte
+# le tag « latest » sur ghcr.io. Resolue apres un conflit de fusion dont les deux
+# cotes (sha-708d210 et sha-3190d2b) etaient perimes.
 podAnnotations:
-<<<<<<< HEAD
-  mpacer.zacharie.org/image-publiee: "sha-708d210@sha256:de46e004d1366d7d00e8e214433780458d5ae00a45c1eeed2568bf4c2aba5b82"
-=======
-  mpacer.zacharie.org/image-publiee: "sha-3190d2b@sha256:615c39c486f6a5efb6bc567aa8058051ce4f9baedfcb22f4b0995f17554ad591"
->>>>>>> 8a470b7d1b384e60393628e1b71283f4f32ae7e7
+  mpacer.zacharie.org/image-publiee: "sha-88fa0da@sha256:e3e331582e8876eb5d673f860af5e527828b0046d57c6fa1c210675c0aed7c9c"
 
 imagePullSecrets:
   - name: regcred

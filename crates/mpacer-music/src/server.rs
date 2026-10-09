@@ -10,8 +10,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Path as AxumPath, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{DefaultBodyLimit, Path as AxumPath, Query, Request, State};
+use axum::http::{header, HeaderValue, Method, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -20,7 +21,21 @@ use serde_json::json;
 
 use crate::adb::{self, Device};
 use crate::library::{LibraryFile, LibraryStore, MAX_FILE_BYTES};
-use crate::planner::{self, Progress, ProgressSink, ToolError, TransferRequest, WATCH_MUSIC_DIR};
+use crate::planner::{
+    self, Progress, ProgressSink, ToolError, TransferRequest, PHONE_MUSIC_DIR, PHONE_PACKAGE,
+    WATCH_MUSIC_DIR, WATCH_PACKAGE,
+};
+
+/// Origines autorisees par defaut a appeler l'agent local (docs/16, chemin A).
+///
+/// Le navigateur ne peut parler a `http://127.0.0.1:8077` que si l'agent repond
+/// au CORS : cette liste evite qu'un site tiers quelconque pousse des fichiers
+/// sur la montre. `--allow-origin URL` en ajoute (ou remplace la liste).
+pub const DEFAULT_ALLOWED_ORIGINS: [&str; 3] = [
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "https://mpacer.p.zacharie.org",
+];
 
 /// Etat partage du serveur local.
 #[derive(Clone)]
@@ -29,6 +44,8 @@ pub struct AppState {
     pub target_dir: Option<PathBuf>,
     /// Racine de la bibliotheque locale (None = aucun push possible).
     pub library: Option<PathBuf>,
+    /// Origines autorisees a appeler l'agent depuis un navigateur (CORS).
+    pub allow_origins: Vec<String>,
     jobs: Arc<Mutex<HashMap<String, JobHandle>>>,
     counter: Arc<AtomicU64>,
 }
@@ -39,6 +56,7 @@ impl AppState {
             adb: bootstrap.adb,
             target_dir: bootstrap.target_dir,
             library: bootstrap.library,
+            allow_origins: bootstrap.allow_origins,
             jobs: Arc::new(Mutex::new(HashMap::new())),
             counter: Arc::new(AtomicU64::new(0)),
         }
@@ -57,6 +75,8 @@ pub struct Bootstrap {
     pub target_dir: Option<PathBuf>,
     /// Racine de la bibliotheque locale, alimentee par le push web.
     pub library: Option<PathBuf>,
+    /// Origines autorisees par le navigateur ; vide = la liste par defaut.
+    pub allow_origins: Vec<String>,
 }
 
 /// Erreur d'API rendue en JSON.
@@ -103,10 +123,19 @@ impl IntoResponse for ApiError {
 
 /// Monte le routeur de l'interface locale (utilise par `serve` et les tests).
 pub fn router(state: AppState) -> Router {
+    let allow = Arc::new(if state.allow_origins.is_empty() {
+        DEFAULT_ALLOWED_ORIGINS
+            .iter()
+            .map(|origin| origin.to_string())
+            .collect::<Vec<String>>()
+    } else {
+        state.allow_origins.clone()
+    });
     Router::new()
         .route("/", get(index))
         .route("/api/browse", get(browse))
         .route("/api/devices", get(devices_handler))
+        .route("/api/targets", get(targets_handler))
         .route("/api/inspect", post(inspect_handler))
         .route("/api/transfer", post(transfer_handler))
         .route("/api/transfer/{job_id}", get(job_status))
@@ -119,6 +148,93 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/library/{playlist_id}/{name}", delete(library_remove))
         .with_state(state)
+        // CORS et Private Network Access : c'est ce qui permet a la page /music
+        // du service distant d'envoyer des MP3 a cet agent local (docs/16).
+        .layer(middleware::from_fn(move |request, next| {
+            let allow = allow.clone();
+            async move { cors(request, next, &allow).await }
+        }))
+}
+
+/// Autorise (ou refuse) une requete selon son origine.
+///
+/// Sans en-tete `Origin`, la requete vient d'un outil local (curl, tests) : elle
+/// passe. Avec un `Origin`, il doit s'agir de l'agent lui-meme (meme hote que la
+/// requete) ou d'une origine declaree ; tout le reste est refuse avant d'atteindre
+/// les gestionnaires, sinon n'importe quel site pourrait ecrire sur l'appareil.
+async fn cors(request: Request, next: Next, allow: &[String]) -> Response {
+    let origin = request
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let host = request
+        .headers()
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let meme_origine = origin
+        .as_deref()
+        .and_then(|origin| origin.split_once("://").map(|(_, reste)| reste))
+        .zip(host)
+        .is_some_and(|(hote_origine, hote)| hote_origine == hote);
+    let autorisee = origin.is_none()
+        || meme_origine
+        || origin
+            .as_deref()
+            .is_some_and(|origin| allow.iter().any(|candidate| candidate == origin));
+
+    if origin.is_some() && !autorisee {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "origine refusee : ajoutez-la avec --allow-origin" })),
+        )
+            .into_response();
+    }
+
+    let pna = request
+        .headers()
+        .contains_key("access-control-request-private-network");
+    if request.method() == Method::OPTIONS {
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        if origin.is_some() {
+            poser_entetes_cors(response.headers_mut(), origin.as_deref(), pna);
+        }
+        return response;
+    }
+
+    let mut response = next.run(request).await;
+    if origin.is_some() {
+        poser_entetes_cors(response.headers_mut(), origin.as_deref(), pna);
+    }
+    response
+}
+
+/// Pose les en-tetes CORS de la reponse (origine exacte, jamais `*`).
+fn poser_entetes_cors(headers: &mut axum::http::HeaderMap, origin: Option<&str>, pna: bool) {
+    let Some(origin) = origin else { return };
+    if let Ok(value) = HeaderValue::from_str(origin) {
+        headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, value);
+    }
+    headers.insert(header::VARY, HeaderValue::from_static("Origin"));
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET, POST, DELETE, OPTIONS"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("content-type"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_MAX_AGE,
+        HeaderValue::from_static("600"),
+    );
+    if pna {
+        headers.insert(
+            "access-control-allow-private-network",
+            HeaderValue::from_static("true"),
+        );
+    }
 }
 
 /// Ecoute sur 127.0.0.1:port jusqu'a l'arret du processus.
@@ -317,6 +433,69 @@ async fn devices_handler(State(state): State<AppState>) -> Json<DevicesResponse>
     })
 }
 
+// ----------------------------------------------------------------- targets
+
+/// Cible de transfert telle que la voit la page /music : un appareil branche,
+/// l'application qu'il porte et le dossier `Music/` correspondant.
+#[derive(Debug, Serialize)]
+struct Target {
+    serial: String,
+    model: Option<String>,
+    state: String,
+    /// `watch` | `phone` | `unknown` (paquet M-pacer non detecte).
+    kind: String,
+    music_dir: String,
+    free_bytes: Option<u64>,
+    total_bytes: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct TargetsResponse {
+    adb: String,
+    targets: Vec<Target>,
+}
+
+/// Appareils utilisables comme cible de transfert.
+///
+/// Le type se deduit de la presence des paquets : les deux applications
+/// partagent le meme socle, seul le nom du paquet change le dossier `Music/`.
+async fn targets_handler(State(state): State<AppState>) -> Json<TargetsResponse> {
+    let Some(adb_path) = state.adb.clone() else {
+        return Json(TargetsResponse {
+            adb: "absent".to_string(),
+            targets: Vec::new(),
+        });
+    };
+    let devices = adb::devices(&adb_path, WATCH_MUSIC_DIR).unwrap_or_default();
+    let targets = devices
+        .into_iter()
+        .map(|device| {
+            let (kind, music_dir) = if device.state != "device" {
+                ("unknown".to_string(), WATCH_MUSIC_DIR.to_string())
+            } else if adb::has_package(&adb_path, &device.serial, WATCH_PACKAGE) {
+                ("watch".to_string(), WATCH_MUSIC_DIR.to_string())
+            } else if adb::has_package(&adb_path, &device.serial, PHONE_PACKAGE) {
+                ("phone".to_string(), PHONE_MUSIC_DIR.to_string())
+            } else {
+                ("unknown".to_string(), WATCH_MUSIC_DIR.to_string())
+            };
+            Target {
+                serial: device.serial,
+                model: device.model,
+                state: device.state,
+                kind,
+                music_dir,
+                free_bytes: device.free_bytes,
+                total_bytes: device.total_bytes,
+            }
+        })
+        .collect();
+    Json(TargetsResponse {
+        adb: adb_path.display().to_string(),
+        targets,
+    })
+}
+
 // ----------------------------------------------------------------- inspect
 
 #[derive(Debug, Deserialize)]
@@ -412,6 +591,9 @@ struct TransferRequestJson {
     #[serde(default)]
     strict: bool,
     target_dir: Option<String>,
+    /// Dossier distant de l'appareil (`Music/` de la montre ou du telephone).
+    /// Absent => montre. La page /music l'obtient de `GET /api/targets`.
+    watch_dir: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -465,6 +647,18 @@ async fn transfer_handler(
         .target_dir
         .map(PathBuf::from)
         .or_else(|| state.target_dir.clone());
+    if let Some(watch_dir) = request
+        .watch_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        // Le dossier vient de GET /api/targets : on refuse tout ce qui ne
+        // ressemble pas a un chemin absolu d'application Android.
+        if watch_dir.starts_with('/') && watch_dir.contains("/Android/data/") {
+            transfer_request.watch_dir = watch_dir.to_string();
+        }
+    }
     transfer_request.cancel = Some(cancel);
 
     tokio::task::spawn_blocking(move || {

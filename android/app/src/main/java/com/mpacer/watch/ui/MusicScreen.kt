@@ -24,6 +24,7 @@ import androidx.wear.compose.material.Text
 import com.mpacer.core.TrackingService
 import com.mpacer.core.music.LocalPlaylist
 import com.mpacer.core.music.MusicDownloadState
+import com.mpacer.core.music.MusicDownloadService
 import com.mpacer.core.music.MusicDownloader
 import com.mpacer.core.music.MusicLibrary
 import com.mpacer.core.music.MusicLibraryState
@@ -82,7 +83,7 @@ fun MusicScreen(onBack: () -> Unit) {
             LibraryPane(
                 library = library,
                 telechargement = telechargement,
-                onDownload = { MusicDownloader.syncInBackground(context) },
+                onDownload = { MusicDownloadService.start(context) },
                 onImport = { scope.launch { MusicLibrary.scan(context) } },
                 onPlay = { playlist ->
                     MusicSession.setPlaylist(playlist)

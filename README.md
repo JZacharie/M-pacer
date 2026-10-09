@@ -200,6 +200,18 @@ anciennes (`-ActivitiesOlderThanDays <n>`). `-DryRun` affiche tout sans rien sup
 cargo run -p mpacer-music              # interface locale http://127.0.0.1:8077
 ```
 
+Deux chemins d'envoi (detail : [docs/16](docs/16-poussee-mp3-front-vers-appareils.md)) :
+
+* **par USB** — l'agent local copie les MP3 directement sur la montre ou le
+  telephone (`adb push`) : rien ne transite par le serveur. La page `/music` du
+  service detecte l'agent et propose l'appareil ; lancez-le avec
+  `cargo run -p mpacer-music -- --allow-origin https://mpacer.p.zacharie.org`
+  si votre service a une autre adresse (localhost:8080 et mpacer.p.zacharie.org
+  sont deja autorises) ;
+* **en Wi-Fi** — la page `/music` televerse les MP3 sur le serveur
+  (`MPACER_MEDIA_DIR`), et l'ecran Musique de la montre ou du telephone les
+  recupere avec reprise, puis les acquitte (le serveur les supprime).
+
 ## 6. Tests et qualité
 
 | Vérification | Résultat |

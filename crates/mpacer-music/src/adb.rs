@@ -62,6 +62,21 @@ pub fn run(adb: &Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Vrai si le paquet Android est installe sur l'appareil.
+///
+/// Sert a nommer la cible (« montre » ou « telephone ») et a choisir le dossier
+/// `Music/` correspondant : les deux applications partagent le meme socle, seule
+/// l'identite du paquet change le chemin.
+pub fn has_package(adb: &Path, serial: &str, package: &str) -> bool {
+    run(adb, &["-s", serial, "shell", "pm", "path", package])
+        .map(|output| {
+            output
+                .lines()
+                .any(|line| line.trim().starts_with("package:"))
+        })
+        .unwrap_or(false)
+}
+
 /// Montre detectee par adb.
 #[derive(Debug, Clone, Serialize)]
 pub struct Device {

@@ -565,3 +565,99 @@ async fn inspect_without_a_folder_or_a_library_is_a_bad_request() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn targets_answers_without_a_watch() {
+    let response = app()
+        .oneshot(
+            Request::builder()
+                .uri("/api/targets")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let value = body_json(response).await;
+    assert!(value["adb"].is_string());
+    assert!(value["targets"].is_array());
+}
+
+/// La page /music du service distant n'a le droit de parler a l'agent que si
+/// son origine est declaree : le preflight et la requete reelle portent les
+/// memes en-tetes, et tout le reste est refuse.
+#[tokio::test]
+async fn the_cors_preflight_accepts_only_declared_origins() {
+    let response = app()
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/api/library/run-170")
+                .header("origin", "https://mpacer.p.zacharie.org")
+                .header("access-control-request-method", "POST")
+                .header("access-control-request-private-network", "true")
+                .header("host", "127.0.0.1:8077")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let headers = response.headers();
+    assert_eq!(
+        headers.get("access-control-allow-origin").unwrap(),
+        "https://mpacer.p.zacharie.org"
+    );
+    assert_eq!(
+        headers.get("access-control-allow-private-network").unwrap(),
+        "true"
+    );
+    assert!(headers.get("access-control-allow-methods").is_some());
+
+    // La page de l'agent lui-meme (meme hote que la requete) passe sans reglage.
+    let response = app()
+        .oneshot(
+            Request::builder()
+                .uri("/api/devices")
+                .header("origin", "http://127.0.0.1:8077")
+                .header("host", "127.0.0.1:8077")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .unwrap(),
+        "http://127.0.0.1:8077"
+    );
+
+    // Une origine inconnue est refusee avant d'atteindre le gestionnaire.
+    let response = app()
+        .oneshot(
+            Request::builder()
+                .uri("/api/devices")
+                .header("origin", "https://exemple.inconnu")
+                .header("host", "127.0.0.1:8077")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // Sans en-tete Origin (curl, tests) : comportement inchange.
+    let response = app()
+        .oneshot(
+            Request::builder()
+                .uri("/api/devices")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}

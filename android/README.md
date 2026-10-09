@@ -456,6 +456,22 @@ adb shell cmd package install-existing com.whatsapp
 > (27 a 33 % du CPU contre 3 % pour M-pacer). Pendant les tests, laisser M-pacer au premier
 > plan evite ce rendu permanent ; le script `-KeepAwake` fait le reste.
 
+### Piege des bibliotheques natives locales
+
+`:app` n a aucune source native : les `.so` viennent tous de `:core` (coeur Rust et shim
+JNI). Un dossier `app/src/main/jniLibs/` a longtemps traine, ignore par git et datant
+d avant l extraction du socle. Il etait **fusionne en priorite** et masquait donc les
+bibliotheques fraiches de `:core` : un symbole ajoute cote Rust manquait au chargement de
+l APK, et l application mourait sur `UnsatisfiedLinkError` sans que rien ne le signale a la
+compilation. Ce dossier est supprime, et `app/build.gradle.kts` refuse desormais de
+compiler tant que des `.so` y traînent. En cas de doute sur une bibliotheque embarquee :
+
+```powershell
+# extraire le .so de l APK et verifier un symbole
+& "$env:LOCALAPPDATA\Android\Sdk\ndk\27.2.12479018\toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-nm.exe" `
+  --dynamic --defined-only libmpacer_ffi.so | Select-String mpacer_report
+```
+
 ### Contrainte de paquet et de signature
 
 Le Data Layer Wear OS **route les messages par nom de paquet** et n accepte que des

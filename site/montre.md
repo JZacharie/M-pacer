@@ -39,6 +39,13 @@ compare en permanence le réalisé au plan.
 Une seule information domine : **l'allure courante**, en 46 sp, lissée sur deux minutes.
 Tout le reste est secondaire et tient dans le cercle.
 
+Pendant la course, un **glissement de gauche à droite** fait défiler quatre vues : allure,
+tour, cardio, objectif. Un cadran de 40 mm ne montre pas tout à la fois, et la bonne réponse
+n'est pas de rapetisser les chiffres, c'est de séparer ce qu'on ne regarde pas au même
+moment. L'allure reste la première vue, la seule qu'on lit en courant. Les commandes
+d'arrêt et de pause, elles, ne défilent pas : arrêter une séance ne doit jamais obliger à
+chercher la bonne page.
+
 <div class="table-wrap">
 
 | Élément | Ce qu'il montre | Détail |
@@ -49,6 +56,19 @@ Tout le reste est secondaire et tient dans le cercle.
 | Pastille d'assistant | Une ligne sous les métriques | « sur le plan » ou l'écart au shadow runner (<code>+120 m</code> / <code>-80 m</code>), en vert quand on est dans le plan, en orange en retard ; ou le temps de finish estimé. Rien en mode allure seule |
 | Commandes | Des ronds à icône, jamais de texte | Lecture / pause / arrêt, et sur l'écran de repos musique, synchronisation et réglages. Une icône ne se tronque pas quand la taille de police du système augmente, un mot si |
 | État <code>Armed</code> | Départ au premier mouvement | L'écran de repos propose alors l'arrêt, pas un second départ |
+
+</div>
+
+<div class="table-wrap">
+
+Les quatre vues de course :
+
+| Vue | Ce qu'elle répond |
+|---|---|
+| **Allure** | Où j'en suis : allure lissée, distance, temps, et la pastille d'assistant |
+| **Tour** | Où j'en suis dans mon kilomètre : numéro de tour, allure du tour en cours, allure du tour précédent, distance parcourue dans le tour |
+| **Cardio** | Où en est mon cœur : pouls en grand dans la couleur de sa zone, et la zone en pastille |
+| **Objectif** | Où je vais : temps de finish estimé, distance restante, écart au shadow runner — ou, sans plan réglé, ce qu'il faut faire pour en avoir un |
 
 </div>
 

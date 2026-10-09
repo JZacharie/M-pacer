@@ -75,6 +75,12 @@ function Ok([string] $texte) { Write-Host ('  [ok]      ' + $texte) -ForegroundC
 function Info([string] $texte) { Write-Host ('  [info]    ' + $texte) -ForegroundColor Gray }
 function Alerte([string] $texte) { Write-Host ('  [attention] ' + $texte) -ForegroundColor Yellow }
 function Echec([string] $texte) { Write-Host ('  [echec]   ' + $texte) -ForegroundColor Red; exit 1 }
+function Format-Taille($octets) {
+    if ($null -eq $octets) { return 'n/a' }
+    if ($octets -ge 1GB) { return ('{0:N2} Go' -f ($octets / 1GB)) }
+    if ($octets -ge 1MB) { return ('{0:N1} Mo' -f ($octets / 1MB)) }
+    return ('{0:N0} Ko' -f ($octets / 1KB))
+}
 
 function Resolve-Adb {
     $cmd = Get-Command adb -ErrorAction SilentlyContinue
@@ -117,15 +123,13 @@ function Test-Appareil {
 
 function Show-Audit {
     Etape 'Stockage'
-    Sh 'df -h /data /storage/emulated 2>/dev/null'
+    Sh 'df -h /data 2>/dev/null'
+    Sh 'dumpsys diskstats 2>/dev/null | head -5'
 
     Etape 'Applications tierces installees'
     $tierces = @(Sh 'pm list packages -3' | Select-String -Pattern '^package:' | ForEach-Object { $_.Line.Replace('package:', '') })
     if ($tierces.Count -eq 0) { Info 'Aucune application tierce.' }
-    foreach ($p in ($tierces | Sort-Object)) {
-        $taille = (Sh ('dumpsys diskstats 2>/dev/null | grep -m1 ' + $p)).Trim()
-        Write-Host ('    ' + $p)
-    }
+    foreach ($p in ($tierces | Sort-Object)) { Write-Host ('    ' + $p) }
 
     Etape 'Paquets desactives'
     Sh 'pm list packages -d' | Select-Object -First 25
@@ -133,8 +137,15 @@ function Show-Audit {
     Etape 'Applications les plus gourmandes (memoire)'
     Sh 'dumpsys meminfo 2>/dev/null | head -18'
 
-    Etape 'Caches'
-    Sh 'du -sh /data/data/*/cache 2>/dev/null | sort -h | tail -12'
+    Etape 'Caches de l''application M-pacer'
+    $du = Sh ('run-as ' + $Package + ' du -sk cache files 2>/dev/null')
+    if ($du -match 'denied|not debuggable|No such') {
+        Info 'Taille propre illisible (application de production) ; espace global :'
+        Sh 'dumpsys diskstats 2>/dev/null | head -4'
+    } else {
+        Write-Host ('    ' + (($du -replace '\s+', ' ').Trim()))
+    }
+    Info 'Les caches des autres applications exigent root ; pm trim-caches les libere globalement.'
 
     Etape 'Animations (0.5 = plus reactif)'
     foreach ($k in 'window_animation_scale', 'transition_animation_scale', 'animator_duration_scale') {
@@ -156,20 +167,49 @@ function Invoke-Backup {
     if (-not (Test-Path $dossier)) { New-Item -ItemType Directory -Force -Path $dossier | Out-Null }
     Etape 'Sauvegarde de l''archive des seances'
     Info ('Dossier : ' + (Resolve-Path $dossier).Path)
-    $distant = '/sdcard/mpacer-sauvegarde'
-    Adb @('shell', 'rm -rf ' + $distant) | Out-Null
-    $copie = Sh ('run-as ' + $Package + ' sh -c "mkdir -p ' + $distant + ' && cp -r files ' + $distant + '/ 2>/dev/null"')
-    if ($copie) { Write-Host ('    ' + $copie) }
-    $pull = Adb @('pull', ($distant + '/files'), $dossier)
-    Write-Host ('    ' + (($pull -join ' ') -replace '\s+', ' '))
-    Adb @('shell', 'rm -rf ' + $distant) | Out-Null
-    $fichiers = @(Get-ChildItem $dossier -Recurse -File -ErrorAction SilentlyContinue)
-    if ($fichiers.Count -gt 0) {
+    # Depuis Android 10, une application ne peut plus ecrire a la racine de
+    # /sdcard : on rapatrie l'archive en flux binaire (tar) au lieu de passer
+    # par un fichier temporaire sur la montre.
+    $archive = Join-Path $dossier 'archive-montre.tar'
+    $arguments = @()
+    if ($Serial) { $arguments += @('-s', $Serial) }
+    $arguments += @('exec-out', 'run-as', $Package, 'tar', '-cf', '-', 'files')
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $script:Adb
+    $psi.Arguments = ($arguments -join ' ')
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $processus = [System.Diagnostics.Process]::Start($psi)
+    $lectureErreur = $processus.StandardError.ReadToEndAsync()
+    $flux = [System.IO.File]::Create($archive)
+    $processus.StandardOutput.BaseStream.CopyTo($flux)
+    $flux.Close()
+    $erreur = $lectureErreur.Result
+    $processus.WaitForExit()
+
+    $tailleArchive = (Get-Item $archive -ErrorAction SilentlyContinue).Length
+    if ($erreur -and $erreur.Trim()) { Write-Host ('    ' + (($erreur -replace '\s+', ' ').Trim())) }
+
+    if ($tailleArchive -gt 1024) {
+        Info ('Archive recuperee : ' + (Format-Taille $tailleArchive))
+        $extraction = Join-Path $dossier 'extrait'
+        New-Item -ItemType Directory -Force -Path $extraction | Out-Null
+        & tar -xf $archive -C $extraction 2>&1 | Out-Null
+        Remove-Item $archive -Force -ErrorAction SilentlyContinue
+        $fichiers = @(Get-ChildItem $extraction -Recurse -File -ErrorAction SilentlyContinue)
         $taille = ($fichiers | Measure-Object -Property Length -Sum).Sum
-        Ok ('{0} fichier(s), {1:N1} Ko sauvegardes.' -f $fichiers.Count, ($taille / 1KB))
+        Ok ('{0} fichier(s) sauvegardes, {1:N1} Ko.' -f $fichiers.Count, ($taille / 1KB))
+        foreach ($f in ($fichiers | Select-Object -First 10)) {
+            Write-Host ('    ' + $f.FullName.Substring($extraction.Length + 1) + '  (' + $f.Length + ' o)')
+        }
     } else {
-        Alerte 'Rien n''a ete recupere (application non deboguable ou archive vide).'
-        Info 'Alternative : adb backup -f sauvegarde.ab ' + $Package
+        Remove-Item $archive -Force -ErrorAction SilentlyContinue
+        Alerte 'Rien n''a ete recupere : application non debogable sur cet appareil, ou archive vide.'
+        Info ('Alternative pour une application de production : adb backup -f sauvegarde.ab ' + $Package)
     }
 }
 

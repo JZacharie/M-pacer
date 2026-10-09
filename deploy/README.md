@@ -8,7 +8,7 @@ verification, sauvegarde et mise a jour.
 ## 1. Ce qui est deploye
 
 | Ressource | Role |
-|---|---|
+| --- | --- |
 | `Cluster` CloudNativePG `mpacer-pg` | **PostgreSQL 18** dedie (1 instance, 2 Gi), avec ses services `-rw`/`-ro`/`-r` et son secret applicatif |
 | `Deployment` (1 replica, `RollingUpdate`) | binaire Rust `mpacer-api` : API + interface web |
 | `Service` ClusterIP (8080) | acces interne |
@@ -133,10 +133,12 @@ binaire, un utilisateur non privilegie (uid 10001) et un `HEALTHCHECK` sur `/hea
 2. **Identifiants** > **Creer des identifiants** > **ID client OAuth** > type
    **Application Web**.
 3. **URI de redirection autorisee** :
+
    ```text
    https://mpacer.p.zacharie.org/auth/google/callback
    https://mpacer.zacharie.org/auth/google/callback     (si l'ingress public est active)
    ```
+
 4. Recopier l'ID client et le secret : ils sont scelles dans Vault (section 4 quater).
 
 > **URI deja enregistree differente ?** Le service s'aligne sur ce que le client OAuth
@@ -209,10 +211,12 @@ le code affiche par l'application.
 ## 7. Appairer la montre et synchroniser
 
 1. Sur la montre (ou avec le simulateur), demander un code d'appairage :
+
    ```bash
    cargo run -p mpacer-sim -- --mode plan --distance 5000 --time 1500 \
      --api-url https://mpacer.p.zacharie.org
    ```
+
    Le simulateur affiche un code du type `BCDF-GHJK`.
 2. Se connecter sur `https://mpacer.p.zacharie.org/link` et saisir ce code.
 3. La montre recoit un jeton d'appareil et le conserve : les seances suivantes
@@ -358,10 +362,8 @@ podAnnotations:
 
 Cette valeur change a chaque publication, donc le rendu change : ArgoCD
 synchronise, le pod redemarre et le kubelet re-tire `latest`
-(`pullPolicy: Always`). Le rendu du chart est valide par `helm lint` et
-`helm template` avant le push, et le commit est pousse par
-`github-actions[bot]` avec `[skip ci]`, pour ne pas relancer la publication
-en boucle.
+(`pullPolicy: Always`). Le commit est pousse par `github-actions[bot]` avec
+`[skip ci]`, pour ne pas relancer la publication en boucle.
 
 Verifier ce qui tourne :
 
@@ -393,7 +395,7 @@ l'annotation a jour a la main, ou autoriser `github-actions[bot]` a pousser sur
 ## 10. Depannage
 
 | Symptome | Cause probable | Action |
-|---|---|---|
+| --- | --- | --- |
 | `ImagePullBackOff` | image absente du registre ou `regcred` manquant/invalide | verifier `kubectl -n mpacer describe pod`, recreer `regcred` |
 | `CrashLoopBackOff` au demarrage | `MPACER_SESSION_SECRET` manquant ou mot de passe de base refuse | verifier le secret `mpacer-credentials` (>= 32 caracteres) et les logs |
 | `readyz` en echec | base PostgreSQL injoignable | `kubectl -n mpacer get clusters.postgresql.cnpg.io mpacer-pg` et `kubectl -n mpacer logs mpacer-pg-1` |

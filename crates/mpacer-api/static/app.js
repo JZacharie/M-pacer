@@ -297,10 +297,22 @@
     }
 
     var enCours = false;
+    function estAudio(fichier) {
+      var nom = (fichier.name || "").toLowerCase();
+      return nom.endsWith(".mp3") || nom.endsWith(".m4a") || nom.endsWith(".ogg")
+        || nom.endsWith(".opus") || nom.endsWith(".flac") || nom.endsWith(".wav");
+    }
+
     function traiter(fichiers) {
       if (enCours) return;
-      var liste = Array.prototype.slice.call(fichiers || []);
-      if (!liste.length) return;
+      var bruts = Array.prototype.slice.call(fichiers || []);
+      var liste = bruts.filter(estAudio);
+      if (!liste.length) {
+        if (bruts.length && statut) {
+          statut.textContent = "aucun fichier audio valide (.mp3, .m4a, .flac...) detecte";
+        }
+        return;
+      }
       enCours = true;
       if (resultats) resultats.innerHTML = "";
       if (barre) barre.style.width = "0%";

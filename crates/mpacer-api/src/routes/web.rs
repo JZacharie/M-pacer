@@ -6533,13 +6533,58 @@ async fn music_upload(
         .await?
         .ok_or(AppError::NotFound)?;
     let tracks = crate::db::list_music_tracks(&state.pool, &user.id, &id).await?;
-    let track = match_upload_track(&tracks, &file_name, query.track.as_deref())?;
-    let track_id = track.id.clone();
+    let (track_id, previous_size, ancien_key) = match match_upload_track(&tracks, &file_name, query.track.as_deref()) {
+        Ok(track) => (
+            track.id.clone(),
+            track.size_bytes.unwrap_or(0).max(0),
+            track.storage_path.clone(),
+        ),
+        Err(_) => {
+            // Aucune piste ne correspond : creation automatique a partir du nom de fichier.
+            let stem = std::path::Path::new(&file_name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&file_name);
+            let mut parts = stem.split(" - ");
+            let (first, second, third) = (parts.next(), parts.next(), parts.next());
+            let (artist, title) = match (first, second, third) {
+                (Some(_num), Some(art), Some(tit)) if _num.trim().chars().all(|c| c.is_ascii_digit()) => {
+                    (Some(art.trim().to_string()), tit.trim().to_string())
+                }
+                (Some(art), Some(tit), None) => {
+                    (Some(art.trim().to_string()), tit.trim().to_string())
+                }
+                _ => (None, stem.trim().to_string()),
+            };
+            let position = tracks
+                .iter()
+                .map(|t| t.position)
+                .max()
+                .map_or(0, |max| max + 1);
+            let new_id = crate::db::insert_music_track(
+                &state.pool,
+                &user.id,
+                &id,
+                &crate::models::MusicTrackInput {
+                    position,
+                    title: title.chars().take(300).collect(),
+                    artist: artist.filter(|a| !a.is_empty()),
+                    album: None,
+                    duration_s: None,
+                    bpm: None,
+                    bpm_source: None,
+                    deezer_track_id: None,
+                },
+                state.now_ms(),
+            )
+            .await?;
+            (new_id, 0, None)
+        }
+    };
 
     // Quota : le fichier remplace compte pour sa nouvelle taille seulement.
     let used = crate::db::music_storage_bytes(&state.pool, &user.id).await?;
-    let previous = track.size_bytes.unwrap_or(0).max(0);
-    let after = used - previous.min(used) + bytes.len() as i64;
+    let after = used - previous_size.min(used) + bytes.len() as i64;
     if after > state.config.media_quota_bytes as i64 {
         return Err(AppError::PayloadTooLarge(format!(
             "quota audio depasse : {} octets deja stockes pour un plafond de {}",
@@ -6549,7 +6594,7 @@ async fn music_upload(
 
     let key = crate::media::storage_key(&user.id, &track_id, &file_name)
         .ok_or_else(|| AppError::bad_request("nom de fichier invalide"))?;
-    if let Some(ancien) = track.storage_path.as_deref() {
+    if let Some(ancien) = ancien_key.as_deref() {
         if ancien != key {
             let _ = crate::media::remove_file(&root, ancien);
         }

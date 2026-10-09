@@ -110,13 +110,27 @@ val cargoNdkBuild = tasks.register<Exec>("cargoNdkBuild") {
 }
 
 // Impossible d'assembler un APK sans les .so : on branche la compilation Rust en amont.
+//
+// La dependance ne suffit pas : le .so Rust entre dans l'edition de liens par une
+// bibliotheque *imported* (voir cpp/CMakeLists.txt), et CMake en garde une copie
+// dans sa propre sortie. Sans entree declaree, Gradle considere la compilation
+// native a jour alors que la bibliotheque a change, et l'APK embarque une
+// **vieille** copie de libmpacer_ffi.so -- un symbole ajoute cote Rust manque
+// alors au chargement, et l'application meurt sur UnsatisfiedLinkError.
+// Declarer jniLibs en entree force la reprise des qu'un .so change.
+val rustLibsAsInput: Task.() -> Unit = {
+    inputs.dir(jniLibsDir).withPropertyName("rustJniLibs")
+}
 tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(cargoNdkBuild) }
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
     .configureEach { dependsOn(cargoNdkBuild) }
 tasks.matching { it.name.startsWith("configure") && it.name.endsWith("NativeBuild") }
     .configureEach { dependsOn(cargoNdkBuild) }
 tasks.matching { it.name.startsWith("build") && it.name.endsWith("NativeBuild") }
-    .configureEach { dependsOn(cargoNdkBuild) }
+    .configureEach {
+        dependsOn(cargoNdkBuild)
+        rustLibsAsInput()
+    }
 
 dependencies {
     implementation(libs.androidx.core.ktx)

@@ -95,6 +95,27 @@ kotlin {
     }
 }
 
+// --- Garde-fou sur les bibliotheques natives ---------------------------------
+// :app n'a aucune source native a lui : les .so viennent tous de :core (coeur
+// Rust et shim JNI). Des copies locales avaient pourtant survecu dans
+// src/main/jniLibs (ignorees par git, datant d'avant l'extraction du socle) et
+// elles MASQUAIENT celles de :core lors de la fusion : un symbole ajoute cote
+// Rust manquait alors au chargement, et l'application mourait sur
+// UnsatisfiedLinkError -- sans que rien ne le signale a la compilation.
+// On refuse desormais de compiler tant que ces copies traînent la.
+val jniLibsLocaux = layout.projectDirectory.dir("src/main/jniLibs").asFile
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
+    .configureEach {
+        doFirst {
+            val restes = jniLibsLocaux.walkTopDown().filter { it.extension == "so" }.toList()
+            check(restes.isEmpty()) {
+                "Copies natives locales dans app/src/main/jniLibs : " +
+                    restes.joinToString { it.name } +
+                    ". Elles masquent celles de :core ; supprimez ce dossier."
+            }
+        }
+    }
+
 // Le coeur Rust, le shim JNI, la seance, la voix, la synchronisation, le suivi
 // MQTT et la musique vivent dans le module :core, partage avec :phone.
 

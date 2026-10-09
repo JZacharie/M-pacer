@@ -69,6 +69,12 @@ pub struct EngineOutput {
     pub previous_lap_pace: Option<f64>,
     /// Distance parcourue dans le tour courant.
     pub current_lap_distance_m: f64,
+    /// Numero du tour en cours, a partir de 1 (le premier kilometre).
+    ///
+    /// Publie par le moteur plutot que recompte par l'application : la longueur
+    /// d'un tour depend des unites, et un compteur qui derive d'un tour au
+    /// changement d'unites serait pire que pas de compteur du tout.
+    pub lap_index: u32,
     pub speed_mps: Option<f64>,
     pub panel: AssistantPanel,
     pub lap_completed: Option<Lap>,
@@ -95,6 +101,7 @@ impl Default for EngineOutput {
             current_lap_pace: None,
             previous_lap_pace: None,
             current_lap_distance_m: 0.0,
+            lap_index: 1,
             speed_mps: None,
             panel: AssistantPanel::default(),
             lap_completed: None,
@@ -545,6 +552,8 @@ impl PacerEngine {
             ),
             previous_lap_pace: self.laps.previous_lap_pace(),
             current_lap_distance_m: self.laps.current_lap_distance_m(distance),
+            // Le tour en cours suit ceux deja franchis.
+            lap_index: self.laps.lap_count() as u32 + 1,
             speed_mps: self.pace.current_speed_mps(),
             panel,
             lap_completed,
@@ -715,6 +724,24 @@ mod tests {
         assert!((pace - 360.0).abs() < 8.0, "pace = {pace}");
         assert_eq!(engine.laps().len(), 1);
         assert!(output.lap_completed.is_some());
+    }
+
+    #[test]
+    fn the_current_lap_number_follows_the_laps_completed() {
+        let mut engine = ready_engine();
+        let started = engine.start(10_000);
+        assert_eq!(started.lap_index, 1, "le premier kilometre est le tour 1");
+
+        // ~2,15 km a 8,33 m/s : deux tours franchis, le troisieme est en cours.
+        // (le premier point GPS ne compte pas : il fixe seulement l'origine)
+        let apres = run(&mut engine, 11_000, 260, 8.3333);
+        assert!(
+            apres.distance_m > 2000.0 && apres.distance_m < 2200.0,
+            "distance = {}",
+            apres.distance_m
+        );
+        assert_eq!(engine.laps().len(), 2);
+        assert_eq!(apres.lap_index, 3);
     }
 
     #[test]

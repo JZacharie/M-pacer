@@ -236,6 +236,9 @@ data class EngineOutput(val json: JSONObject) {
     val currentLapPace: Double? get() = json.doubleOrNull("current_lap_pace")
     val previousLapPace: Double? get() = json.doubleOrNull("previous_lap_pace")
     val currentLapDistanceM: Double get() = json.optDouble("current_lap_distance_m", 0.0)
+
+    /** Numero du tour en cours, a partir de 1. */
+    val lapIndex: Int get() = json.optInt("lap_index", 1)
     val speedMps: Double? get() = json.doubleOrNull("speed_mps")
     val isRunning: Boolean get() = state == "Running"
 

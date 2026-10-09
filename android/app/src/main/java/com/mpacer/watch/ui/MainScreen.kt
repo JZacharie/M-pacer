@@ -7,8 +7,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -16,6 +20,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.wear.compose.material.ExperimentalWearMaterialApi
+import androidx.wear.compose.material.HorizontalPageIndicator
+import androidx.wear.compose.material.PageIndicatorState
+import androidx.wear.compose.material.PageIndicatorStyle
 import androidx.wear.compose.material.Text
 import com.mpacer.core.EngineOutput
 import com.mpacer.core.MpacerFormat
@@ -148,6 +156,29 @@ private fun AuRepos(
 
 // --------------------------------------------------------------------- seance
 
+/**
+ * Les vues d'une seance en cours, dans l'ordre ou elles defilent.
+ *
+ * Un cadran de 40 mm ne montre pas tout a la fois, et la bonne reponse n'est pas
+ * de rapetisser les chiffres : c'est de separer ce qu'on ne regarde pas au meme
+ * moment. L'allure reste la premiere vue -- la seule qu'on lit en courant -- et
+ * un glissement de gauche a droite amene les autres.
+ *
+ * Les commandes, elles, ne defilent pas : arreter une seance ne doit jamais
+ * obliger a chercher la bonne page.
+ */
+private enum class VueCourse { ALLURE, TOUR, CARDIO, OBJECTIF }
+
+private val VUES_EN_COURSE = VueCourse.entries
+
+/** Le pager de Compose, vu par l'indicateur de pages de Wear. */
+private class EtatPages(private val pager: PagerState) : PageIndicatorState {
+    override val pageOffset: Float get() = pager.currentPageOffsetFraction
+    override val selectedPage: Int get() = pager.currentPage
+    override val pageCount: Int get() = pager.pageCount
+}
+
+@OptIn(ExperimentalWearMaterialApi::class)
 @Composable
 private fun Seance(
     output: EngineOutput?,
@@ -156,9 +187,58 @@ private fun Seance(
     onPrincipal: () -> Unit,
     onStop: () -> Unit,
 ) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    val pages = rememberPagerState(pageCount = { VUES_EN_COURSE.size })
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         LigneEtat(output)
+        // Le pager occupe ce qui reste entre l'etat et les commandes : chaque
+        // vue se centre dans cet espace, sans jamais pousser les commandes.
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center,
+        ) {
+            HorizontalPager(state = pages, modifier = Modifier.fillMaxSize()) { index ->
+                // Les marges laterales tiennent le texte dans le cercle : sur un
+                // cadran rond, les coins sont coupes, et une phrase qui touche le
+                // bord perd ses premiers et derniers caracteres.
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 22.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    when (VUES_EN_COURSE[index]) {
+                        VueCourse.ALLURE -> VueAllure(output, metric, enPause)
+                        VueCourse.TOUR -> VueTour(output, metric)
+                        VueCourse.CARDIO -> VueCardio(output)
+                        VueCourse.OBJECTIF -> VueObjectif(output, metric)
+                    }
+                }
+            }
+            // Style courbe : les points suivent le bord du cadran au lieu de
+            // s'entasser dans un coin, ou le cercle les coupe.
+            HorizontalPageIndicator(
+                pageIndicatorState = EtatPages(pages),
+                modifier = Modifier.fillMaxSize(),
+                indicatorStyle = PageIndicatorStyle.Curved,
+                selectedColor = Palette.orange,
+                unselectedColor = Palette.muted2,
+            )
+        }
         Spacer(Modifier.height(8.dp))
+        Commandes(enPause, onPrincipal, onStop)
+        Spacer(Modifier.height(4.dp))
+    }
+}
+
+/** Premiere vue : l'allure, la distance et le temps. */
+@Composable
+private fun VueAllure(output: EngineOutput?, metric: Boolean, enPause: Boolean) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Allure(
             pace = output?.currentPace,
             metric = metric,
@@ -166,34 +246,165 @@ private fun Seance(
         )
         Spacer(Modifier.height(4.dp))
         LigneMetriques(output, metric)
-        // La pastille garde sa hauteur meme vide : les commandes ne sautent pas
-        // d'un mode d'assistant a l'autre.
+        // La pastille garde sa hauteur meme vide : la vue ne saute pas d'un mode
+        // d'assistant a l'autre.
         Box(modifier = Modifier.height(24.dp), contentAlignment = Alignment.Center) {
             PastilleAssistant(output, enPause)
         }
-        Spacer(Modifier.height(16.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(13.dp)) {
-            RoundButton(
-                icon = if (enPause) WatchIcons.Play else WatchIcons.Pause,
-                label = if (enPause) "Reprendre" else "Pause",
-                onClick = onPrincipal,
-                size = 52.dp,
-                iconSize = 26.dp,
-                background = Palette.orange,
-                contentColor = Color.White,
+    }
+}
+
+/** Deuxieme vue : le tour en cours, compare au precedent. */
+@Composable
+private fun VueTour(output: EngineOutput?, metric: Boolean) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        SectionTitle("Tour " + (output?.lapIndex ?: 1))
+        Spacer(Modifier.height(2.dp))
+        Allure(output?.currentLapPace, metric, Palette.texte)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "precedent " + allureCourte(output?.previousLapPace),
+            color = Palette.muted,
+            fontSize = 13.sp,
+            maxLines = 1,
+        )
+        Text(
+            text = MpacerFormat.distance(output?.currentLapDistanceM ?: 0.0, imperial = !metric) +
+                " / " + MpacerFormat.distance(longueurDeTour(metric), imperial = !metric),
+            color = Palette.muted2,
+            fontSize = 12.sp,
+            maxLines = 1,
+        )
+    }
+}
+
+/** Troisieme vue : le coeur, quand la montre a un capteur. */
+@Composable
+private fun VueCardio(output: EngineOutput?) {
+    val bpm = output?.heartRateBpm
+    if (bpm == null) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            SectionTitle("Cardio")
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Aucun capteur cardiaque",
+                color = Palette.muted2,
+                fontSize = 12.sp,
+                maxLines = 2,
             )
-            RoundButton(
-                icon = WatchIcons.Stop,
-                label = "Arreter",
-                onClick = onStop,
-                size = 42.dp,
-                iconSize = 19.dp,
-                background = Palette.surface3,
-                contentColor = Palette.danger,
+        }
+        return
+    }
+    val zone = output.heartRateZone
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        SectionTitle("Cardio")
+        Spacer(Modifier.height(2.dp))
+        Row(
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Text(
+                text = bpm.toString(),
+                color = Palette.zoneColor(zone),
+                fontSize = 46.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
             )
+            Text(
+                text = "bpm",
+                color = Palette.muted2,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(bottom = 7.dp),
+                maxLines = 1,
+            )
+        }
+        if (zone != null) {
+            Spacer(Modifier.height(4.dp))
+            StatusPill(text = "Z" + zone, color = Palette.zoneColor(zone))
         }
     }
 }
+
+/** Quatrieme vue : l'objectif, quand un plan de course est regle. */
+@Composable
+private fun VueObjectif(output: EngineOutput?, metric: Boolean) {
+    val finish = output?.estimatedFinishS
+    if (finish == null && output?.shadow == null) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            SectionTitle("Objectif")
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Aucun plan de course",
+                color = Palette.texte,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+            Text(
+                text = "Reglez un temps vise ou une distance dans Reglages.",
+                color = Palette.muted2,
+                fontSize = 11.sp,
+                maxLines = 3,
+            )
+        }
+        return
+    }
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        SectionTitle("Objectif")
+        finish?.let {
+            Box(modifier = Modifier.height(52.dp), contentAlignment = Alignment.Center) {
+                Text(
+                    text = MpacerFormat.duration(it),
+                    color = Palette.texte,
+                    fontSize = 40.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                )
+            }
+        }
+        output?.remainingM?.let {
+            Text(
+                text = "reste " + MpacerFormat.distance(it, imperial = !metric),
+                color = Palette.muted,
+                fontSize = 13.sp,
+                maxLines = 1,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        PastilleAssistant(output, enPause = false)
+    }
+}
+
+/** Les deux commandes de seance : elles restent visibles sur toutes les vues. */
+@Composable
+private fun Commandes(enPause: Boolean, onPrincipal: () -> Unit, onStop: () -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(13.dp)) {
+        RoundButton(
+            icon = if (enPause) WatchIcons.Play else WatchIcons.Pause,
+            label = if (enPause) "Reprendre" else "Pause",
+            onClick = onPrincipal,
+            size = 52.dp,
+            iconSize = 26.dp,
+            background = Palette.orange,
+            contentColor = Color.White,
+        )
+        RoundButton(
+            icon = WatchIcons.Stop,
+            label = "Arreter",
+            onClick = onStop,
+            size = 42.dp,
+            iconSize = 19.dp,
+            background = Palette.surface3,
+            contentColor = Palette.danger,
+        )
+    }
+}
+
+/** Allure en clair, ou un tiret quand il n'y a rien a lire. */
+private fun allureCourte(pace: Double?): String = MpacerFormat.pace(pace)
+
+/** Longueur d'un tour : le kilometre, ou le mile selon les unites. */
+private fun longueurDeTour(metric: Boolean): Double = if (metric) 1000.0 else 1609.344
 
 // -------------------------------------------------------------------- morceaux
 

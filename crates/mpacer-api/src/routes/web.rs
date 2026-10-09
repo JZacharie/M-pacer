@@ -10,11 +10,11 @@ use crate::finishers::{
     FinishersRace, RaceSearchParams, RaceSearchQuery, RaceSearchResponse, Sort, DISCIPLINES,
     FRENCH_REGIONS, MONTHS,
 };
-use crate::friends::InviteOutcome;
+use crate::friends::{FriendRequestView, InviteOutcome, RequestOutcome, UserView};
 use crate::live::{LivePoint, LiveSessionView};
 use crate::models::{
-    DeezerAccount, MusicPlaylistInput, MusicTrack, MusicTrackInput, Race, RaceInput, RaceTask,
-    SourcePlaylist, User,
+    DeezerAccount, MusicPlaylist, MusicPlaylistInput, MusicTrack, MusicTrackInput, Race, RaceInput,
+    RaceTask, SourcePlaylist, User, UserCard,
 };
 use crate::mqtt::MqttStatus;
 use crate::state::AppState;
@@ -51,6 +51,17 @@ pub fn router() -> Router<AppState> {
         .route("/amis/partage", post(friends_share_submit))
         .route("/amis/invitation", post(friends_invite_submit))
         .route("/amis/ajouter", post(friends_add_submit))
+        // Demandes d'amitie : on cherche un compte M-pacer, on demande, et
+        // l'autre valide. Aucun identifiant de montre n'entre dans le cercle.
+        .route("/amis/demande", post(friends_request_submit))
+        .route(
+            "/amis/demandes/{id}/accepter",
+            post(friends_request_accept_submit),
+        )
+        .route(
+            "/amis/demandes/{id}/refuser",
+            post(friends_request_decline_submit),
+        )
         .route("/amis/{id}/retirer", post(friends_remove_submit))
         // Tableaux de bord : ecrans composes par l'utilisateur (docs/08).
         .route("/dashboards", get(dashboards_page))
@@ -87,6 +98,9 @@ pub fn router() -> Router<AppState> {
         .route("/logout", post(logout))
         .route("/link", get(link_page).post(link_submit))
         .route("/avatar", get(avatar))
+        // Photo de profil d'un autre compte, servie par le service (jamais par
+        // Google) : c'est l'avatar affiche dans la liste d'amis et les demandes.
+        .route("/avatar/{id}", get(avatar_friend))
         .route("/settings", get(settings_page))
         .route("/settings/tokens/{id}/revoke", post(revoke_token))
         .route("/workouts/{id}", get(workout_page))
@@ -133,6 +147,20 @@ pub fn router() -> Router<AppState> {
         .route("/music/import", post(music_import))
         .route("/music/playlists/{id}/manifest", get(music_manifest))
         .route("/music/playlists/{id}/files", get(music_files))
+        // Depot des MP3 depuis le navigateur : le serveur les garde le temps que
+        // la montre ou le telephone les recupere (docs/16). Le plafond du corps
+        // est une limite de transport ; le vrai plafond par fichier est applique
+        // par le gestionnaire (MPACER_MEDIA_MAX_FILE_BYTES).
+        .route(
+            "/music/playlists/{id}/upload",
+            post(music_upload).layer(DefaultBodyLimit::max(
+                crate::media::MAX_UPLOAD_BODY_BYTES as usize,
+            )),
+        )
+        .route(
+            "/music/playlists/{id}/upload/{track_id}/delete",
+            post(music_upload_delete),
+        )
         // `/deemix` : la liste .txt (GET) et l'envoi de la playlist dans Deemix (POST).
         .route(
             "/music/playlists/{id}/deemix",
@@ -1983,6 +2011,39 @@ async fn avatar(
 
     Ok(avatar_response(
         crate::avatar::monogram_svg(&user).as_bytes(),
+        "image/svg+xml; charset=utf-8",
+    ))
+}
+
+/// Photo de profil d'un autre compte, pour la liste d'amis et les demandes.
+///
+/// Reservee aux comptes avec qui un lien existe (amitie, ou demande dans un sens
+/// ou dans l'autre) : le service n'est pas un annuaire de photos. Sans photo,
+/// ou si Google ne repond pas, la pastille aux initiales prend le relais.
+async fn avatar_friend(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let soi_meme = id == user.id;
+    let lie = soi_meme
+        || crate::db::are_friends(&state.pool, &user.id, &id).await?
+        || crate::db::friend_request_between(&state.pool, &user.id, &id).await?
+        || crate::db::friend_request_between(&state.pool, &id, &user.id).await?;
+    if !lie {
+        return Err(AppError::NotFound);
+    }
+    let Some(compte) = crate::db::user_card(&state.pool, &id).await? else {
+        return Err(AppError::NotFound);
+    };
+    if let Some(url) = compte.picture_url.as_deref() {
+        if let Some(image) = state.avatars.picture(&state.http, url).await {
+            return Ok(avatar_response(&image.bytes, &image.content_type));
+        }
+    }
+    Ok(avatar_response(
+        crate::avatar::monogram_svg_for(compte.name.as_deref(), &compte.email, &compte.id)
+            .as_bytes(),
         "image/svg+xml; charset=utf-8",
     ))
 }
@@ -4516,6 +4577,7 @@ fn music_error_message(code: &str) -> String {
         "playlist_inconnue" => "Cette playlist n'existe plus.".to_string(),
         "nom_invalide" => "Le nom de la playlist ne peut pas etre vide.".to_string(),
         "bpm_invalide" => "Le BPM doit etre un nombre entre 30 et 300.".to_string(),
+        "audio_non_configure" => "Le depot Wi-Fi des MP3 est eteint sur ce serveur : renseignez MPACER_MEDIA_DIR.".to_string(),
         other => format!("Operation impossible ({other})."),
     }
 }
@@ -4535,6 +4597,7 @@ fn music_ok_message(code: &str) -> String {
         "bpm_enregistre" => "BPM enregistre.".to_string(),
         "playlist_renommee" => "Playlist renommee.".to_string(),
         "playlist_supprimee" => "Playlist supprimee.".to_string(),
+        "mp3_retire" => "Fichier retire du serveur.".to_string(),
         other => format!("Operation effectuee ({other})."),
     }
 }
@@ -5448,8 +5511,19 @@ async fn music_page(
             p class="muted" { "Selectionnez une playlist dans le bloc 2 pour lister ses fichiers MP3." }
         }
 
-        // ------------------------------------------------ 5. transfert USB
-        div class="section-head" { h2 { "5. Transfert vers la montre (USB)" } }
+        // --------------------------- 5. envoi vers l'appareil (Wi-Fi + USB)
+        div class="section-head" { h2 { "5. Envoyer les MP3 vers l'appareil" } }
+        @if let Some(playlist) = &selected_playlist {
+            @if state.config.media_configured() {
+                (upload_panel(playlist, &tracks, state.config.media_max_file_bytes))
+            } @else {
+                p class="muted" {
+                    "Le depot Wi-Fi est eteint sur ce serveur (MPACER_MEDIA_DIR non renseigne). "
+                    "Les MP3 se copient par USB, comme ci-dessous."
+                }
+            }
+        }
+        div class="section-head" { h3 { "Par USB (mpacer-music)" } }
         @if let (Some(playlist), Some(name), Some(command)) =
             (&selected_playlist, &manifest_name, &manifest_command)
         {
@@ -6057,6 +6131,231 @@ async fn music_files(
         .map_err(|error| AppError::internal(error.to_string()))
 }
 
+// ------------------------------------------------- depot des MP3 (docs/16)
+
+/// Requete de depot : piste imposee quand le nom du fichier ne suffit pas.
+#[derive(Debug, Deserialize)]
+struct MusicUploadQuery {
+    #[serde(default)]
+    track: Option<String>,
+}
+
+/// Choisit la piste a laquelle un fichier depose correspond.
+///
+/// L'appariement se fait sur le nom attendu ("01 - Artiste - Titre.mp3", meme
+/// regle que la liste du bloc 4), sans tenir compte de la casse. Le champ
+/// \`track\` (parametre de requete) force la piste quand le nom a ete modifie.
+///
+/// Un fichier orphelin est refuse : la montre ne joue que les pistes referencees
+/// par le manifeste, un MP3 sans piste ne serait jamais lu.
+fn match_upload_track<'a>(
+    tracks: &'a [MusicTrack],
+    file_name: &str,
+    forced: Option<&str>,
+) -> Result<&'a MusicTrack, AppError> {
+    if let Some(track_id) = forced.map(str::trim).filter(|value| !value.is_empty()) {
+        return tracks
+            .iter()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| AppError::bad_request("cette piste n'appartient pas a la playlist"));
+    }
+    let cible = file_name.trim().to_lowercase();
+    tracks
+        .iter()
+        .find(|track| crate::models::stored_file_name(track, file_name).to_lowercase() == cible)
+        .ok_or_else(|| {
+            let exemples: Vec<String> = tracks
+                .iter()
+                .take(3)
+                .map(|track| crate::models::stored_file_name(track, file_name))
+                .collect();
+            AppError::bad_request(format!(
+                "le nom \"{file_name}\" ne correspond a aucune piste de la playlist ; noms attendus : {}",
+                exemples.join(", ")
+            ))
+        })
+}
+
+/// Recoit un MP3 du navigateur (multipart), le range sur le volume et l'associe
+/// a la piste dont le nom correspond. Reponse JSON : le bloc 5 affiche le detail
+/// fichier par fichier.
+async fn music_upload(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Query(query): Query<MusicUploadQuery>,
+    multipart: Multipart,
+) -> AppResult<Json<serde_json::Value>> {
+    let Some(root) = state.config.media_dir.clone() else {
+        return Err(AppError::bad_request(
+            "le depot d'audio est eteint : renseignez MPACER_MEDIA_DIR sur le serveur",
+        ));
+    };
+    let (raw_name, bytes) = crate::media::collect_upload(multipart).await?;
+    if bytes.len() as u64 > state.config.media_max_file_bytes {
+        return Err(AppError::PayloadTooLarge(format!(
+            "fichier de {} octets : le plafond est de {} octets",
+            bytes.len(),
+            state.config.media_max_file_bytes
+        )));
+    }
+    let file_name = crate::media::sanitize_file_name(&raw_name).ok_or_else(|| {
+        AppError::UnsupportedMediaType(format!(
+            "seuls les fichiers audio sont acceptes (mp3, m4a, ogg, opus, flac, wav) : {raw_name}"
+        ))
+    })?;
+    crate::db::get_music_playlist(&state.pool, &user.id, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let tracks = crate::db::list_music_tracks(&state.pool, &user.id, &id).await?;
+    let track = match_upload_track(&tracks, &file_name, query.track.as_deref())?;
+    let track_id = track.id.clone();
+
+    // Quota : le fichier remplace compte pour sa nouvelle taille seulement.
+    let used = crate::db::music_storage_bytes(&state.pool, &user.id).await?;
+    let previous = track.size_bytes.unwrap_or(0).max(0);
+    let after = used - previous.min(used) + bytes.len() as i64;
+    if after > state.config.media_quota_bytes as i64 {
+        return Err(AppError::PayloadTooLarge(format!(
+            "quota audio depasse : {} octets deja stockes pour un plafond de {}",
+            used, state.config.media_quota_bytes
+        )));
+    }
+
+    let key = crate::media::storage_key(&user.id, &track_id, &file_name)
+        .ok_or_else(|| AppError::bad_request("nom de fichier invalide"))?;
+    if let Some(ancien) = track.storage_path.as_deref() {
+        if ancien != key {
+            let _ = crate::media::remove_file(&root, ancien);
+        }
+    }
+    crate::media::write_file(&root, &key, &bytes).map_err(AppError::internal)?;
+    let mime = crate::media::content_type(&file_name).to_string();
+    crate::db::set_music_track_storage(
+        &state.pool,
+        &user.id,
+        &id,
+        &track_id,
+        &mime,
+        bytes.len() as i64,
+        &key,
+        state.now_ms(),
+    )
+    .await?;
+    tracing::info!(
+        utilisateur = %user.id,
+        playlist = %id,
+        piste = %track_id,
+        octets = bytes.len(),
+        "MP3 depose sur le serveur"
+    );
+    Ok(Json(serde_json::json!({
+        "track_id": track_id,
+        "file_name": file_name,
+        "size_bytes": bytes.len(),
+        "sha256": crate::media::sha256_hex(&bytes),
+    })))
+}
+
+/// Retire un MP3 du serveur (le fichier et son empreinte en base).
+async fn music_upload_delete(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path((id, track_id)): Path<(String, String)>,
+) -> AppResult<Response> {
+    crate::db::get_music_playlist(&state.pool, &user.id, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let ids = vec![track_id.clone()];
+    let tracks = crate::db::stored_music_tracks_by_ids(&state.pool, &user.id, &id, &ids).await?;
+    if let Some(root) = state.config.media_dir.as_ref() {
+        for track in &tracks {
+            if let Some(key) = track.storage_path.as_deref() {
+                if let Err(error) = crate::media::remove_file(root, key) {
+                    tracing::warn!(error = %error, "fichier audio non supprime");
+                }
+            }
+        }
+    }
+    crate::db::ack_music_tracks(&state.pool, &user.id, &id, &ids, state.now_ms()).await?;
+    Ok(Redirect::to(&format!("/music?playlist={id}&ok=mp3_retire")).into_response())
+}
+
+/// Zone de depot des MP3 (bloc 5), affichee seulement si un volume est configure.
+fn upload_panel(playlist: &MusicPlaylist, tracks: &[MusicTrack], max_bytes: u64) -> Markup {
+    let stored: Vec<&MusicTrack> = tracks
+        .iter()
+        .filter(|track| track.storage_path.is_some())
+        .collect();
+    html! {
+        div class="panel" id="music-upload"
+            data-playlist=(playlist.id)
+            data-max-bytes=(max_bytes) {
+            h3 { "Deposer des MP3 (Wi-Fi)" }
+            p class="muted" {
+                "Glissez-deposez vos fichiers audio : le serveur les garde le temps que "
+                "l'appareil les recupere. Sur la montre ou le telephone : "
+                "Musique > Telecharger, puis Musique > Importer."
+            }
+            div class="drop" id="music-upload-drop" {
+                p {
+                    "Glissez-deposez vos MP3 ici, ou "
+                    label for="music-upload-input" { "choisissez des fichiers" } "."
+                }
+                input type="file" id="music-upload-input" multiple
+                    accept=".mp3,.m4a,.ogg,.opus,.flac,.wav,audio/*";
+            }
+            div class="progress" { div id="music-upload-bar" {} }
+            p id="music-upload-status" class="muted" { "aucun fichier en cours" }
+            ul id="music-upload-results" class="upload-results" {}
+            @if !stored.is_empty() {
+                div class="table-wrap" {
+                    table {
+                        thead {
+                            tr {
+                                th { "Sur le serveur" }
+                                th { "Taille" }
+                                th {}
+                            }
+                        }
+                        tbody {
+                            @for track in &stored {
+                                @if let Some(key) = track.storage_path.as_deref() {
+                                    tr {
+                                        td { code { (crate::models::stored_file_name(track, key)) } }
+                                        td { (human_size(track.size_bytes.unwrap_or(0).max(0) as u64)) }
+                                        td {
+                                            form class="inline-form" method="post"
+                                                action={ "/music/playlists/" (playlist.id) "/upload/" (track.id) "/delete" } {
+                                                button class="small danger" type="submit" { "Retirer" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Taille lisible (sans accent), pour la liste des fichiers stockes.
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["o", "Ko", "Mo", "Go"];
+    if bytes < 1024 {
+        return format!("{bytes} o");
+    }
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
+}
+
 /// Envoie toute la playlist dans la file de telechargement de Deemix.
 ///
 /// M-pacer ne telecharge aucun audio : il remet la reference Deezer a
@@ -6517,6 +6816,9 @@ fn option_accuracy(valeur: Option<f64>) -> String {
 struct FriendsQuery {
     #[serde(default)]
     code: Option<String>,
+    /// Recherche de compte (adresse ou nom) : liste les comptes a qui demander.
+    #[serde(default)]
+    q: Option<String>,
     #[serde(default)]
     ok: Option<String>,
     #[serde(default)]
@@ -6535,7 +6837,43 @@ async fn friends_page(
     let now_ms = state.now_ms();
     let cercle = crate::friends::payload(&state, &user.id, user.share_live, true).await?;
     let invitation = crate::db::current_friend_invite(&state.pool, &user.id, now_ms).await?;
-    let content = friends_content(&cercle, invitation, &query);
+    let recues = crate::db::incoming_friend_requests(&state.pool, &user.id).await?;
+    let envoyees = crate::db::outgoing_friend_requests(&state.pool, &user.id).await?;
+    let demandes: Vec<FriendRequestView> = recues
+        .iter()
+        .map(|row| FriendRequestView::from_row(row, &user.id))
+        .collect();
+    let attente: Vec<FriendRequestView> = envoyees
+        .iter()
+        .map(|row| FriendRequestView::from_row(row, &user.id))
+        .collect();
+
+    // Recherche de compte : par adresse ou par nom, jamais par appareil.
+    let recherche = crate::friends::clean_search_query(query.q.as_deref().unwrap_or_default());
+    let resultats: Vec<UserView> = if crate::friends::is_searchable(&recherche) {
+        crate::db::search_users(
+            &state.pool,
+            &crate::friends::like_pattern(&recherche),
+            &user.id,
+            crate::friends::SEARCH_LIMIT,
+        )
+        .await?
+        .iter()
+        .map(UserView::from_card)
+        .collect()
+    } else {
+        Vec::new()
+    };
+
+    let content = friends_content(FriendsPage {
+        cercle: &cercle,
+        invitation,
+        demandes: &demandes,
+        attente: &attente,
+        recherche: &recherche,
+        resultats: &resultats,
+        query: &query,
+    });
     Ok(page(layout("Amis", "amis", Some(&user), content)))
 }
 
@@ -6629,6 +6967,116 @@ async fn friends_add_submit(
     Ok(Redirect::to(destination).into_response())
 }
 
+#[derive(Debug, Deserialize)]
+struct FriendRequestForm {
+    /// Compte vise par son identifiant M-pacer (resultat de recherche).
+    #[serde(default)]
+    user_id: Option<String>,
+    /// Ou par son adresse, si le formulaire vient d'ailleurs.
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+/// Envoie une demande d'amitie depuis la page Amis.
+///
+/// Le destinataire est un compte M-pacer : identifiant du resultat de recherche
+/// ou adresse. Aucun nom de montre n'entre dans la designation.
+async fn friends_request_submit(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Form(form): Form<FriendRequestForm>,
+) -> AppResult<Response> {
+    let identifiant = form
+        .user_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|valeur| !valeur.is_empty());
+    let adresse = form
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|valeur| !valeur.is_empty());
+
+    let cible = if let Some(id) = identifiant {
+        crate::db::user_card(&state.pool, id).await?
+    } else if let Some(email) = adresse {
+        crate::db::user_card_by_email(&state.pool, email).await?
+    } else {
+        None
+    };
+    let Some(cible) = cible else {
+        return Ok(Redirect::to("/amis?erreur=introuvable").into_response());
+    };
+    if cible.id == user.id {
+        return Ok(Redirect::to("/amis?erreur=soi").into_response());
+    }
+
+    let expediteur = UserCard {
+        id: user.id.clone(),
+        name: user.name.clone(),
+        email: user.email.clone(),
+        picture_url: user.picture_url.clone(),
+    };
+    let message =
+        crate::friends::clean_request_message(form.message.as_deref().unwrap_or_default());
+    let destination = match crate::db::send_friend_request(
+        &state.pool,
+        &expediteur,
+        &cible,
+        message.as_deref(),
+        state.now_ms(),
+    )
+    .await?
+    {
+        RequestOutcome::Sent(_) => {
+            tracing::info!(user = %user.email, cible = %cible.email, "demande d'amitie envoyee");
+            "/amis?ok=demande"
+        }
+        RequestOutcome::AlreadyIncoming(_) => {
+            tracing::info!(user = %user.email, cible = %cible.email, "demande reciproque : amitie immediate");
+            "/amis?ok=demande_directe"
+        }
+        RequestOutcome::AlreadyFriends => "/amis?erreur=deja_ami",
+        RequestOutcome::AlreadySent => "/amis?erreur=deja_envoye",
+        RequestOutcome::UnknownUser => "/amis?erreur=introuvable",
+        RequestOutcome::SelfRequest => "/amis?erreur=soi",
+        RequestOutcome::TooMany => "/amis?erreur=plein",
+        RequestOutcome::TooManyPending => "/amis?erreur=trop_demandes",
+    };
+    Ok(Redirect::to(destination).into_response())
+}
+
+/// Accepte une demande recue : l'amitie est creee dans les deux sens.
+async fn friends_request_accept_submit(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    match crate::db::accept_friend_request(&state.pool, &id, &user.id, state.now_ms()).await? {
+        Some(ami) => {
+            tracing::info!(user = %user.email, ami = %ami.email, "demande d'amitie acceptee");
+            Ok(Redirect::to("/amis?ok=accepte").into_response())
+        }
+        None => Ok(Redirect::to("/amis?erreur=introuvable").into_response()),
+    }
+}
+
+/// Refuse une demande recue : elle disparait, rien d'autre ne change.
+async fn friends_request_decline_submit(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    if crate::db::decline_friend_request(&state.pool, &id, &user.id).await? {
+        tracing::info!(user = %user.email, demande = %id, "demande d'amitie refusee");
+        Ok(Redirect::to("/amis?ok=refuse").into_response())
+    } else {
+        Ok(Redirect::to("/amis?erreur=introuvable").into_response())
+    }
+}
+
 /// Retire un ami : plus aucune position ne circule entre les deux comptes.
 async fn friends_remove_submit(
     State(state): State<AppState>,
@@ -6640,20 +7088,30 @@ async fn friends_remove_submit(
     Ok(Redirect::to("/amis?ok=retire").into_response())
 }
 
-/// Contenu de la page Amis.
-fn friends_content(
-    cercle: &crate::friends::CirclePayload,
+/// Donnees de la page Amis : cercle, invitation, demandes et recherche.
+struct FriendsPage<'a> {
+    cercle: &'a crate::friends::CirclePayload,
     invitation: Option<(String, i64)>,
-    query: &FriendsQuery,
-) -> Markup {
+    demandes: &'a [FriendRequestView],
+    attente: &'a [FriendRequestView],
+    recherche: &'a str,
+    resultats: &'a [UserView],
+    query: &'a FriendsQuery,
+}
+
+/// Contenu de la page Amis.
+fn friends_content(page: FriendsPage) -> Markup {
+    let cercle = page.cercle;
+    let query = page.query;
     let en_direct = cercle.live;
+    let recues = page.demandes.len();
     html! {
         section class="hero" {
             h1 { "Amis" }
             p class="muted" {
                 "Pendant une seance, votre montre (ou votre telephone) peut publier sa "
                 "position sur le broker MQTT. Cette page decide qui la voit : un petit "
-                "cercle d'amis, ajoutes par un code court, et rien d'autre."
+                "cercle d'amis, ajoutes par une demande que l'autre valide, et rien d'autre."
             }
             @if let Some(ok) = query.ok.as_deref() {
                 p class="alert ok" { (friends_ok_message(ok)) }
@@ -6689,7 +7147,7 @@ fn friends_content(
                 "Donnez ce code a la personne a ajouter : elle le saisit dans son "
                 "application (onglet Amis) ou sur cette page. Usage unique, valable 24 h."
             }
-            @if let Some((code, expiration)) = invitation {
+            @if let Some((code, expiration)) = page.invitation {
                 p class="code-invitation" id="code-invitation" { (crate::friends::format_invite_code(&code)) }
                 p class="tiny muted" {
                     "Valable jusqu'au " (date_courte(expiration)) "."
@@ -6705,6 +7163,56 @@ fn friends_content(
             }
             form method="post" action="/amis/invitation" {
                 button type="submit" class="button ghost" { "Generer un nouveau code" }
+            }
+        }
+
+        // Cœur de la fonctionnalite : on cherche un compte M-pacer, on demande,
+        // l'autre valide. Aucun identifiant de montre n'entre dans le cercle.
+        section class="card form" id="chercher" {
+            h2 { "Chercher un compte" }
+            p class="tiny muted" {
+                "Par adresse ou par nom. La demande part vers ce compte ; elle ne "
+                "devient une amitie que lorsque la personne l'accepte."
+            }
+            form method="get" action="/amis" {
+                label for="q" { "Adresse ou nom" }
+                input id="q" name="q" type="search" autocomplete="off"
+                      placeholder="ami@example.org" value=(page.recherche);
+                button type="submit" { "Chercher" }
+            }
+            @if !page.recherche.is_empty() {
+                @if page.resultats.is_empty() {
+                    p class="tiny muted" { "Aucun compte trouve pour « " (page.recherche) " »." }
+                } @else {
+                    @for compte in page.resultats {
+                        (search_card(compte))
+                    }
+                }
+            }
+        }
+
+        section class="panel" id="demandes" {
+            div class="section-head" {
+                h2 { "Demandes recues" }
+                @if recues > 0 {
+                    span class="pill brand" { (recues) " en attente" }
+                } @else {
+                    span class="pill off" { "aucune" }
+                }
+            }
+            @if page.demandes.is_empty() {
+                p class="tiny muted" {
+                    "Personne ne vous a demande pour l'instant."
+                }
+            } @else {
+                @for demande in page.demandes {
+                    (request_card(demande, cercle.now_ms))
+                }
+            }
+            @if !page.attente.is_empty() {
+                p class="tiny muted" {
+                    (page.attente.len()) " demande(s) envoyee(s), en attente de reponse."
+                }
             }
         }
 
@@ -6748,8 +7256,8 @@ fn friends_content(
                     span class="icon icon-user" {}
                     p { "Personne pour l'instant." }
                     p class="tiny muted" {
-                        "Generez un code ci-dessus et envoyez-le : l'amitie se fait dans les "
-                        "deux sens, des le premier ajout."
+                        "Cherchez un compte ci-dessus et envoyez une demande : l'amitie se "
+                        "fait quand l'autre l'accepte."
                     }
                 }
             } @else {
@@ -6783,7 +7291,10 @@ fn friend_card(ami: &crate::friends::FriendView, now_ms: i64) -> Markup {
                     }
                 }
             }
-            p class="tiny muted" { (ami.email) }
+            div class="ami-identite" {
+                (avatar_img(&ami.id, 40))
+                p class="tiny muted" { (ami.email) }
+            }
             @if let Some(position) = ami.live.as_ref() {
                 div class="mini-cards" {
                     (mini_card("Distance", &option_distance(position.distance_m)))
@@ -6815,6 +7326,69 @@ fn friend_card(ami: &crate::friends::FriendView, now_ms: i64) -> Markup {
     }
 }
 
+/// Pastille de profil d'un compte : la photo servie par le service lui-meme.
+///
+/// Aucune requete ne part vers Google : la route /avatar/{id} telecharge la photo
+/// et la sert, ou dessine les initiales du compte (monogramme) a defaut.
+fn avatar_img(user_id: &str, taille: u32) -> Markup {
+    html! {
+        img class="avatar" src=(format!("/avatar/{user_id}")) alt=""
+            width=(taille) height=(taille) loading="lazy" decoding="async";
+    }
+}
+
+/// Fiche d'un compte trouve par la recherche : demander a etre ami.
+fn search_card(compte: &UserView) -> Markup {
+    html! {
+        section class="card live-card" {
+            div class="section-head" {
+                h2 { (compte.display_name()) }
+                span class="pill off" { "compte" }
+            }
+            div class="ami-identite" {
+                (avatar_img(&compte.id, 40))
+                p class="tiny muted" { (compte.email) }
+            }
+            form method="post" action="/amis/demande" {
+                input type="hidden" name="user_id" value=(compte.id);
+                button type="submit" class="button" { "Demander en ami" }
+            }
+        }
+    }
+}
+
+/// Fiche d'une demande recue : on accepte, ou on refuse.
+fn request_card(demande: &FriendRequestView, now_ms: i64) -> Markup {
+    let compte = &demande.from;
+    html! {
+        section class="card live-card" {
+            div class="section-head" {
+                h2 { (compte.display_name()) }
+                span class="pill brand" { "demande" }
+            }
+            div class="ami-identite" {
+                (avatar_img(&compte.id, 40))
+                p class="tiny muted" { (compte.email) }
+            }
+            @if let Some(mot) = demande.message.as_deref() {
+                p class="tiny" { (mot) }
+            }
+            p class="tiny muted" {
+                "Demande recue " (since_label(now_ms - demande.created_at_ms)) "."
+            }
+            div class="actions" {
+                form method="post" action=(format!("/amis/demandes/{}/accepter", demande.id)) {
+                    button type="submit" class="button" { "Accepter" }
+                }
+                form method="post" action=(format!("/amis/demandes/{}/refuser", demande.id))
+                     data-confirm="Refuser cette demande ? Aucune amitie ne sera creee." {
+                    button type="submit" class="button ghost danger" { "Refuser" }
+                }
+            }
+        }
+    }
+}
+
 /// Message de confirmation (code court dans l'URL, phrase ici).
 fn friends_ok_message(code: &str) -> &'static str {
     match code {
@@ -6823,6 +7397,10 @@ fn friends_ok_message(code: &str) -> &'static str {
         "ajout" => "Ami ajoute : vous partagez desormais vos positions en direct.",
         "invitation" => "Nouveau code d'invitation genere.",
         "retire" => "Ami retire : plus aucune position ne circule entre vous.",
+        "demande" => "Demande envoyee : elle devient une amitie quand l'autre l'accepte.",
+        "demande_directe" => "Vous vous etiez deja demande : vous etes maintenant amis.",
+        "accepte" => "Demande acceptee : vous etes maintenant amis.",
+        "refuse" => "Demande refusee : elle a ete retiree.",
         _ => "C'est fait.",
     }
 }
@@ -6836,6 +7414,12 @@ fn friends_error_message(code: &str) -> &'static str {
         "propre" => "C'est votre propre code : envoyez-le a la personne a ajouter.",
         "plein" => "Votre cercle est plein.",
         "generation" => "Impossible de generer un code pour l'instant : reessayez.",
+        "q_court" => "Recherche trop courte : indiquez au moins deux caracteres.",
+        "introuvable" => "Aucun compte M-pacer ne correspond a cette demande.",
+        "soi" => "C'est votre propre compte : indiquez celui d'une autre personne.",
+        "deja_ami" => "Vous etes deja amis avec ce compte.",
+        "deja_envoye" => "Une demande attend deja la reponse de ce compte.",
+        "trop_demandes" => "Ce compte a trop de demandes en attente : reessayez plus tard.",
         _ => "L'operation a echoue.",
     }
 }
@@ -6862,6 +7446,7 @@ mod friends_web_tests {
             now_ms: 10_000,
             public_url: "https://mpacer.test".to_string(),
             share_live: true,
+            pending_requests: 0,
             total: 1,
             live: if live.is_some() { 1 } else { 0 },
             me: None,
@@ -6898,21 +7483,64 @@ mod friends_web_tests {
     fn requete() -> FriendsQuery {
         FriendsQuery {
             code: None,
+            q: None,
             ok: None,
             erreur: None,
         }
     }
 
+    /// Fiche de compte pour les tests (recherche et demandes).
+    fn compte(id: &str) -> UserView {
+        UserView {
+            id: id.to_string(),
+            name: Some("Joseph".to_string()),
+            email: "joseph@example.org".to_string(),
+            picture_url: None,
+        }
+    }
+
+    /// Demande recue, prete a etre affichee.
+    fn demande() -> FriendRequestView {
+        FriendRequestView {
+            id: "r1".to_string(),
+            direction: crate::friends::REQUEST_INCOMING.to_string(),
+            from: compte("u2"),
+            to: compte("u1"),
+            message: Some("On court ensemble ?".to_string()),
+            created_at_ms: 9_000,
+        }
+    }
+
+    /// Page minimale : sans demande ni recherche, sauf indication contraire.
+    fn page<'a>(
+        cercle: &'a crate::friends::CirclePayload,
+        demandes: &'a [FriendRequestView],
+        resultats: &'a [UserView],
+        query: &'a FriendsQuery,
+    ) -> Markup {
+        friends_content(FriendsPage {
+            cercle,
+            invitation: None,
+            demandes,
+            attente: &[],
+            recherche: query.q.as_deref().unwrap_or(""),
+            resultats,
+            query,
+        })
+    }
+
     #[test]
-    fn the_page_shows_the_circle_and_the_map() {
-        let markup =
-            friends_content(&cercle(Some(position()), true), None, &requete()).into_string();
+    fn the_page_shows_the_circle_the_photo_and_the_map() {
+        let cercle = cercle(Some(position()), true);
+        let markup = page(&cercle, &[], &[], &requete()).into_string();
         assert!(markup.contains("Joseph"), "{markup}");
         assert!(markup.contains("en direct"), "{markup}");
         assert!(markup.contains("1.20 km"), "{markup}");
         assert!(markup.contains("5:00"), "{markup}");
         assert!(markup.contains("data-carte"), "{markup}");
         assert!(markup.contains("/static/map.js"), "{markup}");
+        // La photo de profil vient du service lui-meme, par l'identifiant du compte.
+        assert!(markup.contains("/avatar/u2"), "{markup}");
         assert!(
             markup.contains("openstreetmap.org/?mlat=48.850000"),
             "{markup}"
@@ -6925,21 +7553,27 @@ mod friends_web_tests {
 
     #[test]
     fn a_friend_who_does_not_share_is_shown_as_such() {
-        let markup = friends_content(&cercle(None, false), None, &requete()).into_string();
+        let cercle = cercle(None, false);
+        let markup = page(&cercle, &[], &[], &requete()).into_string();
         assert!(markup.contains("ne partage pas"), "{markup}");
         assert!(!markup.contains("openstreetmap.org"), "{markup}");
     }
 
     #[test]
     fn an_invitation_code_is_shown_with_its_link() {
-        let markup = friends_content(
-            &cercle(None, true),
-            Some((
+        let cercle = cercle(None, true);
+        let markup = friends_content(FriendsPage {
+            cercle: &cercle,
+            invitation: Some((
                 "BCDFGHJK".to_string(),
                 10_000 + crate::friends::INVITE_TTL_MS,
             )),
-            &requete(),
-        )
+            demandes: &[],
+            attente: &[],
+            recherche: "",
+            resultats: &[],
+            query: &requete(),
+        })
         .into_string();
         assert!(markup.contains("BCDF-GHJK"), "{markup}");
         assert!(markup.contains("data-copier"), "{markup}");
@@ -6947,11 +7581,41 @@ mod friends_web_tests {
     }
 
     #[test]
+    fn a_received_request_can_be_accepted_or_declined() {
+        let cercle = cercle(None, true);
+        let demandes = vec![demande()];
+        let markup = page(&cercle, &demandes, &[], &requete()).into_string();
+        assert!(markup.contains("On court ensemble ?"), "{markup}");
+        assert!(markup.contains("Accepter"), "{markup}");
+        assert!(markup.contains("Refuser"), "{markup}");
+        assert!(markup.contains("/amis/demandes/r1/accepter"), "{markup}");
+        assert!(markup.contains("/amis/demandes/r1/refuser"), "{markup}");
+        // La demande montre la photo du compte qui a demande.
+        assert!(markup.contains("/avatar/u2"), "{markup}");
+    }
+
+    #[test]
+    fn a_search_result_can_be_asked_as_a_friend() {
+        let cercle = cercle(None, true);
+        let resultats = vec![compte("u2")];
+        let mut requete = requete();
+        requete.q = Some("joseph".to_string());
+        let markup = page(&cercle, &[], &resultats, &requete).into_string();
+        assert!(markup.contains("Demander en ami"), "{markup}");
+        assert!(markup.contains("action=\"/amis/demande\""), "{markup}");
+        assert!(markup.contains("name=\"user_id\" value=\"u2\""), "{markup}");
+        assert!(markup.contains("/avatar/u2"), "{markup}");
+    }
+
+    #[test]
     fn messages_are_written_in_plain_french() {
         assert!(friends_ok_message("ajout").contains("Ami ajoute"));
-        assert!(friends_ok_message("inconnu").contains("C'est fait"));
+        assert!(friends_ok_message("demande").contains("Demande envoyee"));
+        assert!(friends_ok_message("accepte").contains("maintenant amis"));
         assert!(friends_error_message("inconnu").contains("Code inconnu"));
         assert!(friends_error_message("propre").contains("votre propre code"));
+        assert!(friends_error_message("deja_envoye").contains("attend deja"));
+        assert!(friends_error_message("introuvable").contains("Aucun compte"));
     }
 }
 
@@ -7122,6 +7786,73 @@ mod music_web_tests {
         assert_eq!(signed_minutes(420.0), "+7 min");
         assert_eq!(signed_minutes(-420.0), "-7 min");
         assert_eq!(signed_minutes(5.0), "0 min");
+    }
+
+    #[test]
+    fn uploaded_files_are_matched_to_their_track() {
+        let tracks = vec![music_track(Some(249.0), None)];
+        // Le nom attendu par la montre est reconnu, quelle que soit la casse.
+        assert_eq!(
+            match_upload_track(&tracks, "01 - Artiste - Titre.mp3", None)
+                .unwrap()
+                .id,
+            "t1"
+        );
+        assert_eq!(
+            match_upload_track(&tracks, "01 - ARTISTE - TITRE.MP3", None)
+                .unwrap()
+                .id,
+            "t1"
+        );
+        // Un nom inconnu est refuse en rappelant ce qui est attendu.
+        let error = match_upload_track(&tracks, "autre.mp3", None).unwrap_err();
+        assert!(error.to_string().contains("01 - Artiste - Titre.mp3"));
+        // La piste peut etre imposee (fichier renomme a la main).
+        assert_eq!(
+            match_upload_track(&tracks, "peu importe.mp3", Some("t1"))
+                .unwrap()
+                .id,
+            "t1"
+        );
+        assert!(match_upload_track(&tracks, "peu importe.mp3", Some("inconnue")).is_err());
+    }
+
+    #[test]
+    fn the_upload_panel_lists_stored_files_and_a_drop_zone() {
+        let tracks = vec![MusicTrack {
+            storage_path: Some("u1/t1/01 - Artiste - Titre.mp3".into()),
+            mime: Some("audio/mpeg".into()),
+            size_bytes: Some(6 * 1024 * 1024),
+            ..music_track(Some(249.0), None)
+        }];
+        let playlist = MusicPlaylist {
+            id: "p1".into(),
+            user_id: "u1".into(),
+            name: "Run".into(),
+            source: "deezer".into(),
+            deezer_id: None,
+            cover_url: None,
+            target_bpm: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        };
+        let markup = upload_panel(&playlist, &tracks, 200 * 1024 * 1024).into_string();
+        assert!(markup.contains("music-upload-drop"), "{markup}");
+        assert!(markup.contains("01 - Artiste - Titre.mp3"), "{markup}");
+        assert!(
+            markup.contains("/music/playlists/p1/upload/t1/delete"),
+            "{markup}"
+        );
+        assert!(markup.contains("6.0 Mo"), "{markup}");
+    }
+
+    #[test]
+    fn sizes_are_written_in_plain_french() {
+        assert_eq!(human_size(0), "0 o");
+        assert_eq!(human_size(512), "512 o");
+        assert_eq!(human_size(2048), "2.0 Ko");
+        assert_eq!(human_size(6 * 1024 * 1024), "6.0 Mo");
+        assert_eq!(human_size(4 * 1024 * 1024 * 1024), "4.0 Go");
     }
 
     /// Piste minimale, telle que la base la renvoie.

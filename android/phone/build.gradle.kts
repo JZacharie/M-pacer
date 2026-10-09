@@ -19,9 +19,27 @@ val keystoreProperties = Properties().apply {
     }
 }
 
+// --- Carte OpenStreetMap ------------------------------------------------------
+// Le script de la carte et sa feuille de style sont ceux du service web : une
+// seule implementation, donc un seul endroit ou corriger un fond de carte. Ils
+// sont copies dans les assets plutot que reecrits ou retelecharges a l'execution,
+// ce qui rend la carte disponible sans reseau (seules les tuiles en demandent).
+val copierCarteWeb = tasks.register<Sync>("copierCarteWeb") {
+    description = "Copie map.js et app.css du service web dans les assets de l'application."
+    from(rootProject.file("../crates/mpacer-api/static")) {
+        include("map.js")
+        include("app.css")
+    }
+    into(layout.buildDirectory.dir("carte-web"))
+}
+
 android {
     namespace = "com.mpacer.phone"
     compileSdk = 35
+
+    // Les assets de la carte sont produits par la tache ci-dessus : c'est le
+    // dossier de sortie qui est declare ici, et la dependance est posee plus bas.
+    sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("carte-web"))
 
     // NDK epingle : la version documentee par local-ci.ps1 (r27) et installee par
     // l'integration continue, qui n'a qu'un seul NDK sur le runner.
@@ -83,6 +101,10 @@ android {
         }
     }
 }
+
+// La fusion des assets doit attendre la copie du script de la carte.
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }
+    .configureEach { dependsOn(copierCarteWeb) }
 
 kotlin {
     compilerOptions {

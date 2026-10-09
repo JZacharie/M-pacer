@@ -18,16 +18,17 @@ compare en permanence le réalisé au plan.
   <figure class="mockup">
     <svg class="watch" viewBox="0 0 200 200" role="img" aria-label="Écran principal de la montre">
       <circle cx="100" cy="100" r="93" fill="#0b0d10" stroke="rgba(255,255,255,.14)" stroke-width="2"/>
-      <circle cx="100" cy="24" r="6" fill="#2fbf71"/>
-      <text x="100" y="96" text-anchor="middle" font-family="system-ui, sans-serif" font-size="46" font-weight="700" fill="#f3f5f8">5:12</text>
-      <text x="100" y="122" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" fill="#98a2b3">8,42 km &#183; 42:10</text>
-      <text x="100" y="150" text-anchor="middle" font-family="system-ui, sans-serif" font-size="14" font-weight="600" fill="#2fbf71">sur le plan</text>
-      <g font-family="system-ui, sans-serif" font-size="11" font-weight="600">
-        <rect x="46" y="164" width="48" height="22" rx="11" fill="#fc4c02"/>
-        <text x="70" y="179" text-anchor="middle" fill="#ffffff">Pause</text>
-        <rect x="104" y="164" width="46" height="22" rx="11" fill="#242933"/>
-        <text x="127" y="179" text-anchor="middle" fill="#f3f5f8">Stop</text>
-      </g>
+      <circle cx="100" cy="40" r="5" fill="#2fbf71"/>
+      <text x="95" y="92" text-anchor="end" font-family="system-ui, sans-serif" font-size="44" font-weight="700" fill="#f3f5f8">5:12</text>
+      <text x="99" y="92" font-family="system-ui, sans-serif" font-size="12" fill="#6b7480">/km</text>
+      <text x="100" y="116" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" fill="#98a2b3">8,42 km &#183; 42:10</text>
+      <rect x="63" y="129" width="74" height="22" rx="11" fill="rgba(47,191,113,.16)"/>
+      <text x="100" y="144" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="#2fbf71">sur le plan</text>
+      <circle cx="78" cy="168" r="22" fill="#fc4c02"/>
+      <rect x="71" y="158" width="4" height="20" rx="1.4" fill="#ffffff"/>
+      <rect x="81" y="158" width="4" height="20" rx="1.4" fill="#ffffff"/>
+      <circle cx="124" cy="170" r="19" fill="#242933"/>
+      <rect x="114" y="160" width="20" height="20" rx="5" fill="#ff5a5f"/>
     </svg>
     <figcaption>Écran principal, pensé pour un écran rond</figcaption>
   </figure>
@@ -35,19 +36,29 @@ compare en permanence le réalisé au plan.
 
 ## L'écran principal
 
-Une seule information domine : **l'allure courante**, en 54 sp, lissée sur deux minutes.
+Une seule information domine : **l'allure courante**, en 46 sp, lissée sur deux minutes.
 Tout le reste est secondaire et tient dans le cercle.
 
 <div class="table-wrap">
 
 | Élément | Ce qu'il montre | Détail |
 |---|---|---|
-| Allure | La valeur lue en courant | Moyenne glissante de 2 minutes ; <code>--:--</code> tant qu'aucune position exploitable n'est reçue |
-| Distance et temps | <code>8,42 km &#183; 42:10</code> | Distance cumulée et temps en mouvement, pauses exclues |
+| Allure | La valeur lue en courant | Moyenne glissante de 2 minutes ; tant qu'aucune position exploitable n'est reçue, <code>--:--</code> s'affiche en petit et en gris, pour ne pas se lire comme une allure |
+| Distance et temps | <code>8,42 km &#183; 42:10</code> | Distance cumulée et temps en mouvement, pauses exclues ; la fréquence cardiaque s'ajoute à la suite, dans la couleur de sa zone |
 | Voyant GPS | Un point de 11 px au-dessus de l'allure | Vert fixe quand le signal est bon, pulsation orange pendant l'acquisition, jaune si la précision est insuffisante, rouge si le GPS est coupé |
-| Panneau assistant | Une ligne sous les métriques | « sur le plan », l'écart au shadow runner (<code>+120 m</code> / <code>-80 m</code>), ou le temps de finish estimé |
-| Boutons | Démarrer / Sync / Réglages, ou Pause / Stop | L'état <code>Armed</code> (départ au premier mouvement) bascule sur Reprendre / Stop |
+| Pastille d'assistant | Une ligne sous les métriques | « sur le plan » ou l'écart au shadow runner (<code>+120 m</code> / <code>-80 m</code>), en vert quand on est dans le plan, en orange en retard ; ou le temps de finish estimé. Rien en mode allure seule |
+| Commandes | Des ronds à icône, jamais de texte | Lecture / pause / arrêt, et sur l'écran de repos musique, synchronisation et réglages. Une icône ne se tronque pas quand la taille de police du système augmente, un mot si |
+| État <code>Armed</code> | Départ au premier mouvement | L'écran de repos propose alors l'arrêt, pas un second départ |
 
+</div>
+
+<div class="note">
+<p><strong>Aucune dépendance d'icônes.</strong> Les tracés sont écrits en vectoriel
+dans <code>ui/WatchIcons.kt</code> (grille de 24 x 24, seize symboles) plutôt que tirés de
+<code>material-icons-extended</code> : la montre n'embarque que ce qu'elle affiche,
+et le poids visuel reste homogène. Les quatre briques communes aux écrans
+(<code>RoundButton</code>, <code>StatusPill</code>, <code>ScreenTitle</code>,
+<code>SecondaryScreen</code>) vivent dans <code>ui/WatchDesign.kt</code>.</p>
 </div>
 
 <p class="tiny">
@@ -231,7 +242,9 @@ figurent parmi les points ouverts de la revue de code.</p>
 | <code>ui/MainScreen.kt</code> | Écran principal rond : allure, distance, temps, assistant, commandes |
 | <code>ui/SettingsScreen.kt</code> | Mode d'assistant, unités, voix |
 | <code>ui/SyncScreen.kt</code> | Appairage, état de connexion, séances en attente |
-| <code>ui/Theme.kt</code> | Palette et voyant GPS |
+| <code>ui/WatchDesign.kt</code> | Theme Wear et briques communes : bouton rond, pastille, ligne de réglage, écran secondaire |
+| <code>ui/WatchIcons.kt</code> | Les seize icônes vectorielles de la montre, écrites à la main |
+| <code>core/ui/Palette.kt</code> | Palette commune (montre, téléphone, site) et voyant GPS |
 | <code>cpp/mpacer_jni.c</code> | Shim JNI (une quarantaine de lignes) vers la C ABI Rust |
 
 </div>

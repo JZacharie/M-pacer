@@ -5,6 +5,7 @@
 //! en production (le demarrage echoue explicitement si `MPACER_ENV=production`
 //! et qu'ils manquent).
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Configuration de la base de donnees.
@@ -130,6 +131,18 @@ impl Environment {
 /// Instance Deemix par defaut, utilisee quand `MPACER_DEEMIX_URL` est vide.
 pub const DEFAULT_DEEMIX_URL: &str = "https://deemix.p.zacharie.org";
 
+/// Taille maximale d'un MP3 depose sur le serveur (200 Mo).
+///
+/// Meme plafond que la bibliotheque locale de `mpacer-music` : un fichier
+/// refuse par l'un ne doit pas etre accepte par l'autre.
+pub const DEFAULT_MEDIA_MAX_FILE_BYTES: u64 = 200 * 1024 * 1024;
+
+/// Quota d'audio stocke par compte (4 Go).
+///
+/// Le volume est temporaire : l'appareil supprime le fichier des qu'il l'a
+/// acquitte, et le quota protege le disque du serveur en attendant.
+pub const DEFAULT_MEDIA_QUOTA_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub environment: Environment,
@@ -167,6 +180,17 @@ pub struct Config {
     /// Sans les deux, l'API n'est pas interrogee : seuls les liens restent.
     pub deemix_user: Option<String>,
     pub deemix_password: Option<String>,
+    /// Racine du volume audio temporaire (`MPACER_MEDIA_DIR`).
+    ///
+    /// Vide => le depot d'audio est eteint : le service ne stocke aucun octet,
+    /// exactement comme avant cette fonctionnalite. Renseigne, les MP3
+    /// televerses depuis `/music` vivent sous cette racine, le temps que la
+    /// montre ou le telephone les recupere (ils sont supprimes a l'acquittement).
+    pub media_dir: Option<PathBuf>,
+    /// Taille maximale d'un fichier depose (`MPACER_MEDIA_MAX_FILE_BYTES`).
+    pub media_max_file_bytes: u64,
+    /// Quota d'audio par compte (`MPACER_MEDIA_QUOTA_BYTES`).
+    pub media_quota_bytes: u64,
     /// Autorise une connexion de test sans Google (`/auth/dev-login`).
     pub dev_auth: bool,
     /// Broker MQTT du suivi en direct (absent = fonctionnalite eteinte, aucun cout).
@@ -237,6 +261,12 @@ impl Config {
             deemix_url: env_var("MPACER_DEEMIX_URL"),
             deemix_user: env_var("MPACER_DEEMIX_USER"),
             deemix_password: env_var("MPACER_DEEMIX_PASSWORD"),
+            media_dir: env_var("MPACER_MEDIA_DIR").map(PathBuf::from),
+            media_max_file_bytes: env_bytes(
+                "MPACER_MEDIA_MAX_FILE_BYTES",
+                DEFAULT_MEDIA_MAX_FILE_BYTES,
+            ),
+            media_quota_bytes: env_bytes("MPACER_MEDIA_QUOTA_BYTES", DEFAULT_MEDIA_QUOTA_BYTES),
             dev_auth: env_var("MPACER_DEV_AUTH")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
@@ -343,6 +373,23 @@ impl Config {
             .to_string()
     }
 
+    /// Vrai si le depot d'audio est configure (`MPACER_MEDIA_DIR`).
+    ///
+    /// Sans volume, la page `/music` n'affiche pas la zone de depot : le
+    /// service reste « aucun audio sur le serveur », exactement comme avant.
+    pub fn media_configured(&self) -> bool {
+        self.media_dir.is_some()
+    }
+
+    /// Taille maximale acceptee par le corps d'une requete de depot.
+    ///
+    /// Le plafond configure peut etre plus grand que la limite d'Axum ; il est
+    /// alors ramene a cette limite (le corps serait de toute facon refuse).
+    pub fn media_body_limit(&self) -> u64 {
+        self.media_max_file_bytes
+            .min(crate::media::MAX_UPLOAD_BODY_BYTES)
+    }
+
     /// Vrai si le suivi en direct est configure.
     ///
     /// Sans `MPACER_MQTT_URL`, aucune tache n'est lancee : le service reste
@@ -422,6 +469,12 @@ impl Config {
             deemix_url: None,
             deemix_user: None,
             deemix_password: None,
+            // Les tests choisissent un dossier temporaire quand ils veulent
+            // exercer le depot d'audio ; par defaut la fonctionnalite est
+            // eteinte, comme en production sans MPACER_MEDIA_DIR.
+            media_dir: None,
+            media_max_file_bytes: DEFAULT_MEDIA_MAX_FILE_BYTES,
+            media_quota_bytes: DEFAULT_MEDIA_QUOTA_BYTES,
             dev_auth: false,
             mqtt_url: None,
             mqtt_topic: crate::live::DEFAULT_TOPIC.to_string(),
@@ -452,6 +505,14 @@ fn env_var(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
         .filter(|value| !value.trim().is_empty())
+}
+
+/// Entier d'environnement (octets), ou valeur par defaut si absent ou illisible.
+fn env_bytes(name: &str, default: u64) -> u64 {
+    env_var(name)
+        .and_then(|value| value.trim().parse().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
 }
 
 #[cfg(test)]
@@ -583,6 +644,30 @@ mod tests {
         // Un gabarit laisse en place ne compte pas comme identifiant.
         config.deemix_user = Some("REMPLACER-PAR-VOTRE-UTILISATEUR".to_string());
         assert!(!config.deemix_configured());
+    }
+
+    #[test]
+    fn media_storage_is_optional_and_bounded() {
+        let mut config = Config::for_tests("http://localhost:8080", "postgresql://exemple");
+        assert!(
+            !config.media_configured(),
+            "sans MPACER_MEDIA_DIR, aucun octet n'est stocke"
+        );
+        assert_eq!(config.media_max_file_bytes, DEFAULT_MEDIA_MAX_FILE_BYTES);
+        assert_eq!(config.media_quota_bytes, DEFAULT_MEDIA_QUOTA_BYTES);
+
+        config.media_dir = Some(std::path::PathBuf::from("/data/mpacer-media"));
+        assert!(config.media_configured(), "un volume active le depot");
+
+        // Le corps accepte par Axum ne depasse jamais la limite de transport,
+        // meme si l'exploitant configure plus grand.
+        config.media_max_file_bytes = u64::MAX;
+        assert_eq!(
+            config.media_body_limit(),
+            crate::media::MAX_UPLOAD_BODY_BYTES
+        );
+        config.media_max_file_bytes = 1024;
+        assert_eq!(config.media_body_limit(), 1024);
     }
 
     #[test]

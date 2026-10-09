@@ -3105,7 +3105,7 @@ async fn music_page_validates_the_coverage_and_renames_a_playlist() {
     )
     .await;
     assert!(
-        body.contains("5. Assez de musique pour la course ?"),
+        body.contains("6. Assez de musique pour la course ?"),
         "{body}"
     );
     assert!(body.contains("coverage-ok"), "{body}");
@@ -3408,7 +3408,10 @@ async fn friends_share_a_live_position_between_two_accounts() {
         ))
         .await
         .unwrap();
-    let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+    let statut = reponse.status();
+    let texte = body_text(reponse).await;
+    let corps: serde_json::Value = serde_json::from_str(&texte)
+        .unwrap_or_else(|erreur| panic!("statut={statut} corps={texte} erreur={erreur}"));
     assert_eq!(corps["live"], 1, "{corps}");
     assert_eq!(corps["friends"][0]["live"]["lat"], 48.85, "{corps}");
     assert_eq!(
@@ -3503,4 +3506,179 @@ async fn the_friends_page_shows_the_code_and_the_map() {
     let reponse = app.clone().oneshot(get("/static/map.js")).await.unwrap();
     assert_eq!(reponse.status(), StatusCode::OK);
     assert!(body_text(reponse).await.contains("MpacerCartes"));
+}
+
+/// Amis : une demande ne cree l'amitie qu'apres acceptation de l'autre compte.
+#[tokio::test]
+async fn a_friend_request_waits_for_the_other_account() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let alice = compte(&state, "demande-alice@example.org").await;
+    let bob = compte(&state, "demande-bob@example.org").await;
+    let jeton_alice = device_token(&state, &alice.id).await;
+    let jeton_bob = device_token(&state, &bob.id).await;
+
+    // La recherche porte sur l'identite du compte (adresse ou nom), pas sur un
+    // nom de montre ou d'appareil.
+    let reponse = app
+        .clone()
+        .oneshot(json_bearer(
+            "GET",
+            "/api/v1/friends/search?q=demande-bob",
+            "",
+            &jeton_alice,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(reponse.status(), StatusCode::OK);
+    let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+    assert_eq!(
+        corps["users"][0]["email"], "demande-bob@example.org",
+        "{corps}"
+    );
+
+    // Alice demande : l'amitie n'existe pas encore, la demande attend.
+    let reponse = app
+        .clone()
+        .oneshot(json_bearer(
+            "POST",
+            "/api/v1/friends/requests",
+            r#"{"email":"demande-bob@example.org","message":"On court ?"}"#,
+            &jeton_alice,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        reponse.status(),
+        StatusCode::OK,
+        "{}",
+        body_text(reponse).await
+    );
+    let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+    let id = corps["request"]["id"].as_str().unwrap().to_string();
+    assert_eq!(corps["request"]["direction"], "out", "{corps}");
+    assert_eq!(corps["status"], "pending", "{corps}");
+
+    // Le cercle reste vide, mais la demande est annoncee.
+    let reponse = app
+        .clone()
+        .oneshot(json_bearer("GET", "/api/v1/friends", "", &jeton_bob))
+        .await
+        .unwrap();
+    let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+    assert_eq!(
+        corps["total"], 0,
+        "pas d'amitie avant acceptation : {corps}"
+    );
+    assert_eq!(corps["pending_requests"], 1, "{corps}");
+
+    // Bob voit la demande, avec le mot et la fiche d'Alice.
+    let reponse = app
+        .clone()
+        .oneshot(json_bearer(
+            "GET",
+            "/api/v1/friends/requests",
+            "",
+            &jeton_bob,
+        ))
+        .await
+        .unwrap();
+    let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+    assert_eq!(corps["incoming"][0]["id"], id, "{corps}");
+    assert_eq!(corps["incoming"][0]["message"], "On court ?", "{corps}");
+    assert_eq!(corps["incoming"][0]["direction"], "in", "{corps}");
+    assert_eq!(
+        corps["incoming"][0]["from"]["email"], "demande-alice@example.org",
+        "{corps}"
+    );
+
+    // Bob accepte : l'amitie apparait des deux cotes, la demande disparait.
+    let reponse = app
+        .clone()
+        .oneshot(json_bearer(
+            "POST",
+            &format!("/api/v1/friends/requests/{id}/accept"),
+            "",
+            &jeton_bob,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        reponse.status(),
+        StatusCode::OK,
+        "{}",
+        body_text(reponse).await
+    );
+    let reponse = app
+        .clone()
+        .oneshot(json_bearer("GET", "/api/v1/friends", "", &jeton_alice))
+        .await
+        .unwrap();
+    let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+    assert_eq!(corps["total"], 1, "{corps}");
+    assert_eq!(
+        corps["friends"][0]["email"], "demande-bob@example.org",
+        "{corps}"
+    );
+    assert_eq!(corps["pending_requests"], 0, "{corps}");
+
+    // La photo de profil de l'ami est servie par le service, avec le jeton.
+    let reponse = app
+        .clone()
+        .oneshot(json_bearer(
+            "GET",
+            &format!("/avatar/{}", bob.id),
+            "",
+            &jeton_alice,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(reponse.status(), StatusCode::OK, "avatar d'un ami");
+}
+
+/// Amis : une demande refusee ne cree aucune amitie.
+#[tokio::test]
+async fn declining_a_friend_request_leaves_no_friendship() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let claire = compte(&state, "refus-claire@example.org").await;
+    let david = compte(&state, "refus-david@example.org").await;
+    let jeton_claire = device_token(&state, &claire.id).await;
+    let jeton_david = device_token(&state, &david.id).await;
+
+    let reponse = app
+        .clone()
+        .oneshot(json_bearer(
+            "POST",
+            "/api/v1/friends/requests",
+            r#"{"email":"refus-david@example.org"}"#,
+            &jeton_claire,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(reponse.status(), StatusCode::OK);
+    let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+    let id = corps["request"]["id"].as_str().unwrap().to_string();
+
+    let reponse = app
+        .clone()
+        .oneshot(json_bearer(
+            "POST",
+            &format!("/api/v1/friends/requests/{id}/decline"),
+            "",
+            &jeton_david,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(reponse.status(), StatusCode::NO_CONTENT);
+
+    // Rien des deux cotes : ni ami, ni demande.
+    for jeton in [&jeton_claire, &jeton_david] {
+        let reponse = app
+            .clone()
+            .oneshot(json_bearer("GET", "/api/v1/friends", "", jeton))
+            .await
+            .unwrap();
+        let corps: serde_json::Value = serde_json::from_str(&body_text(reponse).await).unwrap();
+        assert_eq!(corps["total"], 0, "{corps}");
+        assert_eq!(corps["pending_requests"], 0, "{corps}");
+    }
 }

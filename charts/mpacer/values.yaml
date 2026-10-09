@@ -70,6 +70,15 @@ config:
   mqttTopic: "mpacer/live/+"
   # Identifiant du broker (le mot de passe va dans auth.mqttPassword).
   mqttUsername: ""
+  # Depot des MP3 depuis la page /music (docs/16). Renseigner un chemin SUR le
+  # volume persistant (ex. /data/media) active la zone de depot ; vide => aucun
+  # octet audio sur le serveur, comme avant. Les fichiers sont supprimes des que
+  # la montre ou le telephone les a acquittes.
+  mediaDir: ""
+  # Plafond d'un fichier depose (octets) ; vide => 200 Mo (defaut du service).
+  mediaMaxFileBytes: ""
+  # Quota d'audio par compte (octets) ; vide => 4 Go (defaut du service).
+  mediaQuotaBytes: ""
   rustLog: "info,mpacer_api=info,tower_http=warn"
 
 auth:
@@ -176,13 +185,14 @@ externalSecrets:
   # namespace via ses propres ExternalSecrets. On ne les recree donc pas ici, pour
   # eviter un conflit de propriete sur un secret existant.
 
-# Volume applicatif : M-pacer ne stocke aucun fichier audio (la musique est
-# copiee sur la montre par USB depuis le PC). Conserve pour un eventuel cache.
+# Volume applicatif : necessaire seulement pour le depot Wi-Fi des MP3
+# (config.mediaDir). Sans lui, la musique est copiee sur la montre par USB.
+# Prevoir la taille du quota audio (4 Go par defaut) plus une marge.
 persistence:
   enabled: false
   storageClass: local-path
   accessMode: ReadWriteOnce
-  size: 1Gi
+  size: 5Gi
   mountPath: /data
   annotations: {}
 

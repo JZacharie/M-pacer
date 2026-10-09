@@ -33,7 +33,7 @@ use serde::Serialize;
 
 use crate::auth::device::ALPHABET;
 use crate::live::{LiveSessionView, LiveStore};
-use crate::models::{FriendRow, LiveDeviceRow};
+use crate::models::{FriendRequestRow, FriendRow, LiveDeviceRow, UserCard};
 use crate::state::AppState;
 
 /// Duree de validite d'un code d'invitation (24 h).
@@ -127,6 +127,157 @@ pub fn clean_device_name(input: &str) -> String {
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
         .take(DEVICE_MAX_CHARS)
         .collect()
+}
+
+// ---------------------------------------------------------- demandes d'amitie
+
+/// Longueur minimale d'une recherche de compte : en dessous, on renverrait tout
+/// le monde, ce qui reviendrait a un annuaire.
+pub const SEARCH_QUERY_MIN_CHARS: usize = 2;
+
+/// Nombre maximal de comptes renvoyes par une recherche.
+pub const SEARCH_LIMIT: i64 = 10;
+
+/// Longueur maximale d'un mot joint a une demande d'amitie.
+pub const REQUEST_MESSAGE_MAX_CHARS: usize = 280;
+
+/// Demandes recues en attente au maximum pour un compte.
+pub const MAX_PENDING_REQUESTS: i64 = 200;
+
+/// Sens d'une demande, du point de vue du compte qui regarde la liste.
+pub const REQUEST_INCOMING: &str = "in";
+/// Sens d'une demande envoyee, en attente de reponse.
+pub const REQUEST_OUTGOING: &str = "out";
+
+/// Nettoie une recherche : espaces en trop retires, longueur bornee.
+pub fn clean_search_query(input: &str) -> String {
+    input.trim().chars().take(80).collect()
+}
+
+/// Vrai si la recherche est assez precise pour interroger la base.
+pub fn is_searchable(query: &str) -> bool {
+    clean_search_query(query).chars().count() >= SEARCH_QUERY_MIN_CHARS
+}
+
+/// Motif LIKE litteral a partir d'une saisie.
+///
+/// Les jokers SQL saisis par l'utilisateur (% et _) sont echappes : chercher
+/// "jean_dupont" ne doit pas trouver "jeanXdupont".
+pub fn like_pattern(query: &str) -> String {
+    let propre = clean_search_query(query);
+    let mut motif = String::with_capacity(propre.len() + 2);
+    motif.push('%');
+    for caractere in propre.chars() {
+        match caractere {
+            '\\' | '%' | '_' => {
+                motif.push('\\');
+                motif.push(caractere);
+            }
+            autre => motif.push(autre),
+        }
+    }
+    motif.push('%');
+    motif
+}
+
+/// Nettoie le mot joint a une demande ; vide -> None.
+pub fn clean_request_message(input: &str) -> Option<String> {
+    let propre = input.trim();
+    if propre.is_empty() {
+        return None;
+    }
+    Some(propre.chars().take(REQUEST_MESSAGE_MAX_CHARS).collect())
+}
+
+/// Fiche minimale d'un compte, avant toute amitie.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct UserView {
+    pub id: String,
+    pub name: Option<String>,
+    pub email: String,
+    pub picture_url: Option<String>,
+}
+
+impl UserView {
+    /// Depuis une fiche lue en base.
+    pub fn from_card(card: &UserCard) -> Self {
+        Self {
+            id: card.id.clone(),
+            name: card.name.clone(),
+            email: card.email.clone(),
+            picture_url: card.picture_url.clone(),
+        }
+    }
+
+    /// Nom affichable : le nom, sinon l'adresse.
+    pub fn display_name(&self) -> String {
+        self.name
+            .clone()
+            .filter(|nom| !nom.trim().is_empty())
+            .unwrap_or_else(|| self.email.clone())
+    }
+}
+
+/// Demande d'amitie telle qu'elle s'affiche : l'autre compte, le mot, la date.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FriendRequestView {
+    pub id: String,
+    /// "in" (recue, a valider) ou "out" (envoyee, en attente).
+    pub direction: String,
+    pub from: UserView,
+    pub to: UserView,
+    pub message: Option<String>,
+    pub created_at_ms: i64,
+}
+
+impl FriendRequestView {
+    /// Assemble la vue selon le compte qui regarde (recue ou envoyee).
+    pub fn from_row(row: &FriendRequestRow, user_id: &str) -> Self {
+        let direction = if row.to_user_id == user_id {
+            REQUEST_INCOMING
+        } else {
+            REQUEST_OUTGOING
+        };
+        Self {
+            id: row.id.clone(),
+            direction: direction.to_string(),
+            from: UserView::from_card(&row.from_card()),
+            to: UserView::from_card(&row.to_card()),
+            message: row.message.clone(),
+            created_at_ms: row.created_at_ms,
+        }
+    }
+
+    /// L'autre bout de la demande : celui qui a demande si elle est recue,
+    /// celui a qui on a demande si elle est envoyee.
+    pub fn counterpart(&self, user_id: &str) -> &UserView {
+        if self.from.id == user_id {
+            &self.to
+        } else {
+            &self.from
+        }
+    }
+}
+
+/// Resultat de l'envoi d'une demande d'amitie.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RequestOutcome {
+    /// Demande enregistree, en attente de la reponse de l'autre compte.
+    Sent(Box<FriendRequestView>),
+    /// Les deux comptes sont deja amis.
+    AlreadyFriends,
+    /// Une demande identique attendait deja une reponse.
+    AlreadySent,
+    /// L'autre avait deja demande : l'amitie est faite d'un coup.
+    AlreadyIncoming(Box<FriendRow>),
+    /// Aucun compte ne porte cette adresse.
+    UnknownUser,
+    /// On ne se demande pas a soi-meme.
+    SelfRequest,
+    /// Le cercle de l'expediteur est plein.
+    TooMany,
+    /// Le destinataire a trop de demandes en attente.
+    TooManyPending,
 }
 
 /// Resultat de l'acceptation d'un code d'invitation.
@@ -309,6 +460,8 @@ pub struct CirclePayload {
     pub public_url: String,
     /// Vrai si le compte partage sa position.
     pub share_live: bool,
+    /// Demandes d'amitie recues et pas encore validees (pastille de l'interface).
+    pub pending_requests: i64,
     pub total: usize,
     /// Nombre d'amis actuellement en direct.
     pub live: usize,
@@ -338,10 +491,14 @@ pub async fn payload(
             position.trace.clear();
         }
     }
+    // La pastille des demandes recues est lue avec le cercle : un client qui
+    // rafraichit ses positions toutes les dix secondes voit arriver les demandes.
+    let pending_requests = crate::db::count_incoming_friend_requests(&state.pool, user_id).await?;
     Ok(CirclePayload {
         now_ms: state.now_ms(),
         public_url: state.config.public_url.trim_end_matches('/').to_string(),
         share_live,
+        pending_requests,
         total: amis.len(),
         live: live_count(&amis),
         me: moi,
@@ -555,5 +712,87 @@ mod tests {
         assert_eq!(position.device, "telephone");
         assert_eq!(position.lat, 49.0);
         assert_eq!(position.state, "run");
+    }
+
+    /// Fiche de compte pour les tests de demandes.
+    fn carte(id: &str) -> UserCard {
+        UserCard {
+            id: id.to_string(),
+            name: Some(format!("Coureur {id}")),
+            email: format!("{id}@example.org"),
+            picture_url: None,
+        }
+    }
+
+    #[test]
+    fn a_search_query_is_clean_and_bounded() {
+        assert_eq!(clean_search_query("  joseph  "), "joseph");
+        assert!(!is_searchable("j"), "un caractere, c'est un annuaire");
+        assert!(is_searchable("jo"));
+        assert!(!is_searchable("   "));
+    }
+
+    #[test]
+    fn wildcards_typed_by_the_user_stay_literal() {
+        // Le motif est un LIKE echappe : % et _ saisis ne sont pas des jokers.
+        assert_eq!(like_pattern("jean%dupont"), "%jean\\%dupont%");
+        assert_eq!(like_pattern("a_b"), "%a\\_b%");
+        assert_eq!(like_pattern("  bo  "), "%bo%");
+    }
+
+    #[test]
+    fn a_request_message_is_trimmed_and_bounded() {
+        assert_eq!(
+            clean_request_message("  salut  ").as_deref(),
+            Some("salut"),
+            "les espaces superflus sont retires"
+        );
+        assert_eq!(
+            clean_request_message("   "),
+            None,
+            "un mot vide n'est pas un mot"
+        );
+        let long = "x".repeat(REQUEST_MESSAGE_MAX_CHARS + 50);
+        assert_eq!(
+            clean_request_message(&long).unwrap().chars().count(),
+            REQUEST_MESSAGE_MAX_CHARS
+        );
+    }
+
+    #[test]
+    fn a_request_view_knows_its_direction_and_counterpart() {
+        let row = FriendRequestRow {
+            id: "r1".to_string(),
+            from_user_id: "u2".to_string(),
+            to_user_id: "u1".to_string(),
+            message: Some("On court ?".to_string()),
+            created_at_ms: 5_000,
+            from_name: Some("Joseph".to_string()),
+            from_email: "u2@example.org".to_string(),
+            from_picture_url: None,
+            to_name: Some("Alice".to_string()),
+            to_email: "u1@example.org".to_string(),
+            to_picture_url: None,
+        };
+        // Vue par le destinataire : la demande est recue, l'autre bout est l'expediteur.
+        let recue = FriendRequestView::from_row(&row, "u1");
+        assert_eq!(recue.direction, REQUEST_INCOMING);
+        assert_eq!(recue.counterpart("u1").id, "u2");
+        assert_eq!(recue.from.email, "u2@example.org");
+        // Vue par l'expediteur : la demande est envoyee.
+        let envoyee = FriendRequestView::from_row(&row, "u2");
+        assert_eq!(envoyee.direction, REQUEST_OUTGOING);
+        assert_eq!(envoyee.counterpart("u2").id, "u1");
+        assert_eq!(envoyee.counterpart("u2").display_name(), "Alice");
+    }
+
+    #[test]
+    fn a_request_targets_an_account_not_a_watch() {
+        // Le compte designe est celui de la base : la fiche porte son adresse,
+        // jamais un nom d'appareil ni un sujet MQTT.
+        let cible = carte("u9");
+        assert_eq!(cible.id, "u9");
+        assert_eq!(cible.email, "u9@example.org");
+        assert_eq!(cible.display_name(), "Coureur u9");
     }
 }

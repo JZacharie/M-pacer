@@ -26,7 +26,11 @@ image:
 #   kubectl -n mpacer get pod -l app.kubernetes.io/instance=mpacer \
 #     -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'
 podAnnotations:
+<<<<<<< HEAD
   mpacer.zacharie.org/image-publiee: "sha-708d210@sha256:de46e004d1366d7d00e8e214433780458d5ae00a45c1eeed2568bf4c2aba5b82"
+=======
+  mpacer.zacharie.org/image-publiee: "sha-3190d2b@sha256:615c39c486f6a5efb6bc567aa8058051ce4f9baedfcb22f4b0995f17554ad591"
+>>>>>>> 8a470b7d1b384e60393628e1b71283f4f32ae7e7
 
 imagePullSecrets:
   - name: regcred
@@ -71,6 +75,8 @@ auth:
 
 config:
   environment: production
+  # Depot des MP3 depuis /music (docs/16) : chemin sur le volume persistant.
+  mediaDir: /data/media
   # Doit correspondre a l'URL de redirection declaree dans la console Google :
   #   https://mpacer.p.zacharie.org/auth/google/callback
   publicUrl: https://mpacer.p.zacharie.org
@@ -110,10 +116,14 @@ postgresql:
   nodeSelector:
     kubernetes.io/arch: amd64
 
-# Aucun fichier audio n'est stocke cote serveur (transfert USB depuis le PC) :
-# plus de volume applicatif necessaire.
+# Volume applicatif : depot Wi-Fi des MP3 (docs/16). Assez grand pour le quota
+# audio par compte (4 Go) plus une marge ; les fichiers partent des qu'ils sont
+# acquittes par l'appareil.
 persistence:
-  enabled: false
+  enabled: true
+  storageClass: local-path-retain
+  size: 6Gi
+  mountPath: /data
 
 # Avec PostgreSQL, l'application est sans etat : mise a jour sans coupure
 strategy:

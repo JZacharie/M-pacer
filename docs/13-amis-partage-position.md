@@ -1,12 +1,14 @@
 # 13 - Amis et partage de la position en direct
 
-Un petit cercle d'amis, ajoutes par un code court, qui se voient courir sur une
-carte **OpenStreetMap** — et rien d'autre : pas d'annuaire, pas de reseau social,
-pas de position qui sorte du cercle.
+Un petit cercle d'amis, ajoutes par une **demande que l'autre valide**, qui se
+voient courir sur une carte **OpenStreetMap** — et rien d'autre : pas de position
+qui sorte du cercle, et une identite qui est celle du **compte M-pacer**
+(adresse ou nom), jamais celle d'une montre ou d'un appareil.
 
 - Code : `crates/mpacer-api/src/friends.rs` (domaine), `src/routes/api.rs`
-  (API), `src/routes/web.rs` (page `/amis`), `static/map.js` (carte),
-  `android/core/src/main/java/com/mpacer/core/social/FriendsClient.kt`
+  (API), `src/routes/web.rs` (page `/amis` et avatars), `static/map.js`
+  (carte), `android/core/src/main/java/com/mpacer/core/social/FriendsClient.kt`
+  (application), `.../social/AvatarLoader.kt` (photos)
 - Suivi temps reel sous-jacent : [10 - Suivi en direct](10-suivi-temps-reel.md)
 
 ---
@@ -17,38 +19,48 @@ Le suivi en direct (docs/10) publie la position de la montre ou du telephone sur
 un broker MQTT, et la page `/live` l'affiche. Mais elle l'affiche **a tout le
 monde** : c'est un tableau de bord personnel, pas un partage.
 
-Pour courir a plusieurs, il manque trois choses :
+Pour courir a plusieurs, il manque quatre choses :
 
 1. **savoir a qui appartient un appareil** — le sujet MQTT ne porte qu'un nom
    (`mpacer/live/montre-a1b2`) ;
-2. **un cercle ferme** — qui a le droit de voir qui ;
-3. **une carte** — une position seule ne dit rien ; il faut un fond de carte,
+2. **designer une personne par son compte** — on ajoute un ami par son adresse
+   ou son nom dans la base M-pacer, pas par un identifiant de montre ;
+3. **un cercle ferme** — qui a le droit de voir qui, et une demande que la
+   personne visee accepte avant que l'amitie existe ;
+4. **une carte** — une position seule ne dit rien ; il faut un fond de carte,
    une trace et un age.
 
 ## 2. Modele
 
 ```text
-        code d'invitation (BCDF-GHJK, usage unique, 24 h)
-  Alice ---------------------------------------------> Bob
-     |  POST /api/v1/friends/invite        POST /api/v1/friends/accept
-     v                                                   v
-  friendships (les deux sens : Alice->Bob et Bob->Alice)
-     |
-     |  au depart d'une seance
-     |  POST /api/v1/live/register  {"device":"montre-alice"}
-     v
-  live_devices (device unique -> compte)     <-- c'est la cle du partage
-     |
-     |  PUBLISH mpacer/live/montre-alice  (broker MQTT, docs/10)
-     v
-  LiveStore (memoire, 24 h)  --->  GET /api/v1/friends/live  --->  Bob
+   Alice cherche "bob@example.org" dans les comptes M-pacer
+      |  GET /api/v1/friends/search?q=bob
+      v
+   POST /api/v1/friends/requests {"email":"bob@example.org"}   -> friend_requests
+      |                                                             (en attente)
+      v
+   Bob voit la demande (GET /api/v1/friends/requests) puis la valide
+      |  POST /api/v1/friends/requests/{id}/accept   (ou /decline)
+      v
+   friendships (les deux sens : Alice->Bob et Bob->Alice)
+      |
+      |  au depart d'une seance
+      |  POST /api/v1/live/register  {"device":"montre-alice"}
+      v
+   live_devices (device unique -> compte)     <-- c'est la cle du partage
+      |
+      |  PUBLISH mpacer/live/montre-alice  (broker MQTT, docs/10)
+      v
+   LiveStore (memoire, 24 h)  --->  GET /api/v1/friends/live  --->  Bob
 ```
 
-**Trois regles, volontairement simples :**
+**Quatre regles, volontairement simples :**
 
-1. **Une amitie est mutuelle** et se noue en saisissant un code d'invitation a
-   usage unique, transmis de la main a la main. Aucun annuaire, aucun import de
-   contacts, aucune recherche par email : on n'ajoute que qui on connait.
+1. **Une amitie se demande et se valide.** Un compte se designe par son adresse
+   ou son nom (tables `users`), on envoie une demande ; elle ne devient une
+   amitie que lorsque la personne visee l'accepte. Aucun identifiant de montre
+   n'entre dans le cercle. Le code d'invitation a usage unique reste disponible
+   comme raccourci, pour les personnes qui se parlent deja.
 2. **Le partage se coupe** d'un interrupteur par compte (`users.share_live`,
    actif par defaut des qu'un ami est ajoute). Coupe, aucune position n'est lue,
    meme par un ami.
@@ -56,34 +68,48 @@ Pour courir a plusieurs, il manque trois choses :
    muet depuis cinq minutes ou un appareil jamais revendique ne sortent jamais
    du serveur. Les seances archivees restent privees : elles ne sont visibles que
    par leur proprietaire, comme avant.
+4. **La photo de profil reste chez le service.** La route `/avatar/{id}`
+   telecharge la photo Google et la sert, ou dessine les initiales du compte :
+   le navigateur et le telephone ne contactent jamais Google.
 
-## 3. Base de donnees (migration 0007)
+## 3. Base de donnees (migrations 0007 et 0010)
 
 | Table | Role |
 |---|---|
 | `users.share_live` | interrupteur de partage du compte (bool, defaut vrai) |
 | `friendships` | amities, stockees **dans les deux sens** : lecture en un SELECT, retrait en un DELETE |
-| `friend_invites` | codes d'invitation : usage unique, expiration 24 h |
+| `friend_requests` | demandes en attente : de qui, vers qui, mot, date ; supprimees a l'acceptation ou au refus |
+| `friend_invites` | codes d'invitation : usage unique, expiration 24 h (raccourci) |
 | `live_devices` | revendication d'un nom d'appareil par un compte (nom **unique** dans tout le service) |
 
-La revendication est unique : si un autre compte publiait sous le meme nom
-d'appareil, sa position apparaitrait dans le cercle de quelqu'un d'autre. La
-route repond alors une erreur 409 et invite a changer de nom dans les reglages.
+Une demande identique n'est jamais dupliquee (`UNIQUE (from_user_id, to_user_id)`).
+Si Bob avait deja demande Alice, la demande en retour d'Alice vaut acceptation
+immediate : deux demandes qui se croisent ne restent pas en suspens.
+
+La revendication d'appareil reste unique : si un autre compte publiait sous le
+meme nom de montre, sa position apparaitrait dans le cercle de quelqu'un d'autre.
+La route repond alors une erreur 409 et invite a changer de nom dans les reglages.
 
 ## 4. API
 
 Authentification : jeton d'appareil (en-tete Authorization: Bearer), le meme que
-la synchronisation des seances.
+la synchronisation des seances (ou session navigateur pour la page web).
 
 | Route | Effet |
 |---|---|
 | `POST /api/v1/live/register` | revendique un appareil pour le compte |
-| `GET /api/v1/friends` | cercle : amis, partage, positions courantes (sans trace) |
+| `GET /api/v1/friends` | cercle : amis, partage, positions courantes, demandes en attente |
 | `GET /api/v1/friends/live?trace=1` | idem, avec la trace de la seance (carte) |
+| `GET /api/v1/friends/search?q=` | comptes M-pacer par adresse ou nom (2 caracteres minimum) |
+| `POST /api/v1/friends/requests` | envoie une demande : `{"email":"ami@example.org","message":"..."}` |
+| `GET /api/v1/friends/requests` | demandes recues et envoyees |
+| `POST /api/v1/friends/requests/{id}/accept` | accepte : l'amitie est creee dans les deux sens |
+| `POST /api/v1/friends/requests/{id}/decline` | refuse : la demande disparait, sans amitie |
 | `POST /api/v1/friends/invite` | cree (ou renvoie) un code ; `{"nouvelle":false}` |
-| `POST /api/v1/friends/accept` | ajoute un ami a partir de son code |
+| `POST /api/v1/friends/accept` | ajoute un ami a partir d'un code (raccourci) |
 | `PUT /api/v1/friends/share` | active ou coupe le partage : `{"share_live":true}` |
 | `DELETE /api/v1/friends/{id}` | retire un ami (les deux sens) |
+| `GET /avatar/{id}` | photo de profil d'un compte lie (ami ou demande en cours) |
 
 Reponse du cercle (extrait) :
 
@@ -92,10 +118,12 @@ Reponse du cercle (extrait) :
   "now_ms": 1760000000000,
   "public_url": "https://mpacer.example.org",
   "share_live": true,
+  "pending_requests": 1,
   "total": 2, "live": 1,
   "me":  { "device": "pixel-8", "lat": 48.85, "lon": 2.35, "age_s": 4 },
   "friends": [
     { "id": "u2", "name": "Joseph", "email": "joseph@example.org",
+      "picture_url": "https://lh3.googleusercontent.com/...",
       "sharing": true,
       "live": { "device": "montre-a1b2", "state": "run",
                 "lat": 48.85, "lon": 2.35, "age_s": 3,
@@ -113,13 +141,17 @@ depuis un telephone.
 ## 5. Page web /amis
 
 - **Mon partage** : etat et interrupteur.
-- **Inviter un ami** : code en grand, bouton *Copier*, lien `/amis?code=...` a
-  envoyer tel quel, bouton *Nouveau code*.
-- **Ajouter un ami** : champ de saisie (le lien d'invitation le pre-remplit).
+- **Chercher un compte** : adresse ou nom, resultats avec photo de profil et
+  bouton *Demander en ami*.
+- **Demandes recues** : photo, nom, adresse, mot, boutons *Accepter* et
+  *Refuser* ; les demandes envoyees sont comptees.
+- **Inviter un ami** (raccourci) : code en grand, bouton *Copier*, lien
+  `/amis?code=...`, bouton *Nouveau code*.
 - **Carte** : fond OpenStreetMap, marqueurs des amis et de soi-meme, trace de la
   seance en cours, rafraichissement toutes les dix secondes via `/amis.json`.
-- **Mon cercle** : fiche par ami (etat, distance, allure, cardio, batterie,
-  tour, age de la position), lien vers OpenStreetMap, bouton *Retirer*.
+- **Mon cercle** : fiche par ami avec **photo de profil** (servie par
+  `/avatar/{id}`, initiales a defaut), etat, distance, allure, cardio, batterie,
+  tour, age de la position, lien vers OpenStreetMap, bouton *Retirer*.
 
 ## 6. La carte : OpenStreetMap sans dependance
 
@@ -146,10 +178,12 @@ synchronisation, et **revendique l'appareil au depart de chaque seance**
 mieux : sans jeton, sans reseau ou si le nom est pris, la seance continue — seul
 le partage avec les amis est indisponible.
 
-L'onglet **Amis** du telephone (module `:phone`) propose l'interrupteur de
-partage, le code d'invitation (copier, partager par n'importe quelle messagerie,
-regenerer), l'ajout par code, la liste des amis avec leurs chiffres et la carte
-OpenStreetMap en WebView.
+L'onglet **Amis** du telephone (module `:phone`) propose la recherche de compte
+(adresse ou nom), l'envoi d'une demande, les **demandes recues** avec *Accepter* /
+*Refuser*, la liste des amis avec **photo de profil** (`AvatarLoader` charge
+`/avatar/{id}` et affiche les initiales si le service n'a pas de photo), leurs
+chiffres et la carte OpenStreetMap en WebView. Le code d'invitation reste
+disponible comme raccourci.
 
 Trois conditions pour que vos amis vous voient courir, toutes verifiees a
 l'ecran :
@@ -159,19 +193,23 @@ l'ecran :
    lui, personne ne publie ;
 3. une **seance est en cours** — l'ecran Amis le rappelle si les deux premiers
    points manquent. La montre, elle, ne change pas d'interface : c'est son
-appareil qui est revendique, donc un ami peut suivre une montre exactement comme
-un telephone.
+   appareil qui est revendique, donc un ami peut suivre une montre exactement comme
+   un telephone.
 
 ## 8. Cout et limites
 
 - **Aucune ecriture en base pour les positions** : le suivi reste en memoire
-  (`LiveStore`, docs/10). Seuls le cercle, les codes et les noms d'appareils
-  sont persistes.
+  (`LiveStore`, docs/10). Seuls le cercle, les demandes, les codes et les noms
+  d'appareils sont persistes.
 - **Un ami ne voit rien hors seance** : le partage s'arrete avec la seance.
 - **Budget reseau** : environ 1 ko par ami toutes les dix secondes sans trace.
 - **Nom d'appareil unique** dans tout le service : sur une installation
   partagee, choisir un nom explicite dans les reglages (le telephone et la
   montre peuvent avoir chacun le leur, jusqu'a huit).
+- **La recherche n'est pas un annuaire** : deux caracteres minimum, dix resultats
+  au plus, et rien d'autre que les comptes M-pacer (pas d'import de contacts).
+- **Photo de profil** : servie uniquement aux comptes lies par une amitie ou une
+  demande en cours ; le monogramme prend le relais sans photo.
 - **Pas encore verifie sur une installation reelle** : les tests d'integration
   (`crates/mpacer-api/tests/api.rs`) exigent un PostgreSQL
   (`MPACER_TEST_DATABASE_URL`), et la carte demande un acces reseau aux tuiles

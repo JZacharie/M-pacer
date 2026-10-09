@@ -171,6 +171,81 @@ object FriendsClient {
         return envoye
     }
 
+    // ---------------------------------------------------- demandes d'amitie
+
+    /**
+     * Recharge les demandes d'amitie recues et envoyees.
+     *
+     * L'identite est celle du compte M-pacer (adresse ou nom) : aucun nom de
+     * montre n'entre dans une demande.
+     */
+    suspend fun loadRequests(context: Context): Boolean {
+        val corps = lire(context, "/api/v1/friends/requests") ?: return false
+        val demandes = runCatching { codec.decodeFromString(FriendRequests.serializer(), corps) }
+            .getOrElse { erreur ->
+                Log.w(TAG, "demandes illisibles", erreur)
+                _state.update { it.copy(error = "Reponse illisible du serveur") }
+                return false
+            }
+        _state.update { it.copy(requests = demandes, error = null) }
+        return true
+    }
+
+    /** Cherche un compte M-pacer par son adresse ou son nom. */
+    suspend fun search(context: Context, requete: String): Boolean {
+        val texte = requete.trim()
+        if (texte.length < 2) {
+            _state.update { it.copy(search = emptyList(), searchQuery = texte, error = null) }
+            return true
+        }
+        val corps = lire(context, "/api/v1/friends/search?q=" + encoder(texte)) ?: return false
+        val reponse = runCatching { codec.decodeFromString(SearchResponse.serializer(), corps) }
+            .getOrElse { erreur ->
+                Log.w(TAG, "recherche illisible", erreur)
+                _state.update { it.copy(error = "Reponse illisible du serveur") }
+                return false
+            }
+        _state.update { it.copy(search = reponse.users, searchQuery = texte, error = null) }
+        return true
+    }
+
+    /** Envoie une demande d'amitie a un compte (par son adresse). */
+    suspend fun sendRequest(context: Context, email: String): Boolean {
+        val adresse = email.trim()
+        if (adresse.isBlank()) return false
+        val corps = codec.encodeToString(
+            RequestInput.serializer(),
+            RequestInput(adresse),
+        )
+        if (postLire(context, "/api/v1/friends/requests", corps) == null) return false
+        _state.update {
+            it.copy(
+                message = "Demande envoyee a " + adresse + " : elle devient une amitie quand l'autre accepte.",
+                search = emptyList(),
+                error = null,
+            )
+        }
+        loadRequests(context)
+        return true
+    }
+
+    /** Accepte une demande recue : l'amitie est creee dans les deux sens. */
+    suspend fun acceptRequest(context: Context, id: String): Boolean {
+        if (!poster(context, "/api/v1/friends/requests/" + id + "/accept", null)) return false
+        _state.update { it.copy(message = "Demande acceptee : vous etes maintenant amis.", error = null) }
+        load(context)
+        loadRequests(context)
+        return true
+    }
+
+    /** Refuse une demande recue : elle disparait, rien d'autre ne change. */
+    suspend fun declineRequest(context: Context, id: String): Boolean {
+        if (!poster(context, "/api/v1/friends/requests/" + id + "/decline", null)) return false
+        _state.update { it.copy(message = "Demande refusee.", error = null) }
+        loadRequests(context)
+        return true
+    }
+
     // -------------------------------------------------- revendication directe
 
     /**
@@ -232,6 +307,37 @@ object FriendsClient {
         }
     }
 
+    /** GET dont on veut lire la reponse (demandes, recherche). */
+    private suspend fun lire(context: Context, chemin: String): String? =
+        withContext(Dispatchers.IO) {
+            val token = SyncClient.token(context) ?: return@withContext signalerLire(
+                "Appairez d'abord l'appareil (onglet Synchronisation)."
+            )
+            val requete = Request.Builder()
+                .url(SyncClient.baseUrl(context) + chemin)
+                .header("Authorization", "Bearer " + token)
+                .get()
+                .build()
+            try {
+                http.newCall(requete).execute().use { reponse ->
+                    val texte = reponse.body?.string().orEmpty()
+                    if (reponse.isSuccessful) {
+                        _state.update { it.copy(error = null) }
+                        texte
+                    } else {
+                        signalerLire(erreurLisible(reponse.code, texte))
+                    }
+                }
+            } catch (erreur: Exception) {
+                Log.w(TAG, "appel " + chemin + " impossible", erreur)
+                signalerLire("Serveur injoignable : " + message(erreur))
+            }
+        }
+
+    /** Encodage d'une recherche dans une URL. */
+    private fun encoder(texte: String): String =
+        java.net.URLEncoder.encode(texte, "UTF-8")
+
     /** POST dont on veut lire la reponse (invitation, ajout d'ami). */
     private suspend fun postLire(context: Context, chemin: String, corps: String): String? =
         withContext(Dispatchers.IO) {
@@ -287,6 +393,11 @@ data class FriendsState(
     /** Charge utile brute du serveur : la carte du telephone la rejoue telle quelle. */
     val json: String = "",
     val invite: Invite? = null,
+    /** Demandes recues et envoyees. */
+    val requests: FriendRequests? = null,
+    /** Resultats de la derniere recherche de compte. */
+    val search: List<UserSummary> = emptyList(),
+    val searchQuery: String = "",
     val busy: Boolean = false,
     val charge: Boolean = false,
     val message: String? = null,
@@ -299,6 +410,8 @@ data class Circle(
     @SerialName("now_ms") val nowMs: Long = 0,
     @SerialName("public_url") val publicUrl: String = "",
     @SerialName("share_live") val shareLive: Boolean = true,
+    /** Demandes d'amitie recues et pas encore validees. */
+    @SerialName("pending_requests") val pendingRequests: Int = 0,
     val total: Int = 0,
     val live: Int = 0,
     val me: FriendPosition? = null,
@@ -349,6 +462,53 @@ data class Invite(
     @SerialName("expires_in_s") val expiresInS: Long = 0,
     val url: String = "",
 )
+
+/** Fiche minimale d'un compte M-pacer (recherche, demande). */
+@Serializable
+data class UserSummary(
+    val id: String = "",
+    val name: String? = null,
+    val email: String = "",
+    @SerialName("picture_url") val pictureUrl: String? = null,
+) {
+    /** Nom affichable : le nom, sinon l'adresse. */
+    val displayName: String get() = name?.takeIf { it.isNotBlank() } ?: email
+}
+
+/** Demande d'amitie en attente de reponse. */
+@Serializable
+data class FriendRequest(
+    val id: String = "",
+    /** "in" (recue, a valider) ou "out" (envoyee). */
+    val direction: String = "in",
+    val from: UserSummary = UserSummary(),
+    val to: UserSummary = UserSummary(),
+    val message: String? = null,
+    @SerialName("created_at_ms") val createdAtMs: Long = 0,
+) {
+    val recue: Boolean get() = direction == "in"
+    /** L'autre bout de la demande : celui a qui on repond, ou qui doit repondre. */
+    val autre: UserSummary get() = if (recue) from else to
+}
+
+/** Reponse de la liste des demandes. */
+@Serializable
+data class FriendRequests(
+    val incoming: List<FriendRequest> = emptyList(),
+    val outgoing: List<FriendRequest> = emptyList(),
+    val pending: Int = 0,
+)
+
+/** Reponse de la recherche de comptes. */
+@Serializable
+private data class SearchResponse(
+    val query: String = "",
+    val users: List<UserSummary> = emptyList(),
+)
+
+/** Corps d'une demande d'amitie. */
+@Serializable
+private data class RequestInput(val email: String)
 
 @Serializable
 private data class RegisterRequest(val device: String, val label: String? = null)

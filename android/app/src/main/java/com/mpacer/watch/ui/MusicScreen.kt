@@ -1,16 +1,9 @@
 package com.mpacer.watch.ui
 
-import com.mpacer.core.ui.GpsLight
-import com.mpacer.core.ui.Palette
-
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -21,23 +14,23 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.wear.compose.material.Button
-import androidx.wear.compose.material.ButtonDefaults
-import androidx.wear.compose.material.Chip
-import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.Text
 import com.mpacer.core.TrackingService
 import com.mpacer.core.music.LocalPlaylist
+import com.mpacer.core.music.MusicDownloadState
+import com.mpacer.core.music.MusicDownloader
 import com.mpacer.core.music.MusicLibrary
 import com.mpacer.core.music.MusicLibraryState
 import com.mpacer.core.music.MusicPlayer
 import com.mpacer.core.music.MusicPlayerState
 import com.mpacer.core.music.MusicSession
+import com.mpacer.core.ui.Palette
 import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -45,15 +38,15 @@ import kotlin.math.roundToInt
 /**
  * Ecran Musique de la montre (docs/07 v2, section 6.4).
  *
- * Deux panneaux dans un ecran rond :
- *  1. Bibliotheque (USB) : playlists copiees par `mpacer-music`, espace libre et
- *     utilise, bouton « Importer (USB) », suppression d'une playlist importee ;
- *  2. Lecture : piste en cours, BPM de la piste et consigne du moteur, commandes.
+ * Deux panneaux dans un cadran rond :
+ *  1. Bibliotheque (USB) : playlists copiees par mpacer-music, espace libre et
+ *     utilise, import, suppression ;
+ *  2. Lecture : piste en cours, BPM de la piste et consigne du moteur, transport.
  *
- * La montre ne joue que des fichiers presents sur son disque : aucun acces
- * reseau, aucun pilotage d'une application tierce. Le coeur Rust reste seul
- * decideur du tempo ; cet ecran ne fait qu'afficher son etat et pousser la
- * playlist choisie.
+ * Les commandes de lecture suivent le meme vocabulaire que l'ecran principal :
+ * des ronds a icone (precedent, lecture, suivant), et non des puces << >> et
+ * « Lire » de largeurs inegales. La montre ne joue que des fichiers presents
+ * sur son disque : aucun acces reseau, le coeur Rust reste seul decideur du tempo.
  */
 @Composable
 fun MusicScreen(onBack: () -> Unit) {
@@ -61,6 +54,7 @@ fun MusicScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val library by MusicLibrary.state.collectAsState()
     val player by MusicPlayer.state.collectAsState()
+    val telechargement by MusicDownloader.state.collectAsState()
     val watch by TrackingService.state.collectAsState()
     var showPlayer by remember { mutableStateOf(false) }
     var aSupprimer by remember { mutableStateOf<String?>(null) }
@@ -70,15 +64,8 @@ fun MusicScreen(onBack: () -> Unit) {
         MusicPlayer.prepare(context)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text(if (showPlayer) "Lecture" else "Bibliotheque (USB)", fontWeight = FontWeight.Bold)
+    SecondaryScreen(onBack = onBack) {
+        ScreenTitle(if (showPlayer) "Lecture" else "Bibliotheque")
 
         if (showPlayer) {
             PlayerPane(
@@ -94,6 +81,8 @@ fun MusicScreen(onBack: () -> Unit) {
         } else {
             LibraryPane(
                 library = library,
+                telechargement = telechargement,
+                onDownload = { MusicDownloader.syncInBackground(context) },
                 onImport = { scope.launch { MusicLibrary.scan(context) } },
                 onPlay = { playlist ->
                     MusicSession.setPlaylist(playlist)
@@ -103,16 +92,12 @@ fun MusicScreen(onBack: () -> Unit) {
                 aSupprimer = aSupprimer,
                 onAskDelete = { id -> aSupprimer = id },
                 onDelete = { playlist ->
-                    scope.launch {
-                        MusicLibrary.delete(context, playlist.id)
-                    }
+                    scope.launch { MusicLibrary.delete(context, playlist.id) }
                     if (MusicSession.local?.id == playlist.id) MusicSession.setPlaylist(null)
                     aSupprimer = null
                 },
             )
         }
-
-        Button(onClick = onBack, colors = ButtonDefaults.secondaryButtonColors()) { Text("Retour") }
     }
 }
 
@@ -121,41 +106,65 @@ fun MusicScreen(onBack: () -> Unit) {
 @Composable
 private fun LibraryPane(
     library: MusicLibraryState,
+    telechargement: MusicDownloadState,
+    onDownload: () -> Unit,
     onImport: () -> Unit,
     onPlay: (LocalPlaylist) -> Unit,
     aSupprimer: String?,
     onAskDelete: (String) -> Unit,
     onDelete: (LocalPlaylist) -> Unit,
 ) {
-    Chip(
-        label = { Text(if (library.busy) "Analyse du dossier..." else "Importer (USB)") },
-        enabled = !library.busy,
-        colors = ChipDefaults.primaryChipColors(),
+    SettingRow(
+        label = if (library.busy) "Analyse du dossier..." else "Importer (USB)",
         onClick = onImport,
+        enabled = !library.busy,
+        selected = true,
+        icon = WatchIcons.Sync,
     )
+    // Depot Wi-Fi (docs/16) : recupere les MP3 deposes sur la page /music, puis
+    // acquitte chaque piste. Sans fichier en attente, le serveur ne renvoie rien.
+    SettingRow(
+        label = if (telechargement.busy) "Telechargement..." else "Telecharger (serveur)",
+        onClick = onDownload,
+        enabled = !telechargement.busy && !library.busy,
+        selected = false,
+        icon = WatchIcons.Sync,
+    )
+    telechargement.message?.takeIf { telechargement.busy || it != "Aucun fichier a telecharger" }?.let { message ->
+        Text(
+            text = if (telechargement.busy && telechargement.total > 0) {
+                message + "  " + telechargement.current + "/" + telechargement.total +
+                    "  " + formatBytes(telechargement.bytes)
+            } else {
+                message
+            },
+            color = Palette.muted,
+            fontSize = 11.sp,
+            textAlign = TextAlign.Center,
+        )
+    }
     Text(
         text = "libre " + formatBytes(library.freeBytes) + "   utilise " + formatBytes(library.usedBytes),
-        color = Palette.muted,
-        fontSize = 12.sp,
+        color = Palette.muted2,
+        fontSize = 11.sp,
+        textAlign = TextAlign.Center,
     )
     if (!library.usbAvailable) {
         Text(
-            "Dossier Music/ absent : branchez la montre et lancez mpacer-music transfer.",
+            text = "Dossier Music/ absent : branchez la montre et lancez mpacer-music transfer.",
             color = Palette.attention,
-            textAlign = TextAlign.Center,
             fontSize = 11.sp,
+            textAlign = TextAlign.Center,
         )
     }
-
     if (library.playlists.isEmpty()) {
         Text(
-            "Aucune playlist importee. Sur l'ordinateur : mpacer-music transfer, puis Importer (USB).",
+            text = "Aucune playlist importee. Sur l'ordinateur : mpacer-music transfer, puis Importer (USB).",
             color = Palette.muted,
+            fontSize = 11.sp,
             textAlign = TextAlign.Center,
-            fontSize = 12.sp,
         )
     }
-
     library.playlists.forEach { playlist ->
         PlaylistRow(
             playlist = playlist,
@@ -165,9 +174,13 @@ private fun LibraryPane(
             onDelete = { onDelete(playlist) },
         )
     }
-
     library.message?.let { message ->
-        Text(message, color = Palette.muted, textAlign = TextAlign.Center, fontSize = 12.sp)
+        Text(
+            text = message,
+            color = Palette.muted,
+            fontSize = 11.sp,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -182,30 +195,53 @@ private fun PlaylistRow(
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(playlist.name, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, fontSize = 14.sp)
         Text(
-            text = playlist.trackCount.toString() + " p.  " + formatBytes(playlist.sizeBytes),
-            color = Palette.muted,
+            text = playlist.name,
+            color = Palette.texte,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 14.sp,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+        )
+        Text(
+            text = playlist.trackCount.toString() + " pistes   " + formatBytes(playlist.sizeBytes),
+            color = Palette.muted2,
             fontSize = 11.sp,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (playlist.playable.isNotEmpty()) {
-                Chip(
-                    label = { Text("Lire") },
-                    colors = ChipDefaults.primaryChipColors(),
+                RoundButton(
+                    icon = WatchIcons.Play,
+                    label = "Lire",
                     onClick = onPlay,
+                    size = 36.dp,
+                    iconSize = 18.dp,
+                    background = Palette.orange,
+                    contentColor = Color.White,
                 )
             }
             if (confirmation) {
-                Chip(
-                    label = { Text("Confirmer") },
-                    colors = ChipDefaults.primaryChipColors(),
+                RoundButton(
+                    icon = WatchIcons.Check,
+                    label = "Confirmer la suppression",
                     onClick = onDelete,
+                    size = 36.dp,
+                    iconSize = 18.dp,
+                    background = Palette.danger,
+                    contentColor = Color.White,
                 )
             } else {
-                Chip(label = { Text("Supprimer") }, onClick = onAskDelete)
+                RoundButton(
+                    icon = WatchIcons.Delete,
+                    label = "Supprimer",
+                    onClick = onAskDelete,
+                    size = 36.dp,
+                    iconSize = 18.dp,
+                    background = Palette.surface3,
+                    contentColor = Palette.danger,
+                )
             }
         }
     }
@@ -226,38 +262,76 @@ private fun PlayerPane(
 ) {
     Text(
         text = player.track?.title ?: "Aucune piste",
+        color = Palette.texte,
         fontWeight = FontWeight.Bold,
-        textAlign = TextAlign.Center,
         fontSize = 15.sp,
+        textAlign = TextAlign.Center,
+        maxLines = 1,
     )
     player.track?.artist?.takeIf { it.isNotBlank() }?.let {
-        Text(it, color = Palette.muted, textAlign = TextAlign.Center, fontSize = 12.sp)
+        Text(
+            text = it,
+            color = Palette.muted,
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+        )
     }
     Text(
         text = "piste " + bpmLabel(trackBpm) + "   cible " + bpmLabel(targetBpm),
         color = Palette.muted,
         fontSize = 12.sp,
     )
-    cadence?.let { Text("cadence " + it.roundToInt() + " pas/min", color = Palette.muted2, fontSize = 11.sp) }
+    cadence?.let {
+        Text(
+            text = "cadence " + it.roundToInt() + " pas/min",
+            color = Palette.muted2,
+            fontSize = 11.sp,
+        )
+    }
     player.playlistName?.let {
-        Text(it, color = Palette.muted2, fontSize = 10.sp, textAlign = TextAlign.Center)
+        Text(text = it, color = Palette.muted2, fontSize = 10.sp, textAlign = TextAlign.Center)
     }
 
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Chip(label = { Text("<<") }, onClick = onPrevious)
-        Chip(
-            label = { Text(if (player.playing) "Pause" else "Lire") },
-            colors = ChipDefaults.primaryChipColors(),
-            onClick = onToggle,
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RoundButton(
+            icon = WatchIcons.Previous,
+            label = "Precedent",
+            onClick = onPrevious,
+            size = 40.dp,
+            iconSize = 20.dp,
         )
-        Chip(label = { Text(">>") }, onClick = onNext)
+        RoundButton(
+            icon = if (player.playing) WatchIcons.Pause else WatchIcons.Play,
+            label = if (player.playing) "Pause" else "Lire",
+            onClick = onToggle,
+            size = 52.dp,
+            iconSize = 26.dp,
+            background = Palette.orange,
+            contentColor = Color.White,
+        )
+        RoundButton(
+            icon = WatchIcons.Next,
+            label = "Suivant",
+            onClick = onNext,
+            size = 40.dp,
+            iconSize = 20.dp,
+        )
     }
 
     player.message?.let {
-        Text(it, color = Palette.attention, textAlign = TextAlign.Center, fontSize = 11.sp)
+        Text(
+            text = it,
+            color = Palette.attention,
+            fontSize = 11.sp,
+            textAlign = TextAlign.Center,
+        )
     }
 
-    Chip(label = { Text("Bibliotheque") }, onClick = onLibrary)
+    SettingRow(label = "Bibliotheque", onClick = onLibrary, icon = WatchIcons.Music)
 }
 
 // --------------------------------------------------------------- utilitaires

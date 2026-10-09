@@ -225,4 +225,123 @@
       });
     });
   }
+
+  // ------------------------------------------------ depot des MP3 (page /music)
+  // Le serveur garde les fichiers le temps que la montre ou le telephone les
+  // recupere (docs/16). Sans JavaScript, rien n'est casse : la zone n'apparait
+  // qu'avec le script, et le transfert USB reste disponible plus bas.
+  (function () {
+    var zone = document.getElementById("music-upload");
+    if (!zone) return;
+    var playlist = zone.getAttribute("data-playlist");
+    var maxOctets = parseInt(zone.getAttribute("data-max-bytes") || "0", 10);
+    var drop = document.getElementById("music-upload-drop");
+    var entree = document.getElementById("music-upload-input");
+    var barre = document.getElementById("music-upload-bar");
+    var statut = document.getElementById("music-upload-status");
+    var resultats = document.getElementById("music-upload-results");
+    if (!playlist || !drop || !entree) return;
+
+    function lisible(octets) {
+      var unites = ["o", "Ko", "Mo", "Go"];
+      var valeur = Number(octets) || 0;
+      var unite = 0;
+      while (valeur >= 1024 && unite + 1 < unites.length) { valeur = valeur / 1024; unite += 1; }
+      return unite === 0 ? valeur + " o" : valeur.toFixed(1) + " " + unites[unite];
+    }
+
+    function ligne(nom, texte, ok) {
+      if (!resultats) return;
+      var item = document.createElement("li");
+      item.className = ok ? "ok" : "erreur";
+      var titre = document.createElement("strong");
+      titre.textContent = nom + " : ";
+      item.appendChild(titre);
+      item.appendChild(document.createTextNode(texte));
+      resultats.appendChild(item);
+    }
+
+    function envoyer(fichier) {
+      return new Promise(function (resoudre) {
+        if (maxOctets && fichier.size > maxOctets) {
+          ligne(fichier.name, "trop volumineux (" + lisible(fichier.size) + ")", false);
+          resoudre(false);
+          return;
+        }
+        var donnees = new FormData();
+        donnees.append("file", fichier, fichier.name);
+        var requete = new XMLHttpRequest();
+        requete.open("POST", "/music/playlists/" + encodeURIComponent(playlist) + "/upload");
+        requete.upload.addEventListener("progress", function (evenement) {
+          if (!barre || !evenement.lengthComputable) return;
+          barre.style.width = Math.round((evenement.loaded / evenement.total) * 100) + "%";
+        });
+        requete.addEventListener("load", function () {
+          var reponse = null;
+          try { reponse = JSON.parse(requete.responseText); } catch (erreur) { reponse = null; }
+          if (requete.status >= 200 && requete.status < 300 && reponse) {
+            ligne(fichier.name, "depose (" + lisible(reponse.size_bytes) + ")", true);
+            resoudre(true);
+          } else {
+            var message = (reponse && (reponse.message || reponse.error)) || ("HTTP " + requete.status);
+            ligne(fichier.name, message, false);
+            resoudre(false);
+          }
+        });
+        requete.addEventListener("error", function () {
+          ligne(fichier.name, "reseau indisponible", false);
+          resoudre(false);
+        });
+        requete.send(donnees);
+      });
+    }
+
+    var enCours = false;
+    function traiter(fichiers) {
+      if (enCours) return;
+      var liste = Array.prototype.slice.call(fichiers || []);
+      if (!liste.length) return;
+      enCours = true;
+      if (resultats) resultats.innerHTML = "";
+      if (barre) barre.style.width = "0%";
+      var reussis = 0;
+      var suite = Promise.resolve();
+      liste.forEach(function (fichier, index) {
+        suite = suite.then(function () {
+          if (statut) statut.textContent = "envoi " + (index + 1) + "/" + liste.length + " : " + fichier.name;
+          return envoyer(fichier).then(function (ok) {
+            if (ok) reussis += 1;
+            if (barre) barre.style.width = Math.round(((index + 1) / liste.length) * 100) + "%";
+          });
+        });
+      });
+      suite.then(function () {
+        if (statut) {
+          statut.textContent = reussis + "/" + liste.length + " fichier(s) depose(s)"
+            + (reussis ? " — rechargez la page pour voir la liste" : "");
+        }
+        enCours = false;
+      });
+    }
+
+    ["dragenter", "dragover"].forEach(function (nom) {
+      drop.addEventListener(nom, function (evenement) {
+        evenement.preventDefault();
+        drop.classList.add("actif");
+      });
+    });
+    ["dragleave", "drop"].forEach(function (nom) {
+      drop.addEventListener(nom, function (evenement) {
+        evenement.preventDefault();
+        drop.classList.remove("actif");
+      });
+    });
+    drop.addEventListener("drop", function (evenement) {
+      if (evenement.dataTransfer) traiter(evenement.dataTransfer.files);
+    });
+    entree.addEventListener("change", function () {
+      traiter(entree.files);
+      entree.value = "";
+    });
+  })();
 })();

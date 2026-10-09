@@ -164,12 +164,15 @@ function Resolve-Appareil([string] $adb, [string] $serieForcee) {
     # La montre peut apparaitre deux fois (adresse IP et nom mDNS) : on choisit
     # l'entree IP:port quand elle est unique, sinon -AdbSerial est obligatoire.
     $lignes = & $adb devices 2>&1
-    $series = $lignes | Where-Object { $_ -match '^\S+\s+device$' } | ForEach-Object { ($_ -split '\s+')[0] }
+    # @(...) est indispensable : avec un seul appareil, le pipeline renvoie une
+    # chaine scalaire, et $series[0] donnerait alors son PREMIER CARACTERE
+    # (l'installation partait sur le serial "a" et adb repondait "device 'a' not found").
+    $series = @($lignes | Where-Object { $_ -match '^\S+\s+device$' } | ForEach-Object { ($_ -split '\s+')[0] })
     if ($serieForcee) { return $serieForcee }
-    if (-not $series) { return $null }
+    if ($series.Count -eq 0) { return $null }
     $ip = @($series | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+:\d+$' })
     if ($ip.Count -eq 1) { Info ('appareil selectionne : ' + $ip[0]); return $ip[0] }
-    if (@($series).Count -eq 1) { return $series[0] }
+    if ($series.Count -eq 1) { return $series[0] }
     Echec ('plusieurs appareils connectes : precisez -AdbSerial (disponibles : ' + ($series -join ', ') + ')')
     return $null
 }

@@ -263,7 +263,11 @@ montre n'a aucun appel reseau a faire.
 * bouton « Copier la liste » dans le bloc 4 (aujourd'hui l'export `.txt` suffit) ;
 * detection automatique d'un dossier de MP3 par la montre pour un import sans
   commande ;
-* conversion MP3 assistee dans `mpacer-music` si un encodeur est present.
+* conversion MP3 assistee dans `mpacer-music` si un encodeur est present ;
+* **pousser les MP3 depuis la page `/music` directement vers la montre ou le
+  telephone** : deux chemins etudies dans [16 - Pousser des MP3 depuis le front
+  end](16-poussee-mp3-front-vers-appareils.md) (passerelle avec `mpacer-music`
+  par USB, ou relais serveur puis telechargement par l'appareil).
 
 ## 9. Alternative « push serveur + synchro Wi-Fi » (non retenue ici)
 

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.mpacer.core.AssistantConfig
 import com.mpacer.core.AssistantMode
+import com.mpacer.core.MpacerAnalysis
 import com.mpacer.core.MusicPolicy
 import com.mpacer.core.VoiceConfig
 import com.mpacer.core.VoiceFrequency
@@ -35,6 +36,13 @@ data class PhoneSettings(
     val strapName: String = "",
     /** Garder l'ecran allume pendant la seance (telephone a la ceinture). */
     val keepScreenOn: Boolean = true,
+    /**
+     * Frequence cardiaque maximale de l'utilisateur.
+     *
+     * Reference des zones cardiaques : une zone n'a de sens que rapporte a sa
+     * propre frequence maximale, pas a une moyenne de population.
+     */
+    val heartRateMax: Int = MpacerAnalysis.MAX_BPM_DEFAUT,
 ) {
     /** Nom affiche de la ceinture, ou null si aucune n'est retenue. */
     val strapLabel: String? get() = strapName.ifBlank { strapAddress }.takeIf { it.isNotBlank() }
@@ -60,6 +68,7 @@ object PhoneSettingsStore {
     private const val KEY_STRAP_ADDRESS = "strap_address"
     private const val KEY_STRAP_NAME = "strap_name"
     private const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
+    private const val KEY_HEART_RATE_MAX = "heart_rate_max"
 
     fun load(context: Context): PhoneSettings {
         val prefs = prefs(context)
@@ -97,6 +106,7 @@ object PhoneSettingsStore {
             strapAddress = prefs.getString(KEY_STRAP_ADDRESS, "").orEmpty(),
             strapName = prefs.getString(KEY_STRAP_NAME, "").orEmpty(),
             keepScreenOn = prefs.getBoolean(KEY_KEEP_SCREEN_ON, true),
+            heartRateMax = prefs.getInt(KEY_HEART_RATE_MAX, MpacerAnalysis.MAX_BPM_DEFAUT),
         )
     }
 
@@ -119,6 +129,7 @@ object PhoneSettingsStore {
             .putString(KEY_STRAP_ADDRESS, settings.strapAddress)
             .putString(KEY_STRAP_NAME, settings.strapName)
             .putBoolean(KEY_KEEP_SCREEN_ON, settings.keepScreenOn)
+            .putInt(KEY_HEART_RATE_MAX, settings.heartRateMax)
             .apply()
         // Le suivi en direct a sa propre persistance (mot de passe chiffre).
         LiveSettings.save(context, settings.live)

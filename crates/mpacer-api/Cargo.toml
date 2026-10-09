@@ -41,6 +41,9 @@ anyhow = { workspace = true }
 # Suivi en direct : abonnement MQTT (module mqtt, serialisation maison).
 tokio-rustls = { workspace = true }
 webpki-roots = { workspace = true }
+# Telechargement des MP3 deposes sur le volume audio : flux de fichier sans
+# charger l'octet en memoire (module media, route .../tracks/{id}/file).
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

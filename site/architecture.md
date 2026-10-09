@@ -38,6 +38,7 @@ dans un cœur Rust testable partout, et aucun secret tiers ne descend sur le poi
 |---|---|---|
 | Montre → cœur | JNI / C ABI, JSON | Positions GPS, cardio, horloge, commandes ; le cœur renvoie un état complet à afficher |
 | Montre → backend | HTTPS, jeton d'appareil | Résumé de séance (le même format que le fichier archivé) |
+| Backend → téléphone | HTTPS, jeton d'appareil | Reprise automatique : les séances du compte absentes du téléphone, trace et cardio comprises |
 | Téléphone → montre | Data Layer Wear OS | Séance envoyée vers la montre, message ou asset selon la taille |
 | Navigateur → backend | HTTPS, cookie de session | Pages rendues côté serveur |
 

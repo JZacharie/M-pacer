@@ -104,7 +104,8 @@ d'appairage.
   (FR/EN), detail du tour, formes courtes, et ce que fait la musique quand la
   voix parle (baisser, mettre en pause, parler par-dessus).
 - **Musique** : activation, annonces de tempo, BPM de reference.
-- **Cardiaque** : recherche des ceintures Bluetooth LE a portee (filtre sur le
+- **Cardiaque** : frequence maximale de l'utilisateur (reference des zones du
+  compte rendu), recherche des ceintures Bluetooth LE a portee (filtre sur le
   service Heart Rate), choix, retrait.
 - **Suivi en direct** : active/desactive, adresse du broker, prefixe des sujets,
   nom de l'appareil, identifiants, cadence en course et en pause, conservation du
@@ -112,7 +113,66 @@ d'appairage.
   sujet `<prefixe>/live/+`).
 - **Backend** (onglet Sync) : adresse, appairage, envoi des seances.
 
-## 6. Cardio : ceinture Bluetooth LE
+## 6. Analyse d'une seance
+
+L'onglet **Historique** ouvre chaque seance sur une fiche d'analyse : la meme
+matiere que la page web `/workouts/{id}`, mais calculee **sur le telephone**,
+sans reseau.
+
+1. **A retenir** - deux a quatre observations redigees par le coeur : regularite
+   de l'allure, negative split, derive cardiaque, temps passe en Z4-Z5, cout du
+   relief, poids des pauses. Les seuils sont des constantes nommees et testees
+   dans `mpacer-core`, pas des phrases dispersees dans l'interface.
+2. **Carte** - la trace et un repere de distance sur un fond OpenStreetMap. Le
+   script et la feuille de style sont ceux du site (`static/map.js`,
+   `app.css`), copies dans les assets a la compilation : une seule
+   implementation a corriger, et la carte s'affiche hors ligne (seules les tuiles
+   demandent le reseau). Un lien ouvre la trace sur openstreetmap.org.
+3. **Frequence cardiaque** - moyenne, maximale, minimale, courbe du pouls en
+   fonction de la distance, temps par zone, derive cardiaque.
+4. **Energie et terrain** - denivele, altitude maximale, **allure ajustee a la
+   pente (GAP)**, distance equivalente sur le plat, profil altimetrique.
+5. **Temps de passage** - un tour par kilometre, barre proportionnelle a la
+   vitesse, pouls moyen du tour, ecart-type des allures, partage entre les deux
+   moities, vitesse maximale.
+6. **Meilleures distances**.
+
+Le calcul traverse la C ABI du coeur : `mpacer_report` recoit la seance archivee
+et les zones cardiaques, et renvoie un rapport JSON (`mpacer_core::report`).
+Aucun algorithme de course n'est ecrit en Kotlin : la regle du depot vaut aussi
+pour le telephone. Une seance illisible n'empeche pas la fiche de s'ouvrir, elle
+affiche seulement ses totaux.
+
+## 7. Reprise automatique des seances de la montre
+
+Courir avec la montre puis ouvrir le telephone : la seance est deja la. Le
+chainon manquant etait la **reprise** — la montre envoyait bien ses seances au
+backend des la fin de la course, mais rien ne les ramenait sur le telephone.
+
+- **Declencheur** : le retour de l'application au premier plan (lancement, retour
+  d'arriere-plan) et l'ouverture de l'historique. Aucune minuterie, aucun service
+  d'arriere-plan : un appareil non appaire ne fait aucune requete.
+- **Ce qui est repris** : `GET /api/v1/workouts` donne la liste du compte,
+  `GET /api/v1/workouts/{id}` le resume complet de chaque seance absente du
+  telephone (trace GPS et frequence cardiaque comprises). Le fichier range
+  localement est celui qu'a produit mpacer-core, sans transformation.
+- **Idempotent** : une seance est identifiee par son horodatage de depart. Une
+  seance deja presente n'est pas reprise deux fois, et une seance reprise est
+  marquee « deja envoyee » — sinon les deux appareils se renverraient la meme
+  seance sans fin.
+- **Tolerant** : un echec isole n'interrompt pas le lot (trois echecs consecutifs
+  arretent la reprise : le reseau est tombe). Le compte rendu affiche separe ce
+  qui a ete repris de ce qui a echoue, et la tentative suivante reprend le reste.
+- **Visible** : l'onglet Historique porte une carte « Seances de la montre » qui
+  dit ou en est la reprise et propose **Chercher maintenant**.
+
+La montre, elle, garde son propre envoi vers le backend en fin de seance. Le
+lien direct montre <-> telephone par le Wear Data Layer n'est pas utilise ici :
+il exige que les deux applications partagent le meme identifiant de paquet, ce
+que le depot signale comme un choix produit (voir la section « Contrainte de
+paquet et de signature » de `android/README.md`).
+
+## 8. Cardio : ceinture Bluetooth LE
 
 Les telephones n'ont pas de capteur cardio. L'application lit donc une ceinture
 standard (Polar H10, Garmin HRM, Decathlon Dual...) : profil Heart Rate
@@ -124,7 +184,7 @@ capteur integre **et** la source declaree par l'application. Chaque mesure part
 telle quelle dans le moteur, qui la rattache a la seance (zones, derive
 cardiaque, export GPX) — aucun calcul cote Kotlin, comme sur la montre.
 
-## 7. Musique
+## 9. Musique
 
 Meme contrat que la montre (voir [07](07-musique-bpm-et-playlists.md) v2) : le
 moteur decide *quoi* jouer et a *quel tempo*, l'application joue uniquement des
@@ -141,7 +201,7 @@ aucun appel reseau pendant la course. Lire la musique du telephone via
 `MediaStore` (sans `manifest.json`, donc sans BPM) reste une evolution
 possible : le moteur ne choisit alors aucune piste pour un changement de tempo.
 
-## 8. Construction et installation
+## 10. Construction et installation
 
 ```powershell
 # Depuis la racine du depot : coeur Rust + APK du telephone
@@ -156,7 +216,7 @@ adb install -r phone/build/outputs/apk/debug/phone-debug.apk
 L'URL du backend peut etre inscrite dans l'APK
 (`-Pmpacer.apiUrl=https://mpacer.p.zacharie.org`) ou saisie dans l'application.
 
-## 9. Limites connues et verification a faire
+## 11. Limites connues et verification a faire
 
 1. **Aucun essai sur appareil reel** : le code compile et les tests unitaires du
    socle passent (27 tests JVM), mais la seance n'a pas encore ete courue avec un

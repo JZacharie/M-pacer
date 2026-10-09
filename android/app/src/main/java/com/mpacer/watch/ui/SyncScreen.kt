@@ -1,14 +1,7 @@
 package com.mpacer.watch.ui
 
-import com.mpacer.core.ui.GpsLight
-import com.mpacer.core.ui.Palette
-
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -16,26 +9,24 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.wear.compose.material.Button
-import androidx.wear.compose.material.ButtonDefaults
-import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.Text
 import com.mpacer.core.SyncClient
 import com.mpacer.core.SyncPhase
+import com.mpacer.core.ui.Palette
 import kotlinx.coroutines.launch
 
 /**
- * Ecran rond d appairage et de synchronisation.
+ * Ecran d'appairage et de synchronisation.
  *
- * Affiche le code utilisateur a saisir sur la page /link du backend, l etat de la
- * connexion (jeton d appareil present ou non) et le nombre de seances encore locales.
- * Aucune seance n est envoyee automatiquement : l utilisateur declenche l envoi.
+ * L'etat de la connexion est une pastille, pas une phrase : vert connecte,
+ * orange non connecte. Le code d'appairage reste la seule grande valeur de
+ * l'ecran, et les deux commandes sont des lignes a icone -- l'ancien ecran
+ * empilait quatre boutons texte de largeurs differentes.
  */
 @Composable
 fun SyncScreen(onBack: () -> Unit) {
@@ -45,70 +36,79 @@ fun SyncScreen(onBack: () -> Unit) {
 
     LaunchedEffect(Unit) { SyncClient.refresh(context) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text("Synchronisation", fontWeight = FontWeight.Bold)
-        Text(
+    SecondaryScreen(onBack = onBack) {
+        ScreenTitle("Synchronisation")
+        StatusPill(
             text = if (state.paired) "Connecte" else "Non connecte",
             color = if (state.paired) Palette.ok else Palette.orange,
+            icon = if (state.paired) WatchIcons.Check else WatchIcons.Close,
         )
-        Text("En attente : " + state.pending + " seance(s)", textAlign = TextAlign.Center)
+        Text(
+            text = "En attente : " + state.pending + " seance(s)",
+            color = Palette.muted,
+            fontSize = 12.sp,
+            textAlign = TextAlign.Center,
+        )
 
         val pairing = state.pairing
         if (pairing != null) {
-            Text("Code d appairage", textAlign = TextAlign.Center)
-            Text(pairing.userCode, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            SectionTitle("Code d'appairage")
+            Text(
+                text = pairing.userCode,
+                color = Palette.texte,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+            )
             Text(
                 text = "A saisir sur " + pairing.verificationUri,
+                color = Palette.muted,
+                fontSize = 11.sp,
                 textAlign = TextAlign.Center,
             )
         }
 
         state.message?.let { message ->
-            Text(message, textAlign = TextAlign.Center, color = Palette.muted)
+            Text(
+                text = message,
+                color = Palette.muted,
+                fontSize = 11.sp,
+                textAlign = TextAlign.Center,
+            )
         }
+        Spacer(Modifier.height(4.dp))
 
         if (!state.paired) {
-            Chip(
-                label = {
-                    val libelle = when (state.phase) {
-                        SyncPhase.RequestingCode -> "Demande du code..."
-                        SyncPhase.WaitingApproval -> "En attente d approbation..."
-                        else -> "S appairer"
-                    }
-                    Text(libelle)
+            val occupe = state.phase == SyncPhase.RequestingCode || state.phase == SyncPhase.WaitingApproval
+            SettingRow(
+                label = when (state.phase) {
+                    SyncPhase.RequestingCode -> "Demande du code..."
+                    SyncPhase.WaitingApproval -> "Attente d'approbation..."
+                    else -> "S'appairer"
                 },
-                enabled = state.phase != SyncPhase.RequestingCode && state.phase != SyncPhase.WaitingApproval,
                 onClick = {
                     scope.launch {
                         val code = SyncClient.startPairing(context)
                         if (code != null) SyncClient.awaitApproval(context, code)
                     }
                 },
+                selected = true,
+                enabled = !occupe,
+                icon = WatchIcons.Sync,
             )
         } else {
-            Chip(
-                label = { Text(if (state.phase == SyncPhase.Syncing) "Envoi en cours..." else "Synchroniser") },
-                enabled = state.phase != SyncPhase.Syncing,
+            SettingRow(
+                label = if (state.phase == SyncPhase.Syncing) "Envoi en cours..." else "Synchroniser",
                 onClick = { scope.launch { SyncClient.syncPending(context) } },
+                selected = true,
+                enabled = state.phase != SyncPhase.Syncing,
+                icon = WatchIcons.Sync,
             )
-            Chip(
-                label = { Text("Se deconnecter") },
+            SettingRow(
+                label = "Se deconnecter",
                 onClick = { SyncClient.disconnect(context) },
+                icon = WatchIcons.Close,
             )
-        }
-
-        Button(
-            onClick = onBack,
-            colors = ButtonDefaults.secondaryButtonColors(),
-        ) {
-            Text("Retour")
         }
     }
 }

@@ -86,11 +86,37 @@ pub async fn kml_response(state: &AppState, user_id: &str, id: &str) -> AppResul
 /// Partage par l'API (jeton) et l'interface web (session) : c'est exactement le
 /// fichier que `mpacer-music` consomme pour copier l'audio par USB.
 pub async fn manifest_response(state: &AppState, user_id: &str, id: &str) -> AppResult<Response> {
+    manifest_response_inner(state, user_id, id, false).await
+}
+
+/// Manifeste de transfert pret pour l'appareil : `file` et `size_bytes` sont
+/// remplis pour les titres dont les octets sont stockes sur le serveur.
+///
+/// L'appareil ecrit ce fichier tel quel dans son dossier `Music/<playlist>/`,
+/// puis telecharge chaque MP3 de la liste (`GET /api/v1/music/playlists/{id}/files`).
+pub async fn manifest_response_with_files(
+    state: &AppState,
+    user_id: &str,
+    id: &str,
+) -> AppResult<Response> {
+    manifest_response_inner(state, user_id, id, true).await
+}
+
+async fn manifest_response_inner(
+    state: &AppState,
+    user_id: &str,
+    id: &str,
+    with_files: bool,
+) -> AppResult<Response> {
     let playlist = crate::db::get_music_playlist(&state.pool, user_id, id)
         .await?
         .ok_or(AppError::NotFound)?;
     let tracks = crate::db::list_music_tracks(&state.pool, user_id, id).await?;
-    let manifest = crate::models::TransferManifest::from_playlist(&playlist, &tracks);
+    let manifest = if with_files {
+        crate::models::TransferManifest::from_playlist_with_files(&playlist, &tracks)
+    } else {
+        crate::models::TransferManifest::from_playlist(&playlist, &tracks)
+    };
     let body = serde_json::to_string_pretty(&manifest)
         .map_err(|error| AppError::internal(format!("manifeste illisible : {error}")))?;
     Response::builder()

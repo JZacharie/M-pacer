@@ -4,11 +4,11 @@
 //! valeur n'est concatenee dans le SQL, donc aucune injection possible.
 
 use crate::config::Config;
-use crate::friends::{InviteOutcome, MAX_FRIENDS};
+use crate::friends::{InviteOutcome, RequestOutcome, MAX_FRIENDS, MAX_PENDING_REQUESTS};
 use crate::models::{
-    ApiToken, DeezerAccount, FriendRow, ImportedRaceMeta, LiveDeviceRow, MusicPlaylist,
-    MusicPlaylistInput, MusicPlaylistSummary, MusicTrack, MusicTrackInput, Race, RaceInput,
-    RaceTask, User, WorkoutRow,
+    ApiToken, DeezerAccount, FriendRequestRow, FriendRow, ImportedRaceMeta, LiveDeviceRow,
+    MusicPlaylist, MusicPlaylistInput, MusicPlaylistSummary, MusicTrack, MusicTrackInput, Race,
+    RaceInput, RaceTask, User, UserCard, WorkoutRow,
 };
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{PgPool, Row};
@@ -33,6 +33,8 @@ const SCHEMA_FRIENDS: &str = include_str!("../migrations/0007-amis.sql");
 const SCHEMA_DEEZER_ARL: &str = include_str!("../migrations/0008-deezer-arl.sql");
 /// Deezer seule source externe : retrait des tables et colonnes de l'ancienne source.
 const SCHEMA_DEEZER_ONLY: &str = include_str!("../migrations/0009-source-unique-deezer.sql");
+/// Demandes d'amitie : l'amitie nait quand la personne visee accepte.
+const SCHEMA_FRIEND_REQUESTS: &str = include_str!("../migrations/0010-demandes-amis.sql");
 
 /// Ouvre le pool et applique le schema (idempotent).
 pub async fn connect(config: &Config) -> anyhow::Result<PgPool> {
@@ -56,6 +58,7 @@ pub async fn connect_with_options(options: PgConnectOptions) -> anyhow::Result<P
     sqlx::raw_sql(SCHEMA_FRIENDS).execute(&pool).await?;
     sqlx::raw_sql(SCHEMA_DEEZER_ARL).execute(&pool).await?;
     sqlx::raw_sql(SCHEMA_DEEZER_ONLY).execute(&pool).await?;
+    sqlx::raw_sql(SCHEMA_FRIEND_REQUESTS).execute(&pool).await?;
     Ok(pool)
 }
 
@@ -1098,8 +1101,120 @@ pub async fn set_music_track_bpm(
     Ok(result.rows_affected() > 0)
 }
 
+// ------------------------------------------------- stockage temporaire audio
+
+/// Octets audio stockes par un compte : base du quota (MPACER_MEDIA_QUOTA_BYTES).
+pub async fn music_storage_bytes(pool: &PgPool, user_id: &str) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(SUM(size_bytes), 0)::bigint FROM music_tracks
+          WHERE user_id = $1 AND storage_path IS NOT NULL",
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+}
+
+/// Enregistre les octets d'un MP3 televerse sur un titre.
+///
+/// La piste est identifiee par (playlist, id) : l'appelant a deja verifie
+/// l'appartenance a l'utilisateur. Un nouvel envoi remplace l'ancien et
+/// annule l'ancien acquittement (la montre devra retelecharger).
+#[allow(clippy::too_many_arguments)]
+pub async fn set_music_track_storage(
+    pool: &PgPool,
+    user_id: &str,
+    playlist_id: &str,
+    track_id: &str,
+    mime: &str,
+    size_bytes: i64,
+    storage_path: &str,
+    now_ms: i64,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE music_tracks
+            SET mime = $1, size_bytes = $2, storage_path = $3, downloaded_at_ms = NULL
+          WHERE id = $4 AND user_id = $5 AND playlist_id = $6",
+    )
+    .bind(mime)
+    .bind(size_bytes)
+    .bind(storage_path)
+    .bind(track_id)
+    .bind(user_id)
+    .bind(playlist_id)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() > 0 {
+        touch_music_playlist(pool, user_id, playlist_id, now_ms).await?;
+    }
+    Ok(result.rows_affected() > 0)
+}
+
+/// Titres d'une playlist dont les octets sont presents sur le serveur.
+pub async fn list_stored_music_tracks(
+    pool: &PgPool,
+    user_id: &str,
+    playlist_id: &str,
+) -> Result<Vec<MusicTrack>, sqlx::Error> {
+    sqlx::query_as::<_, MusicTrack>(
+        "SELECT * FROM music_tracks
+          WHERE user_id = $1 AND playlist_id = $2 AND storage_path IS NOT NULL
+          ORDER BY position ASC, created_at_ms ASC, id ASC",
+    )
+    .bind(user_id)
+    .bind(playlist_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Titres stockes parmi une liste d'identifiants (prepare l'acquittement).
+pub async fn stored_music_tracks_by_ids(
+    pool: &PgPool,
+    user_id: &str,
+    playlist_id: &str,
+    track_ids: &[String],
+) -> Result<Vec<MusicTrack>, sqlx::Error> {
+    sqlx::query_as::<_, MusicTrack>(
+        "SELECT * FROM music_tracks
+          WHERE user_id = $1 AND playlist_id = $2 AND id = ANY($3)
+            AND storage_path IS NOT NULL",
+    )
+    .bind(user_id)
+    .bind(playlist_id)
+    .bind(track_ids)
+    .fetch_all(pool)
+    .await
+}
+
+/// Acquitte des titres : le fichier peut partir, la fiche reste.
+///
+/// L'appareil appelle cette route apres avoir ecrit le MP3 sur son disque ; le
+/// serveur efface alors le chemin, la taille et le type MIME (l'audio n'a plus
+/// de raison de rester) et horodate le telechargement.
+pub async fn ack_music_tracks(
+    pool: &PgPool,
+    user_id: &str,
+    playlist_id: &str,
+    track_ids: &[String],
+    now_ms: i64,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE music_tracks
+            SET mime = NULL, size_bytes = NULL, storage_path = NULL, downloaded_at_ms = $1
+          WHERE user_id = $2 AND playlist_id = $3 AND id = ANY($4)
+            AND storage_path IS NOT NULL",
+    )
+    .bind(now_ms)
+    .bind(user_id)
+    .bind(playlist_id)
+    .bind(track_ids)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 // La table music_download_plans (plan de telechargement v1) n'est plus lue ni
-// ecrite : le transfert passe par le manifeste et l'outil local mpacer-music.
+// ecrite : le transfert passe par le manifeste, l'outil local mpacer-music ou le
+// depot direct dans music_tracks.storage_path.
 
 // ------------------------------------------------------------------ comptes Deezer
 
@@ -1660,6 +1775,336 @@ pub async fn accept_friend_invite(
 
     tx.commit().await?;
     Ok(InviteOutcome::Accepted(Box::new(ami)))
+}
+
+// ------------------------------------------------------- demandes d'amitie
+
+/// Selection commune d'une demande, avec la fiche des deux comptes.
+const REQUEST_SELECT: &str = "SELECT r.id, r.from_user_id, r.to_user_id, r.message,
+        r.created_at_ms,
+        f.name AS from_name, f.email AS from_email,
+        f.picture_url AS from_picture_url,
+        t.name AS to_name, t.email AS to_email,
+        t.picture_url AS to_picture_url
+   FROM friend_requests r
+   JOIN users f ON f.id = r.from_user_id
+   JOIN users t ON t.id = r.to_user_id";
+
+/// Fiche minimale d'un compte, par son identifiant.
+pub async fn user_card(pool: &PgPool, user_id: &str) -> Result<Option<UserCard>, sqlx::Error> {
+    sqlx::query_as::<_, UserCard>("SELECT id, name, email, picture_url FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+}
+
+/// Compte portant cette adresse (comparaison insensible a la casse).
+///
+/// L'adresse est l'identite d'un compte M-pacer : on ajoute un ami par ce qu'il
+/// est, jamais par le nom d'une montre ou d'un appareil.
+pub async fn user_card_by_email(
+    pool: &PgPool,
+    email: &str,
+) -> Result<Option<UserCard>, sqlx::Error> {
+    sqlx::query_as::<_, UserCard>(
+        "SELECT id, name, email, picture_url FROM users
+          WHERE LOWER(email) = LOWER($1)
+          ORDER BY created_at_ms LIMIT 1",
+    )
+    .bind(email)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Recherche par adresse ou par nom, hors de son propre compte.
+///
+/// Le motif vient de friends::like_pattern : les jokers saisis par l'utilisateur
+/// ne sont pas interpretes comme des jokers.
+pub async fn search_users(
+    pool: &PgPool,
+    motif: &str,
+    exclude_id: &str,
+    limit: i64,
+) -> Result<Vec<UserCard>, sqlx::Error> {
+    sqlx::query_as::<_, UserCard>(
+        "SELECT id, name, email, picture_url FROM users
+          WHERE id <> $1
+            AND (email ILIKE $2 ESCAPE '\\'
+                 OR COALESCE(name, '') ILIKE $2 ESCAPE '\\')
+          ORDER BY email
+          LIMIT $3",
+    )
+    .bind(exclude_id)
+    .bind(motif)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+/// Demandes recues, de la plus recente a la plus ancienne.
+pub async fn incoming_friend_requests(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<Vec<FriendRequestRow>, sqlx::Error> {
+    sqlx::query_as::<_, FriendRequestRow>(&format!(
+        "{REQUEST_SELECT} WHERE r.to_user_id = $1 ORDER BY r.created_at_ms DESC"
+    ))
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Demandes envoyees, en attente de reponse.
+pub async fn outgoing_friend_requests(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<Vec<FriendRequestRow>, sqlx::Error> {
+    sqlx::query_as::<_, FriendRequestRow>(&format!(
+        "{REQUEST_SELECT} WHERE r.from_user_id = $1 ORDER BY r.created_at_ms DESC"
+    ))
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// Nombre de demandes recues en attente (pastille de l'interface).
+pub async fn count_incoming_friend_requests(
+    pool: &PgPool,
+    user_id: &str,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT COUNT(*)::bigint FROM friend_requests WHERE to_user_id = $1")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+}
+
+/// Vrai si une demande attend dans ce sens (de a vers b).
+pub async fn friend_request_between(pool: &PgPool, a: &str, b: &str) -> Result<bool, sqlx::Error> {
+    let existe: Option<i32> = sqlx::query_scalar(
+        "SELECT 1 FROM friend_requests WHERE from_user_id = $1 AND to_user_id = $2",
+    )
+    .bind(a)
+    .bind(b)
+    .fetch_optional(pool)
+    .await?;
+    Ok(existe.is_some())
+}
+
+/// Envoie une demande d'amitie : l'amitie n'existe qu'apres acceptation.
+///
+/// Tout se joue dans une transaction : les bornes (cercle plein, trop de
+/// demandes) sont verifiees avant l'ecriture, et une demande reciproque deja
+/// recue vaut acceptation immediate, ce qui evite deux demandes qui se croisent.
+pub async fn send_friend_request(
+    pool: &PgPool,
+    from: &UserCard,
+    to: &UserCard,
+    message: Option<&str>,
+    now_ms: i64,
+) -> Result<RequestOutcome, sqlx::Error> {
+    if from.id == to.id {
+        return Ok(RequestOutcome::SelfRequest);
+    }
+    let mut tx = pool.begin().await?;
+
+    let deja_amis: Option<i32> =
+        sqlx::query_scalar("SELECT 1 FROM friendships WHERE user_id = $1 AND friend_id = $2")
+            .bind(&from.id)
+            .bind(&to.id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if deja_amis.is_some() {
+        tx.rollback().await?;
+        return Ok(RequestOutcome::AlreadyFriends);
+    }
+
+    let identique: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM friend_requests WHERE from_user_id = $1 AND to_user_id = $2",
+    )
+    .bind(&from.id)
+    .bind(&to.id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if identique.is_some() {
+        tx.rollback().await?;
+        return Ok(RequestOutcome::AlreadySent);
+    }
+
+    // L'autre avait deja demande : demander en retour, c'est accepter.
+    let reciproque: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM friend_requests WHERE from_user_id = $1 AND to_user_id = $2 FOR UPDATE",
+    )
+    .bind(&to.id)
+    .bind(&from.id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if reciproque.is_some() {
+        add_friendship_tx(&mut tx, &from.id, &to.id, now_ms).await?;
+        delete_friend_requests_tx(&mut tx, &from.id, &to.id).await?;
+        let ami = friend_row_tx(&mut tx, &from.id, &to.id).await?;
+        tx.commit().await?;
+        return Ok(RequestOutcome::AlreadyIncoming(Box::new(ami)));
+    }
+
+    let total_expediteur: i64 =
+        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM friendships WHERE user_id = $1")
+            .bind(&from.id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if total_expediteur >= MAX_FRIENDS {
+        tx.rollback().await?;
+        return Ok(RequestOutcome::TooMany);
+    }
+
+    let total_destinataire: i64 =
+        sqlx::query_scalar("SELECT COUNT(*)::bigint FROM friend_requests WHERE to_user_id = $1")
+            .bind(&to.id)
+            .fetch_one(&mut *tx)
+            .await?;
+    if total_destinataire >= MAX_PENDING_REQUESTS {
+        tx.rollback().await?;
+        return Ok(RequestOutcome::TooManyPending);
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    let insere = sqlx::query(
+        "INSERT INTO friend_requests (id, from_user_id, to_user_id, message, created_at_ms)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (from_user_id, to_user_id) DO NOTHING",
+    )
+    .bind(&id)
+    .bind(&from.id)
+    .bind(&to.id)
+    .bind(message)
+    .bind(now_ms)
+    .execute(&mut *tx)
+    .await?;
+    if insere.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(RequestOutcome::AlreadySent);
+    }
+    tx.commit().await?;
+
+    let row = FriendRequestRow {
+        id,
+        from_user_id: from.id.clone(),
+        to_user_id: to.id.clone(),
+        message: message.map(str::to_string),
+        created_at_ms: now_ms,
+        from_name: from.name.clone(),
+        from_email: from.email.clone(),
+        from_picture_url: from.picture_url.clone(),
+        to_name: to.name.clone(),
+        to_email: to.email.clone(),
+        to_picture_url: to.picture_url.clone(),
+    };
+    Ok(RequestOutcome::Sent(Box::new(
+        crate::friends::FriendRequestView::from_row(&row, &from.id),
+    )))
+}
+
+/// Accepte une demande recue : l'amitie est creee dans les deux sens.
+///
+/// Renvoie la fiche du nouvel ami, ou None si la demande n'existe pas ou n'est
+/// pas adressee a ce compte (elle a peut-etre deja ete acceptee ailleurs).
+pub async fn accept_friend_request(
+    pool: &PgPool,
+    request_id: &str,
+    user_id: &str,
+    now_ms: i64,
+) -> Result<Option<FriendRow>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let demandeur: Option<String> = sqlx::query_scalar(
+        "SELECT from_user_id FROM friend_requests
+          WHERE id = $1 AND to_user_id = $2
+          FOR UPDATE",
+    )
+    .bind(request_id)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(demandeur) = demandeur else {
+        tx.rollback().await?;
+        return Ok(None);
+    };
+
+    add_friendship_tx(&mut tx, &demandeur, user_id, now_ms).await?;
+    delete_friend_requests_tx(&mut tx, &demandeur, user_id).await?;
+    let ami = friend_row_tx(&mut tx, user_id, &demandeur).await?;
+    tx.commit().await?;
+    Ok(Some(ami))
+}
+
+/// Refuse une demande recue : elle disparait, rien d'autre ne change.
+pub async fn decline_friend_request(
+    pool: &PgPool,
+    request_id: &str,
+    user_id: &str,
+) -> Result<bool, sqlx::Error> {
+    let resultat = sqlx::query("DELETE FROM friend_requests WHERE id = $1 AND to_user_id = $2")
+        .bind(request_id)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(resultat.rows_affected() > 0)
+}
+
+/// Amitie dans les deux sens, dans une transaction deja ouverte.
+async fn add_friendship_tx(
+    tx: &mut sqlx::PgConnection,
+    a: &str,
+    b: &str,
+    now_ms: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO friendships (user_id, friend_id, created_at_ms)
+         VALUES ($1, $2, $3), ($2, $1, $3)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(a)
+    .bind(b)
+    .bind(now_ms)
+    .execute(tx)
+    .await?;
+    Ok(())
+}
+
+/// Efface les demandes en attente entre deux comptes, dans les deux sens.
+async fn delete_friend_requests_tx(
+    tx: &mut sqlx::PgConnection,
+    a: &str,
+    b: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM friend_requests
+          WHERE (from_user_id = $1 AND to_user_id = $2)
+             OR (from_user_id = $2 AND to_user_id = $1)",
+    )
+    .bind(a)
+    .bind(b)
+    .execute(tx)
+    .await?;
+    Ok(())
+}
+
+/// Fiche d'un ami vue par user_id, dans une transaction deja ouverte.
+async fn friend_row_tx(
+    tx: &mut sqlx::PgConnection,
+    user_id: &str,
+    friend_id: &str,
+) -> Result<FriendRow, sqlx::Error> {
+    sqlx::query_as::<_, FriendRow>(
+        "SELECT u.id, u.name, u.email, u.picture_url, u.share_live,
+                f.created_at_ms AS since_ms
+           FROM friendships f
+           JOIN users u ON u.id = f.friend_id
+          WHERE f.user_id = $1 AND f.friend_id = $2",
+    )
+    .bind(user_id)
+    .bind(friend_id)
+    .fetch_one(tx)
+    .await
 }
 
 /// Revendique un appareil pour le partage en direct.

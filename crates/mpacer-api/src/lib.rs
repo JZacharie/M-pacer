@@ -30,6 +30,7 @@ pub mod error;
 pub mod finishers;
 pub mod friends;
 pub mod live;
+pub mod media;
 pub mod models;
 pub mod mqtt;
 pub mod race_import;

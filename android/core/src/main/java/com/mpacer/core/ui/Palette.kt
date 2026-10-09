@@ -37,6 +37,21 @@ object Palette {
     val attention = Color(0xFFF7B955)
     val danger = Color(0xFFFF5A5F)
 
+    /**
+     * Surface surelevee : un rond de commande pose sur l'encre, un cran plus
+     * clair que [surface2]. Trois niveaux suffisent a la montre, pas un de plus.
+     */
+    val surface3 = Color(0xFF262C36)
+
+    /** Filet de separation : presque invisible, juste de quoi detacher un bloc. */
+    val filet = Color(0x1FFFFFFF)
+
+    /**
+     * Fond d'une pastille d'etat : la couleur est diluee sur l'encre plutot que
+     * posee pleine, pour que le texte garde sa lisibilite.
+     */
+    fun pastille(couleur: Color, alpha: Float = 0.16f): Color = couleur.copy(alpha = alpha)
+
     // Zones de frequence cardiaque : bleu en endurance, rouge au seuil. Meme
     // convention que les montres et que la page d'analyse du backend.
     private val zone1 = Color(0xFF38BDF8)

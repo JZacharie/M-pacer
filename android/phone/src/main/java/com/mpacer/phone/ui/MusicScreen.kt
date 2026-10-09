@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mpacer.core.music.LocalPlaylist
+import com.mpacer.core.music.MusicDownloader
 import com.mpacer.core.music.MusicLibrary
 import com.mpacer.core.music.MusicPlayer
 import com.mpacer.core.music.MusicSession
@@ -47,6 +48,7 @@ fun MusicScreen() {
     val scope = rememberCoroutineScope()
     val library by MusicLibrary.state.collectAsState()
     val player by MusicPlayer.state.collectAsState()
+    val telechargement by MusicDownloader.state.collectAsState()
 
     LaunchedEffect(Unit) {
         MusicPlayer.prepare(context)
@@ -113,6 +115,32 @@ fun MusicScreen() {
                 fontSize = 11.sp,
             )
         }
+
+        // Depot Wi-Fi (docs/16) : recupere les MP3 deposes sur la page /music,
+        // puis acquitte chaque piste pour liberer le serveur.
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Button(
+                onClick = { MusicDownloader.syncInBackground(context) },
+                enabled = !telechargement.busy,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Palette.surface2,
+                    contentColor = Palette.texte,
+                ),
+            ) {
+                Text(if (telechargement.busy) "Telechargement..." else "Telecharger (serveur)")
+            }
+            if (telechargement.busy && telechargement.total > 0) {
+                Text(
+                    telechargement.current.toString() + "/" + telechargement.total + "  " +
+                        (telechargement.bytes / (1024 * 1024)) + " Mo",
+                    color = Palette.muted,
+                    fontSize = 11.sp,
+                )
+            }
+        }
+        telechargement.message
+            ?.takeIf { telechargement.busy || it != "Aucun fichier a telecharger" }
+            ?.let { Text(it, color = Palette.muted, fontSize = 13.sp) }
 
         library.message?.let { Text(it, color = Palette.muted, fontSize = 13.sp) }
 

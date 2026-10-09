@@ -72,6 +72,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Reprise automatique des seances du compte.
+     *
+     * Une course faite avec la montre part au backend des la fin de la seance ;
+     * ici, le telephone la reprend. Le declencheur est le retour au premier plan
+     * (lancement, retour d'arriere-plan), pas une minuterie : rien ne tourne en
+     * veille, et un appareil non appaire ne fait aucune requete.
+     */
+    override fun onStart() {
+        super.onStart()
+        SyncClient.pullInBackground(this)
+    }
+
     override fun onDestroy() {
         VoiceCoach.shutdown()
         super.onDestroy()

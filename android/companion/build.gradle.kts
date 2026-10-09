@@ -34,7 +34,10 @@ android {
         versionCode = 2
         versionName = "0.2.0"
 
-        buildConfigField("String", "DEFAULT_API_URL", "\"http://10.0.2.2:8080\"")
+        // Meme propriete Gradle que le coeur, pour pouvoir viser un backend precis :
+        //   ./gradlew assembleDebug -Pmpacer.apiUrl=https://mpacer.p.zacharie.org
+        val apiUrlDefaut = (findProperty("mpacer.apiUrl") as String?) ?: "http://10.0.2.2:8080"
+        buildConfigField("String", "DEFAULT_API_URL", "\"$apiUrlDefaut\"")
         buildConfigField("String", "WATCH_PACKAGE", "\"com.mpacer.watch\"")
         buildConfigField("String", "DEVICE_LABEL", "\"Telephone M-pacer\"")
     }

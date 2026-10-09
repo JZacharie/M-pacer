@@ -1,22 +1,15 @@
 package com.mpacer.watch.ui
 
-import com.mpacer.core.ui.GpsLight
-import com.mpacer.core.ui.Palette
-
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,20 +31,18 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.wear.compose.material.Button
-import androidx.wear.compose.material.Chip
-import androidx.wear.compose.material.ChipDefaults
 import androidx.wear.compose.material.Text
 import com.mpacer.core.live.LiveConfig
 import com.mpacer.core.live.LiveSettings
 import com.mpacer.core.live.LiveState
 import com.mpacer.core.live.ProbeState
+import com.mpacer.core.ui.Palette
 
 /**
  * Parametres du suivi en direct (MQTT), saisis **depuis la montre**.
  *
  * Historiquement l'adresse du broker ne se reglait qu'en ligne de commande
- * (`adb shell am start --es mqtt_url ...`) : ce n'est pas utilisable une fois la
+ * (adb shell am start --es mqtt_url ...) : ce n'est pas utilisable une fois la
  * montre au poignet. Cet ecran ouvre un clavier Wear pour l'adresse, les
  * identifiants, le sujet et la cadence, avec deux garde-fous :
  *
@@ -60,8 +51,8 @@ import com.mpacer.core.live.ProbeState
  *  * **Enregistrer** (ou Retour) persiste les reglages dans
  *    EncryptedSharedPreferences : le mot de passe n'est jamais ecrit en clair.
  *
- * Les reglages prennent effet a la prochaine seance : la seance en cours garde
- * la configuration avec laquelle elle a demarre.
+ * La cadence suit le principe de l'ecran Reglages : une ligne qui affiche la
+ * valeur courante et la fait tourner, plutot que quatre puces par cadence.
  */
 @Composable
 fun LiveSettingsScreen(
@@ -83,25 +74,28 @@ fun LiveSettingsScreen(
     // Sujet reellement publie : <prefixe>/live/<montre>, montre = ANDROID_ID a defaut.
     val montreId = remember { LiveSettings.deviceId(contexte) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(5.dp),
+    SecondaryScreen(
+        onBack = {
+            clavier?.hide()
+            focus.clearFocus()
+            // Retour : on enregistre, pour ne pas perdre une saisie faite au clavier.
+            onSave(brouillon)
+            onBack()
+        },
     ) {
-        Text("Suivi en direct", fontSize = 14.sp)
-        Text(liveState.resume, fontSize = 11.sp, color = Palette.muted, textAlign = TextAlign.Center)
+        ScreenTitle("Suivi en direct")
+        Text(
+            text = liveState.resume,
+            color = Palette.muted,
+            fontSize = 11.sp,
+            textAlign = TextAlign.Center,
+        )
 
-        Chip(
-            label = { Text(if (brouillon.enabled) "MQTT : active" else "MQTT : coupe") },
+        SettingRow(
+            label = if (brouillon.enabled) "MQTT actif" else "MQTT coupe",
             onClick = { brouillon = brouillon.copy(enabled = !brouillon.enabled) },
-            colors = if (brouillon.enabled) {
-                ChipDefaults.primaryChipColors()
-            } else {
-                ChipDefaults.secondaryChipColors()
-            },
+            selected = brouillon.enabled,
+            icon = WatchIcons.Location,
         )
 
         Champ(
@@ -111,15 +105,16 @@ fun LiveSettingsScreen(
             typeClavier = KeyboardType.Uri,
             onValeur = { brouillon = brouillon.copy(url = it) },
         )
-        Chip(
-            label = { Text("Coller l'adresse") },
+        SettingRow(
+            label = "Coller l'adresse",
             onClick = {
                 val colle = pressePapiers.getText()?.text?.trim().orEmpty()
                 if (colle.isNotBlank()) brouillon = brouillon.copy(url = colle)
             },
+            icon = WatchIcons.Sync,
         )
 
-        Text("Identifiants (facultatifs)", fontSize = 11.sp, color = Palette.muted)
+        SectionTitle("Identifiants (facultatifs)")
         Champ(
             label = "Utilisateur",
             valeur = brouillon.username,
@@ -132,7 +127,7 @@ fun LiveSettingsScreen(
             onValeur = { brouillon = brouillon.copy(password = it) },
         )
 
-        Text("Sujet publie", fontSize = 11.sp, color = Palette.muted)
+        SectionTitle("Sujet publie")
         Champ(
             label = "Prefixe",
             valeur = brouillon.topicPrefix,
@@ -145,73 +140,60 @@ fun LiveSettingsScreen(
             indice = "identifiant de la montre",
             onValeur = { brouillon = brouillon.copy(device = it) },
         )
-        Text("Publie sur " + brouillon.topic(montreId), fontSize = 10.sp, color = Palette.muted2)
-
-        Text("Cadence en course", fontSize = 11.sp, color = Palette.muted)
-        LiveConfig.INTERVALS.forEach { secondes ->
-            Chip(
-                label = { Text("Toutes les " + secondes + " s") },
-                onClick = { brouillon = brouillon.copy(intervalS = secondes) },
-                colors = if (brouillon.intervalS == secondes) {
-                    ChipDefaults.primaryChipColors()
-                } else {
-                    ChipDefaults.secondaryChipColors()
-                },
-            )
-        }
-        Text("Cadence en pause", fontSize = 11.sp, color = Palette.muted)
-        PAUSED_INTERVALS.forEach { secondes ->
-            Chip(
-                label = { Text("Toutes les " + secondes + " s") },
-                onClick = { brouillon = brouillon.copy(pausedIntervalS = secondes) },
-                colors = if (brouillon.pausedIntervalS == secondes) {
-                    ChipDefaults.primaryChipColors()
-                } else {
-                    ChipDefaults.secondaryChipColors()
-                },
-            )
-        }
-        Chip(
-            label = {
-                Text(
-                    if (brouillon.retain) {
-                        "Dernier point conserve"
-                    } else {
-                        "Dernier point non conserve"
-                    }
-                )
-            },
-            onClick = { brouillon = brouillon.copy(retain = !brouillon.retain) },
-            colors = if (brouillon.retain) {
-                ChipDefaults.primaryChipColors()
-            } else {
-                ChipDefaults.secondaryChipColors()
-            },
+        Text(
+            text = "Publie sur " + brouillon.topic(montreId),
+            color = Palette.muted2,
+            fontSize = 10.sp,
+            textAlign = TextAlign.Center,
         )
 
-        Chip(
-            label = { Text(if (probeState.running) "Test en cours..." else "Tester la connexion") },
+        SectionTitle("Cadence")
+        SettingRow(
+            label = "En course : " + brouillon.intervalS + " s",
+            onClick = {
+                brouillon = brouillon.copy(
+                    intervalS = suivant(LiveConfig.INTERVALS, brouillon.intervalS)
+                )
+            },
+        )
+        SettingRow(
+            label = "En pause : " + brouillon.pausedIntervalS + " s",
+            onClick = {
+                brouillon = brouillon.copy(
+                    pausedIntervalS = suivant(PAUSED_INTERVALS, brouillon.pausedIntervalS)
+                )
+            },
+        )
+        SettingRow(
+            label = if (brouillon.retain) "Dernier point conserve" else "Dernier point non conserve",
+            onClick = { brouillon = brouillon.copy(retain = !brouillon.retain) },
+            selected = brouillon.retain,
+        )
+
+        SectionTitle("Verification")
+        SettingRow(
+            label = if (probeState.running) "Test en cours..." else "Tester la connexion",
             onClick = {
                 clavier?.hide()
                 focus.clearFocus()
                 confirmation = null
                 onTest(brouillon)
             },
-            colors = ChipDefaults.secondaryChipColors(),
+            enabled = !probeState.running,
+            icon = WatchIcons.Sync,
         )
         Text(
-            probeState.message,
-            fontSize = 10.sp,
+            text = probeState.message,
             color = when {
                 probeState.running -> Palette.muted
                 probeState.ok -> Palette.ok
                 else -> Palette.attention
             },
+            fontSize = 10.sp,
             textAlign = TextAlign.Center,
         )
-
-        Chip(
-            label = { Text("Enregistrer") },
+        SettingRow(
+            label = "Enregistrer",
             onClick = {
                 clavier?.hide()
                 focus.clearFocus()
@@ -222,21 +204,26 @@ fun LiveSettingsScreen(
                     "Enregistre : suivi inactif sans adresse"
                 }
             },
+            selected = true,
+            icon = WatchIcons.Check,
         )
-        confirmation?.let { Text(it, fontSize = 10.sp, color = Palette.ok, textAlign = TextAlign.Center) }
-
-        Button(onClick = {
-            clavier?.hide()
-            focus.clearFocus()
-            // Retour : on enregistre, pour ne pas perdre une saisie faite au clavier.
-            onSave(brouillon)
-            onBack()
-        }) { Text("Retour") }
+        confirmation?.let {
+            Text(
+                text = it,
+                color = Palette.ok,
+                fontSize = 10.sp,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }
 
 /** Valeurs proposees pour la cadence en pause (la montre ne bouge plus). */
 private val PAUSED_INTERVALS = listOf(30, 60, 120, 300)
+
+/** Valeur suivante dans une liste finie : le dernier retourne au premier. */
+private fun <T> suivant(valeurs: List<T>, courant: T): T =
+    valeurs[(valeurs.indexOf(courant) + 1).mod(valeurs.size)]
 
 /**
  * Champ de saisie adapte a un ecran rond : Wear Compose Material 1.4 ne fournit
@@ -256,13 +243,13 @@ private fun Champ(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.Start,
     ) {
-        Text(label, fontSize = 11.sp, color = Palette.muted)
+        Text(label, color = Palette.muted, fontSize = 11.sp)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(9.dp))
                 .background(Palette.surface2)
-                .border(1.dp, Palette.surface, RoundedCornerShape(9.dp))
+                .border(1.dp, Palette.filet, RoundedCornerShape(9.dp))
                 .padding(horizontal = 9.dp, vertical = 7.dp),
         ) {
             BasicTextField(
@@ -284,7 +271,7 @@ private fun Champ(
                 keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
                 decorationBox = { interieur ->
                     if (valeur.isEmpty() && indice.isNotEmpty()) {
-                        Text(indice, fontSize = 13.sp, color = Palette.muted2, maxLines = 1)
+                        Text(indice, color = Palette.muted2, fontSize = 13.sp, maxLines = 1)
                     }
                     interieur()
                 },

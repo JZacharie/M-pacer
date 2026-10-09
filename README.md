@@ -23,10 +23,10 @@ avec vos séances synchronisées.
 |---|---|---|
 | **Cœur Rust** — [`crates/mpacer-core/`](crates/mpacer-core/) | Allure lissée 2 min, tours, machine à états de séance, assistant (4 modes) et shadow runner, cardio, voix FR/EN, analyse de séance, musique et tempo, GPX, format `.pac` | **Fait, testé** (182 tests) |
 | **Montre Wear OS** — [`android/app/`](android/app/) | GPS 1 Hz, fréquence cardiaque, écran rond, service de premier plan, voix, archive locale, synchronisation | **APK construit** ; validation terrain à faire |
-| **Course au téléphone** — [`android/phone/`](android/phone/) | Courir avec le téléphone seul : GPS 1 Hz, ceinture cardiaque Bluetooth LE, voix, musique, suivi MQTT, **onglet Amis (position des proches sur carte OpenStreetMap)**, archive et synchronisation — sur le même socle [`android/core/`](android/core/) que la montre | **APK construit** ; validation terrain à faire |
+| **Course au téléphone** — [`android/phone/`](android/phone/) | Courir avec le téléphone seul : GPS 1 Hz, ceinture cardiaque Bluetooth LE, voix, musique, suivi MQTT, **onglet Amis (recherche de compte, demandes validées par l'ami, photo de profil et position des proches sur carte OpenStreetMap)**, archive et synchronisation — sur le même socle [`android/core/`](android/core/) que la montre | **APK construit** ; validation terrain à faire |
 | **Application téléphone d'appoint** — [`android/companion/`](android/companion/) | Connexion au backend, liste et détail des séances, import, envoi vers la montre (Data Layer) | **APK construit** ; à valider sur appareils réels |
 | **Montre Garmin** — [`garmin/`](garmin/) | Portage Connect IQ (Monkey C) du même cœur : GPS, cardio, FIT, vibrations, synchronisation identique | **Compilé** (SDK Connect IQ 9.2.0) ; à valider |
-| **Backend et site** — [`crates/mpacer-api/`](crates/mpacer-api/) | API JSON, OAuth Google, appairage montre, interface web (séances, analyse, tableaux de bord, courses, musique, suivi en direct, **amis et partage de position sur carte OpenStreetMap**) | **Fait, testé** |
+| **Backend et site** — [`crates/mpacer-api/`](crates/mpacer-api/) | API JSON, OAuth Google, appairage montre, interface web (séances, analyse, tableaux de bord, courses, musique, suivi en direct, **amis (demandes validées par l'autre compte) et partage de position sur carte OpenStreetMap**) | **Fait, testé** |
 | **Outils** — `mpacer-sim`, `mpacer-music` | Simulateur de séance ; appariement des MP3 et copie sur la montre par USB | **Fait, testé** |
 | **Déploiement** — [`charts/`](charts/), [`deploy/`](deploy/) | Chart Helm (application, PostgreSQL CloudNativePG, ingress, TLS), image conteneur, CI GitHub Actions | **Chart validé** ; déploiement sur jo3 en cours |
 
@@ -135,13 +135,17 @@ cargo run -p mpacer-sim -- --mode plan --distance 10000 --time 3000 --music
 ### Backend en local
 
 ```bash
-# Un PostgreSQL local (conteneur), puis :
-export MPACER_DATABASE_URL="postgresql://mpacer:mpacer@127.0.0.1:5432/mpacer?sslmode=disable"
-export MPACER_DEV_AUTH=1 MPACER_PUBLIC_URL=http://localhost:8080
-cargo run -p mpacer-api
+pwsh ./local-db.ps1 -Action Start      # démarre PostgreSQL et affiche les URL à exporter
+pwsh ./local-db.ps1 -Action Run        # lance mpacer-api en mode dev (auth simulée)
 # http://localhost:8080 → « Continuer avec Google » ;
 # avec MPACER_DEV_AUTH=1, POST /auth/dev-login ouvre une session de test.
 ```
+
+`local-db.ps1` démarre un conteneur PostgreSQL (Podman) avec deux bases — `mpacer` pour le
+développement, `mpacer_test` pour les tests d'intégration — et corrige au passage les règles
+de transfert nftables de la machine Podman. Il affiche les URL à exporter : sur certaines
+installations, le relais de ports WSL ne publie pas les conteneurs sur `127.0.0.1`, donc
+préférez toujours les valeurs qu'il imprime plutôt qu'une adresse écrite en dur.
 
 Les secrets locaux (base, broker MQTT…) se rangent dans un `.env` **non versionné** :
 copier le gabarit [`.env.example`](.env.example) puis renseigner les valeurs.
@@ -157,6 +161,10 @@ saisir le code d'appairage affiché sur `http://localhost:8080/link`, la séance
 **Tester le backend contre un PostgreSQL** (`MPACER_TEST_DATABASE_URL`) ou contre un vrai
 broker MQTT (`MPACER_MQTT_TEST_URL`) : voir `crates/mpacer-api/tests/`.
 
+```bash
+pwsh ./local-db.ps1 -Action Tests      # tests d'intégration contre la base locale
+```
+
 ### Montres et téléphone
 
 ```bash
@@ -167,7 +175,24 @@ pwsh ./local-ci.ps1 -Install           # compile et installe sur la montre branc
 adb install -r android/phone/build/outputs/apk/debug/phone-debug.apk
 ```
 
+La montre Wear OS se pilote aussi directement : `pwsh ./local-watch.ps1` affiche son état
+(modèle, stockage, applications, mémoire, batterie, animations) ; `-Backup` rapatrie l'archive
+des séances via `run-as` en flux `tar` ; `-Clean` libère les caches et rend l'interface plus
+réactive ; `-Uninstall` ne retire que les paquets que vous nommez explicitement.
+
+Sans montre sous la main, un émulateur Wear OS suffit pour valider une compilation :
+
+```bash
+avdmanager create avd -n mpacer-wear -k "system-images;android-34;android-wear;x86_64" -d wearos_small_round
+emulator -avd mpacer-wear      # puis : pwsh ./local-watch.ps1 -Serial emulator-5554
+```
+
 Pour la Garmin : `pwsh garmin/build.ps1` puis consignes de [`garmin/README.md`](garmin/README.md).
+Une fois la montre branchée en USB, `pwsh ./local-garmin.ps1` l'audite (modèle, firmware,
+occupation, applications) ; `-Backup` copie séances, monitoring, parcours et `.prg` avant
+tout nettoyage ; `-Clean` vide le transit et, sur demande seulement, retire les applications
+absentes de `-KeepApps` (`-RemoveOldApps`), la musique (`-RemoveMusic`) ou les séances trop
+anciennes (`-ActivitiesOlderThanDays <n>`). `-DryRun` affiche tout sans rien supprimer.
 
 ### Musique vers la montre
 
@@ -188,6 +213,15 @@ cargo run -p mpacer-music              # interface locale http://127.0.0.1:8077
 
 Les tests d'intégration de l'API s'exécutent contre un vrai PostgreSQL (variable
 `MPACER_TEST_DATABASE_URL`) et le test du broker MQTT est ignoré par défaut.
+
+En local, `cargo nextest run --workspace` exécute la même suite en parallèle (397 tests en
+environ 1,5 s sur un poste 32 threads) : `cargo binstall cargo-nextest`, puis remplacer
+`cargo test` par `cargo nextest run`.
+
+Sous Windows, `pwsh ./local-perf.ps1 -Appliquer` (terminal **administrateur**) active le plan
+d'alimentation « Haute performance » et exclut `target/`, `~/.cargo`, `~/.gradle` et le SDK
+Android de Windows Defender — deux réglages qui pèsent directement sur les temps de
+compilation.
 
 ## 7. Déploiement et exploitation
 
@@ -241,8 +275,10 @@ signature, variables et procédure complète : [`docs/15-releases.md`](docs/15-r
   coupure et montée en répliques possible.
 - **TLS vers PostgreSQL désactivé** par défaut (réseau interne du cluster) ; `sslmode`
   est configurable pour un serveur externe.
-- **Aucun fichier audio stocké côté serveur** : les MP3 du disque sont copiés sur la
-  montre par USB ; seules les fiches de playlist vivent en base.
+- **Pas d'audio stocke par defaut** : les MP3 du disque sont copies sur la montre par
+  USB, et seules les fiches de playlist vivent en base. Le depot Wi-Fi depuis la page
+  `/music` s'active explicitement avec `MPACER_MEDIA_DIR` (volume + quota, docs/16) :
+  le serveur garde alors une copie temporaire, supprimee des que l'appareil l'a acquittee.
 - **La « carte » d'une course est un lien** OpenStreetMap, pas une carte interactive : ni
   script tiers, ni donnée envoyée à un service de cartographie. Les liens saisis dans une
   fiche sont limités à `http://` et `https://`.

@@ -1352,6 +1352,16 @@ hr { border: none; border-top: 1px solid var(--border); margin: 22px 0; }
 .live-card { margin-bottom: var(--gap); }
 .live-card .mini-cards { margin: 0 0 12px; }
 
+/* Identite d'un ami ou d'un compte cherche : photo de profil et adresse. */
+.ami-identite {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 8px;
+}
+.ami-identite .avatar { width: 40px; height: 40px; }
+.ami-identite p { margin: 0; overflow-wrap: anywhere; }
+
 .trace-map { margin: 0 0 12px; }
 
 .trace-map svg {
@@ -1902,4 +1912,59 @@ hr { border: none; border-top: 1px solid var(--border); margin: 22px 0; }
   padding: 0 14px;
   font-size: 13.5px;
 }
+
+/* ------------------------------------------------------------------ depot des MP3 */
+
+/* Bloc 5 de /music (docs/16) : zone de depot, progression et resultats par
+   fichier. Les classes restent locales a ce bloc, aucun autre ecran ne les
+   utilise. */
+.drop {
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 18px;
+  text-align: center;
+  color: var(--muted);
+  transition: border-color .2s var(--ease), color .2s var(--ease);
+}
+
+.drop.actif {
+  border-color: var(--orange);
+  color: var(--text);
+}
+
+.drop input[type="file"] { display: none; }
+
+.drop label {
+  color: var(--orange);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.progress {
+  height: 10px;
+  margin-top: 12px;
+  background: var(--surface-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress > div {
+  height: 100%;
+  width: 0;
+  background: var(--orange);
+  transition: width .2s var(--ease);
+}
+
+.upload-results {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  font-size: 13.5px;
+}
+
+.upload-results li.ok { color: var(--ok); }
+.upload-results li.erreur { color: var(--danger); }
+
 

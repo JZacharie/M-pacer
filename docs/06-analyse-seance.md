@@ -58,6 +58,14 @@ ecoule, les **zones de frequence cardiaque**, et la **comparaison au plan**.
    selon sa pente, avec infobulle ; les reglages **seuil** et **lissage**
    recalculent le denivele (voir [14 - Analyse de trace : VisuGPX](14-analyse-trace-visugpx.md)).
 
+<p>
+Les memes calculs servent l'**application telephone** : sa fiche de seance appelle
+le coeur Rust en direct (<code>mpacer_report</code>) au lieu de passer par le
+service, et n'affiche que ce qu'il renvoie. L'ordre y est adapte au pouce -
+observations, carte, cardio, energie, temps de passage - et la fiche s'ouvre sans
+reseau (voir <a href="12-course-telephone.html">12 - Courir avec le telephone</a>).
+</p>
+
 ## 3. Les formules
 
 ### 3.1 Temps en mouvement et temps ecoule

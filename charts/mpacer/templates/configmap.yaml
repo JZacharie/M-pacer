@@ -30,4 +30,15 @@ data:
   MPACER_MQTT_USERNAME: {{ .Values.config.mqttUsername | quote }}
   {{- end }}
   {{- end }}
+  {{- if .Values.config.mediaDir }}
+  # Depot des MP3 depuis /music (docs/16) : volume qui porte les fichiers en
+  # attendant que l'appareil les recupere.
+  MPACER_MEDIA_DIR: {{ .Values.config.mediaDir | quote }}
+  {{- if .Values.config.mediaMaxFileBytes }}
+  MPACER_MEDIA_MAX_FILE_BYTES: {{ .Values.config.mediaMaxFileBytes | quote }}
+  {{- end }}
+  {{- if .Values.config.mediaQuotaBytes }}
+  MPACER_MEDIA_QUOTA_BYTES: {{ .Values.config.mediaQuotaBytes | quote }}
+  {{- end }}
+  {{- end }}
   RUST_LOG: {{ .Values.config.rustLog | quote }}

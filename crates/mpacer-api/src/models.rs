@@ -44,6 +44,68 @@ impl FriendRow {
     }
 }
 
+/// Fiche minimale d'un compte, telle qu'on la montre avant toute amitie :
+/// resultat de recherche et parties d'une demande. L'identite est celle du compte
+/// M-pacer (jamais un identifiant de montre ou d'appareil).
+#[derive(Debug, Clone, PartialEq, Serialize, sqlx::FromRow)]
+pub struct UserCard {
+    pub id: String,
+    pub name: Option<String>,
+    pub email: String,
+    pub picture_url: Option<String>,
+}
+
+impl UserCard {
+    /// Nom affichable : le nom Google, sinon l'adresse.
+    pub fn display_name(&self) -> String {
+        self.name
+            .clone()
+            .filter(|nom| !nom.trim().is_empty())
+            .unwrap_or_else(|| self.email.clone())
+    }
+}
+
+/// Demande d'amitie en attente, avec la fiche des deux comptes.
+///
+/// Une demande ne cree aucune amitie : elle attend la decision de `to_user_id`.
+/// Elle est supprimee des qu'elle est acceptee ou refusee.
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct FriendRequestRow {
+    pub id: String,
+    pub from_user_id: String,
+    pub to_user_id: String,
+    pub message: Option<String>,
+    pub created_at_ms: i64,
+    pub from_name: Option<String>,
+    pub from_email: String,
+    pub from_picture_url: Option<String>,
+    pub to_name: Option<String>,
+    pub to_email: String,
+    pub to_picture_url: Option<String>,
+}
+
+impl FriendRequestRow {
+    /// Fiche du compte qui a envoye la demande.
+    pub fn from_card(&self) -> UserCard {
+        UserCard {
+            id: self.from_user_id.clone(),
+            name: self.from_name.clone(),
+            email: self.from_email.clone(),
+            picture_url: self.from_picture_url.clone(),
+        }
+    }
+
+    /// Fiche du compte qui doit repondre.
+    pub fn to_card(&self) -> UserCard {
+        UserCard {
+            id: self.to_user_id.clone(),
+            name: self.to_name.clone(),
+            email: self.to_email.clone(),
+            picture_url: self.to_picture_url.clone(),
+        }
+    }
+}
+
 /// Appareil revendique par un compte pour publier sa position en direct.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct LiveDeviceRow {
@@ -662,6 +724,58 @@ pub struct TransferManifest {
     pub tracks: Vec<ManifestTrack>,
 }
 
+/// Nom du MP3 d'une piste tel qu'il doit apparaitre sur l'appareil.
+///
+/// Meme regle que la liste du bloc 4 et que `mpacer-music` : position 1-based,
+/// puis artiste et titre nettoyes (`01 - Artiste - Titre.mp3`). L'extension est
+/// celle du fichier reellement depose.
+pub fn stored_file_name(track: &MusicTrack, storage_path: &str) -> String {
+    let wanted = mpacer_core::music::WantedTrack {
+        id: track.id.clone(),
+        position: manifest_position(track.position),
+        title: track.title.clone(),
+        artist: track.artist.clone(),
+        album: track.album.clone(),
+        duration_s: track.duration_s,
+        bpm: track.bpm,
+        file: None,
+        size_bytes: None,
+    };
+    mpacer_core::music::suggested_file_name(&wanted, &crate::media::extension(storage_path))
+}
+
+/// Fichier audio disponible sur le serveur, publie a l'appareil (API jeton).
+#[derive(Debug, Clone, Serialize)]
+pub struct MusicStoredFile {
+    pub track_id: String,
+    pub position: u32,
+    pub title: String,
+    pub artist: Option<String>,
+    /// Nom exact a ecrire dans le dossier de la playlist, sur l'appareil.
+    pub file_name: String,
+    pub size_bytes: u64,
+    pub mime: String,
+}
+
+impl MusicStoredFile {
+    /// Vue d'une piste dont les octets sont stockes ; None sinon.
+    pub fn from_track(track: &MusicTrack) -> Option<Self> {
+        let storage_path = track.storage_path.as_deref()?;
+        Some(Self {
+            track_id: track.id.clone(),
+            position: manifest_position(track.position),
+            title: track.title.clone(),
+            artist: track.artist.clone(),
+            file_name: stored_file_name(track, storage_path),
+            size_bytes: track.size_bytes.unwrap_or(0).max(0) as u64,
+            mime: track
+                .mime
+                .clone()
+                .unwrap_or_else(|| crate::media::content_type(storage_path).to_string()),
+        })
+    }
+}
+
 impl TransferManifest {
     /// Manifeste d'une playlist et de ses titres, tel qu'exporte par le backend.
     pub fn from_playlist(playlist: &MusicPlaylist, tracks: &[MusicTrack]) -> Self {
@@ -686,6 +800,24 @@ impl TransferManifest {
                 })
                 .collect(),
         }
+    }
+
+    /// Meme manifeste, mais `file` et `size_bytes` remplis pour les titres dont
+    /// les octets sont sur le serveur.
+    ///
+    /// C'est ce que l'appareil ecrit avant de telecharger : `mpacer-music` fait
+    /// la meme chose cote PC apres appariement du dossier local. Les pistes sans
+    /// octets restent sans `file` et ne seront pas jouables.
+    pub fn from_playlist_with_files(playlist: &MusicPlaylist, tracks: &[MusicTrack]) -> Self {
+        let mut manifest = Self::from_playlist(playlist, tracks);
+        for (track, entry) in tracks.iter().zip(manifest.tracks.iter_mut()) {
+            let Some(storage_path) = track.storage_path.as_deref() else {
+                continue;
+            };
+            entry.file = Some(stored_file_name(track, storage_path));
+            entry.size_bytes = track.size_bytes.map(|size| size.max(0) as u64);
+        }
+        manifest
     }
 }
 
@@ -939,6 +1071,43 @@ mod music_tests {
         assert_eq!(manifest_file_name("Ete - 10 km"), "ete-10-km.json");
         assert_eq!(manifest_file_name("  "), "playlist.json");
         assert_eq!(manifest_file_name("A/B: C?"), "a-b-c.json");
+    }
+
+    #[test]
+    fn a_manifest_with_files_names_the_stored_uploads() {
+        let playlist = MusicPlaylist {
+            id: "p1".into(),
+            user_id: "u1".into(),
+            name: "Run 170".into(),
+            source: "deezer".into(),
+            deezer_id: None,
+            cover_url: None,
+            target_bpm: Some(170.0),
+            created_at_ms: 0,
+            updated_at_ms: 0,
+        };
+        // Le nom du fichier depose ne compte pas : c'est le nom attendu par la
+        // montre (metadonnees + extension reelle) qui est ecrit au manifeste.
+        let stockee = MusicTrack {
+            mime: Some("audio/mpeg".into()),
+            size_bytes: Some(4_200_000),
+            storage_path: Some("u1/t1/fichier-recu.mp3".into()),
+            ..sample_track("t1", 0)
+        };
+        let manquante = sample_track("t2", 1);
+
+        let manifest = TransferManifest::from_playlist_with_files(&playlist, &[stockee, manquante]);
+        assert_eq!(
+            manifest.tracks[0].file.as_deref(),
+            Some("01 - Avicii - Wake me up.mp3")
+        );
+        assert_eq!(manifest.tracks[0].size_bytes, Some(4_200_000));
+        assert!(manifest.tracks[1].file.is_none());
+        assert!(manifest.tracks[1].size_bytes.is_none());
+
+        // Le manifeste USB reste inchange : aucun nom de fichier cote serveur.
+        let simple = TransferManifest::from_playlist(&playlist, &[sample_track("t1", 0)]);
+        assert!(simple.tracks[0].file.is_none());
     }
 
     #[test]

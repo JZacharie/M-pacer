@@ -4,19 +4,21 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color as CouleurAndroid
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.Toast
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -34,19 +36,27 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.mpacer.core.MpacerFormat
 import com.mpacer.core.live.LiveSettings
+import com.mpacer.core.social.AvatarLoader
 import com.mpacer.core.social.Friend
+import com.mpacer.core.social.FriendRequest
 import com.mpacer.core.social.FriendsClient
 import com.mpacer.core.social.Invite
+import com.mpacer.core.social.UserSummary
 import com.mpacer.core.ui.Palette
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -66,11 +76,13 @@ fun FriendsScreen() {
     val scope = rememberCoroutineScope()
     val etat by FriendsClient.state.collectAsState()
     var code by remember { mutableStateOf("") }
+    var recherche by remember { mutableStateOf("") }
     // Le partage ne montre quelque chose que si l'appareil publie deja.
     val suiviConfigure = remember { LiveSettings.load(context).configured }
 
     LaunchedEffect(Unit) {
         FriendsClient.load(context)
+        FriendsClient.loadRequests(context)
         FriendsClient.createInvite(context)
     }
     // Rafraichissement doux : les positions bougent, pas la structure du cercle.
@@ -78,6 +90,7 @@ fun FriendsScreen() {
         while (true) {
             delay(10_000)
             FriendsClient.load(context)
+            FriendsClient.loadRequests(context)
         }
     }
 
@@ -185,6 +198,96 @@ fun FriendsScreen() {
             }
         }
 
+        // ---------------------------------------------------- chercher un compte
+        Card(colors = CardDefaults.cardColors(containerColor = Palette.surface)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Chercher un compte", color = Palette.muted, fontSize = 12.sp)
+                Text(
+                    "Par adresse ou par nom : la demande part vers ce compte, et " +
+                        "l'autre la valide.",
+                    color = Palette.muted,
+                    fontSize = 12.sp,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedTextField(
+                        value = recherche,
+                        onValueChange = { saisie -> recherche = saisie },
+                        label = { Text("Adresse ou nom") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Button(
+                        onClick = { scope.launch { FriendsClient.search(context, recherche) } },
+                        enabled = recherche.trim().length >= 2,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Palette.orange,
+                            contentColor = Color.White,
+                        ),
+                    ) { Text("Chercher") }
+                }
+                etat.search.forEach { compte ->
+                    CarteCompte(
+                        compte = compte,
+                        onAsk = { scope.launch { FriendsClient.sendRequest(context, compte.email) } },
+                    )
+                }
+            }
+        }
+
+        // ------------------------------------------------------- demandes recues
+        val demandes = etat.requests?.incoming.orEmpty()
+        Card(colors = CardDefaults.cardColors(containerColor = Palette.surface)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("Demandes recues", color = Palette.muted, fontSize = 12.sp)
+                    if (demandes.isNotEmpty()) {
+                        Text(
+                            demandes.size.toString() + " en attente",
+                            color = Palette.attention,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+                if (demandes.isEmpty()) {
+                    Text(
+                        "Personne ne vous a demande pour l'instant.",
+                        color = Palette.muted,
+                        fontSize = 13.sp,
+                    )
+                } else {
+                    demandes.forEach { demande ->
+                        CarteDemande(
+                            demande = demande,
+                            onAccept = {
+                                scope.launch { FriendsClient.acceptRequest(context, demande.id) }
+                            },
+                            onDecline = {
+                                scope.launch { FriendsClient.declineRequest(context, demande.id) }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
         // --------------------------------------------------------- ajout d'ami
         Card(colors = CardDefaults.cardColors(containerColor = Palette.surface)) {
             Column(
@@ -245,8 +348,7 @@ fun FriendsScreen() {
                     )
                 } else {
                     CarteOpenStreetMap(
-                        json = etat.json,
-                        backend = backend(context),
+                        majJson = etat.json,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(320.dp),
@@ -293,9 +395,16 @@ private fun CarteAmi(ami: Friend, onRemove: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(ami.displayName, color = Palette.texte, fontWeight = FontWeight.Medium)
-                    Text(ami.email, color = Palette.muted, fontSize = 11.sp)
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    PhotoProfil(id = ami.id, nom = ami.displayName, taille = 40.dp)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(ami.displayName, color = Palette.texte, fontWeight = FontWeight.Medium)
+                        Text(ami.email, color = Palette.muted, fontSize = 11.sp)
+                    }
                 }
                 Text(
                     libelleEtat(ami),
@@ -323,60 +432,120 @@ private fun CarteAmi(ami: Friend, onRemove: () -> Unit) {
     }
 }
 
-/**
- * Carte OpenStreetMap dans une WebView.
- *
- * Le script de la carte (/static/map.js) est servi par le backend : une seule
- * implementation pour le navigateur et le telephone, donc un seul endroit ou
- * corriger un fond de carte. Les positions arrivent du client d'amis et sont
- * poussees dans la page : aucune session navigateur n'est necessaire.
- */
+/** Fiche d'un compte trouve par la recherche : demander a etre ami. */
 @Composable
-private fun CarteOpenStreetMap(json: String, backend: String, modifier: Modifier = Modifier) {
-    var vue by remember { mutableStateOf<WebView?>(null) }
-    AndroidView(
-        modifier = modifier,
-        factory = { contexte ->
-            WebView(contexte).apply {
-                setBackgroundColor(CouleurAndroid.TRANSPARENT)
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = false
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(vue: WebView, url: String?) {
-                        vue.injecter(json)
-                    }
-                }
-                loadDataWithBaseURL(backend, PAGE_CARTE, "text/html", "utf-8", null)
-                vue = this
-            }
-        },
-        update = { web -> web.injecter(json) },
-    )
-}
-
-/** Pousse une charge utile du serveur dans la carte affichee. */
-private fun WebView.injecter(json: String) {
-    if (json.isBlank()) return
-    runCatching {
-        evaluateJavascript(
-            "window.MpacerCartes && window.MpacerCartes[0] && window.MpacerCartes[0].mettreAJour(" + json + ");",
-            null,
-        )
+private fun CarteCompte(compte: UserSummary, onAsk: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        PhotoProfil(id = compte.id, nom = compte.displayName, taille = 40.dp)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(compte.displayName, color = Palette.texte, fontWeight = FontWeight.Medium)
+            Text(compte.email, color = Palette.muted, fontSize = 11.sp)
+        }
+        Button(
+            onClick = onAsk,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Palette.orange,
+                contentColor = Color.White,
+            ),
+        ) { Text("Demander") }
     }
 }
 
-/** Page minimale : la carte occupe toute la vue. */
-private const val PAGE_CARTE = "<!DOCTYPE html><html lang=\"fr\"><head>" +
-    "<meta charset=\"utf-8\">" +
-    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">" +
-    "<style>html,body{margin:0;height:100%;background:#0b0d10}" +
-    "#carte{position:absolute;inset:0}</style></head><body>" +
-    "<div id=\"carte\" data-carte=\"1\" data-zoom=\"13\"></div>" +
-    "<script src=\"/static/map.js\"></script></body></html>"
+/** Fiche d'une demande recue : accepter, ou refuser. */
+@Composable
+private fun CarteDemande(demande: FriendRequest, onAccept: () -> Unit, onDecline: () -> Unit) {
+    val compte = demande.autre
+    val ecoule = ((System.currentTimeMillis() - demande.createdAtMs) / 1000).coerceAtLeast(0)
+    Card(colors = CardDefaults.cardColors(containerColor = Palette.surface)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                PhotoProfil(id = compte.id, nom = compte.displayName, taille = 40.dp)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(compte.displayName, color = Palette.texte, fontWeight = FontWeight.Medium)
+                    Text(compte.email, color = Palette.muted, fontSize = 11.sp)
+                }
+            }
+            demande.message?.takeIf { it.isNotBlank() }?.let { mot ->
+                Text(mot, color = Palette.texte, fontSize = 13.sp)
+            }
+            Text("Demande recue il y a " + age(ecoule), color = Palette.muted, fontSize = 11.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onAccept,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Palette.orange,
+                        contentColor = Color.White,
+                    ),
+                ) { Text("Accepter") }
+                TextButton(onClick = onDecline) {
+                    Text("Refuser", color = Palette.danger)
+                }
+            }
+        }
+    }
+}
+
+/** Photo de profil d'un compte : la vraie si le service la sert, sinon les initiales. */
+@Composable
+private fun PhotoProfil(id: String, nom: String, taille: Dp) {
+    val context = LocalContext.current
+    var photo by remember(id) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(id) {
+        photo = AvatarLoader.load(context, id)?.asImageBitmap()
+    }
+    val bitmap = photo
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(taille)
+                .clip(CircleShape),
+        )
+    } else {
+        Box(
+            modifier = Modifier
+                .size(taille)
+                .clip(CircleShape)
+                .background(Palette.orange),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                initiales(nom),
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+    }
+}
+
+/** Initiales d'un nom, pour la pastille sans photo. */
+private fun initiales(nom: String): String {
+    val mots = nom.split(' ', '.', '-', '_').filter { it.isNotBlank() }
+    val lettres = mots.take(2).mapNotNull { it.firstOrNull() }
+    if (lettres.isEmpty()) return "M"
+    return lettres.joinToString("") { lettre -> lettre.uppercase() }
+}
+
+// La carte est celle de SessionMap.kt : meme script que le service web, memes
+// styles, et le meme repli quand l'appareil n'a pas de moteur de rendu WebView.
 
 // ------------------------------------------------------------------ helpers
-
-private fun backend(context: Context): String = com.mpacer.core.SyncClient.baseUrl(context)
 
 private fun libelleEtat(ami: Friend): String = when {
     ami.live == null && ami.sharing -> "au repos"

@@ -159,6 +159,21 @@ fun SettingsScreen(
             )
         }
 
+        // --------------------------------------------------------------- cardio
+        Section("Frequence cardiaque") {
+            Text(
+                "Maximum de l'utilisateur. C'est la reference des zones du compte rendu : " +
+                    "une zone n'a de sens que rapporte a sa propre frequence maximale.",
+                color = Palette.muted,
+                fontSize = 12.sp,
+            )
+            LignesDeChoix(
+                options = FREQUENCES_MAX.map { it.toString() + " bpm" to (settings.heartRateMax == it) },
+            ) { index ->
+                onSettingsChange(settings.copy(heartRateMax = FREQUENCES_MAX[index]))
+            }
+        }
+
         // ----------------------------------------------------------------- voix
         Section("Retour vocal") {
             LigneBascule(
@@ -348,6 +363,9 @@ fun SettingsScreen(
 }
 
 // ------------------------------------------------------------------ helpers
+
+/** Frequences maximales proposees : la plage usuelle d'un coureur adulte. */
+private val FREQUENCES_MAX = listOf(170, 180, 190, 200, 210)
 
 @Composable
 private fun Section(titre: String, contenu: @Composable () -> Unit) {

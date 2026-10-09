@@ -183,8 +183,16 @@ pub fn initials(name: Option<&str>, email: &str) -> String {
 
 /// Pastille SVG aux initiales, teinte stable derivee du compte.
 pub fn monogram_svg(user: &User) -> String {
-    let letters = escape(&initials(user.name.as_deref(), &user.email));
-    let hue = hue_for(&user.id);
+    monogram_svg_for(user.name.as_deref(), &user.email, &user.id)
+}
+
+/// Meme pastille, a partir des seules informations d'une fiche de compte.
+///
+/// Sert les avatars d'amis : la route /avatar/{id} ne charge pas un compte
+/// complet pour dessiner ses initiales.
+pub fn monogram_svg_for(name: Option<&str>, email: &str, seed: &str) -> String {
+    let letters = escape(&initials(name, email));
+    let hue = hue_for(seed);
     format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 64 64\" width=\"64\" height=\"64\" role=\"img\">\
 <defs><linearGradient id=\"avatar-fond\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\

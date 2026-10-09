@@ -25,6 +25,7 @@ use std::ffi::{c_char, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use mpacer_core::assistant::{AssistantConfig, AssistantMode};
+use mpacer_core::cardio::HeartRateZones;
 use mpacer_core::engine::{EngineConfig, EngineOutput, PacerEngine};
 use mpacer_core::geo::Position;
 use mpacer_core::gps::GpsSample;
@@ -33,6 +34,16 @@ use mpacer_core::music::{MusicConfig, NowPlaying, Playlist};
 use mpacer_core::race_plan::NegativeSplit;
 use mpacer_core::voice::VoiceConfig;
 use serde::{Deserialize, Serialize};
+
+/// Requete d'analyse d'une seance terminee (voir `mpacer_report`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReportRequest {
+    /// Seance archivee, au format d'echange .pac.
+    pub summary: WorkoutSummary,
+    /// Zones cardiaques de l'utilisateur ; celles du moteur par defaut.
+    #[serde(default)]
+    pub zones: HeartRateZones,
+}
 
 /// Commande envoyee par le shell.
 #[derive(Debug, Clone, Deserialize)]
@@ -335,6 +346,63 @@ pub extern "C" fn mpacer_version() -> *mut c_char {
     CString::new(mpacer_core::VERSION).unwrap().into_raw()
 }
 
+/// Analyse une seance terminee et renvoie le rapport JSON.
+///
+/// Sans etat : contrairement aux commandes du moteur, analyser une seance
+/// archivee ne depend d'aucun handle. La requete porte la seance et les zones
+/// cardiaques de l'utilisateur, que le coeur ne connait pas :
+///
+/// ```c
+/// char* rapport = mpacer_report("{\"summary\":{...},\"zones\":{\"max_bpm\":190}}");
+/// mpacer_string_free(rapport);
+/// ```
+///
+/// # Safety
+/// `request` doit etre une chaine C terminee par NUL.
+#[no_mangle]
+pub unsafe extern "C" fn mpacer_report(request: *const c_char) -> *mut c_char {
+    let json = catch_unwind(AssertUnwindSafe(|| {
+        if request.is_null() {
+            return error_json("requete nulle");
+        }
+        match CStr::from_ptr(request).to_str() {
+            Ok(text) => analyse(text),
+            Err(_) => error_json("requete non UTF-8"),
+        }
+    }))
+    .unwrap_or_else(|_| error_json("panique interceptee dans l'analyse"));
+
+    match CString::new(json) {
+        Ok(text) => text.into_raw(),
+        // Un rapport JSON ne contient jamais d'octet NUL ; cette branche
+        // n'existe que pour ne pas paniquer si cela arrivait.
+        Err(_) => CString::new(error_json("rapport non transmissible"))
+            .unwrap()
+            .into_raw(),
+    }
+}
+
+/// Analyse une seance : {"summary": ..., "zones": ...} -> SessionReport.
+fn analyse(request: &str) -> String {
+    let parsed: ReportRequest = match serde_json::from_str(request) {
+        Ok(value) => value,
+        Err(error) => return error_json(&format!("requete invalide : {error}")),
+    };
+    match serde_json::to_string(&mpacer_core::report::session_report(
+        &parsed.summary,
+        parsed.zones,
+    )) {
+        Ok(json) => json,
+        Err(error) => error_json(&format!("rapport non serialisable : {error}")),
+    }
+}
+
+/// Reponse d'erreur JSON : le message est echappe, il peut contenir des guillemets.
+fn error_json(message: &str) -> String {
+    serde_json::to_string(&serde_json::json!({ "error": message }))
+        .unwrap_or_else(|_| "{\"error\":\"erreur interne\"}".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,5 +551,58 @@ mod tests {
         let summary = run(&mut handle, r#"{"cmd":"summary","started_at_ms":0}"#);
         assert_eq!(summary["started_at_ms"], 0);
         assert!(summary["laps"].is_array());
+    }
+
+    /// Seance minimale au format .pac : 5 km en 25 min, deux tours.
+    fn archived_workout() -> String {
+        r#"{"summary":{"id":"1700000000000","started_at_ms":1700000000000,"duration_s":1500.0,"distance_m":5000.0,"average_pace_s_per_km":300.0,"laps":[{"index":1,"distance_m":1000.0,"duration_s":300.0,"pace_s_per_km":300.0},{"index":2,"distance_m":1000.0,"duration_s":300.0,"pace_s_per_km":300.0},{"index":3,"distance_m":1000.0,"duration_s":300.0,"pace_s_per_km":300.0},{"index":4,"distance_m":1000.0,"duration_s":300.0,"pace_s_per_km":300.0},{"index":5,"distance_m":1000.0,"duration_s":300.0,"pace_s_per_km":300.0}],"best_efforts":[],"track":[],"unit_system":"Metric","elapsed_s":1500.0,"pauses":[],"heart_rate":[]},"zones":{"max_bpm":190}}"#.to_string()
+    }
+
+    #[test]
+    fn a_finished_workout_is_analysed_without_a_handle() {
+        let json: serde_json::Value = serde_json::from_str(&analyse(&archived_workout())).unwrap();
+        assert_eq!(json["distance_m"], 5000.0);
+        assert_eq!(json["splits"].as_array().unwrap().len(), 5);
+        assert_eq!(json["regularity"]["split_count"], 5);
+        // Aucun capteur : le rapport le dit au lieu d'inventer zero.
+        assert!(json["heart_rate"].is_null());
+        assert!(json["cardiac_drift"].is_null());
+        assert!(json["grade_adjusted"].is_null());
+        assert_eq!(json["has_track"], false);
+    }
+
+    #[test]
+    fn a_request_without_zones_falls_back_to_the_engine_default() {
+        let request = archived_workout().replace(r#","zones":{"max_bpm":190}"#, "");
+        let json: serde_json::Value = serde_json::from_str(&analyse(&request)).unwrap();
+        assert_eq!(json["distance_m"], 5000.0);
+    }
+
+    #[test]
+    fn a_broken_request_returns_an_error_instead_of_panicking() {
+        let json: serde_json::Value = serde_json::from_str(&analyse("{pas du json")).unwrap();
+        let message = json["error"].as_str().unwrap();
+        assert!(message.contains("requete invalide"), "{message}");
+    }
+
+    #[test]
+    fn the_c_abi_returns_a_report_that_can_be_freed() {
+        let request = CString::new(archived_workout()).unwrap();
+        let raw = unsafe { mpacer_report(request.as_ptr()) };
+        assert!(!raw.is_null());
+        let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_string();
+        unsafe { mpacer_string_free(raw) };
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json["average_pace_s_per_km"], 300.0);
+        assert_eq!(json["pause_count"], 0);
+    }
+
+    #[test]
+    fn a_null_request_is_refused() {
+        let raw = unsafe { mpacer_report(std::ptr::null()) };
+        let json: serde_json::Value =
+            serde_json::from_str(unsafe { CStr::from_ptr(raw) }.to_str().unwrap()).unwrap();
+        unsafe { mpacer_string_free(raw) };
+        assert_eq!(json["error"], "requete nulle");
     }
 }

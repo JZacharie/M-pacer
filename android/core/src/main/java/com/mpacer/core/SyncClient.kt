@@ -19,12 +19,17 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Synchronisation des seances vers le backend auto-heberge.
@@ -53,6 +58,26 @@ object SyncClient {
     private const val KEY_TOKEN = "device_token"
     private const val KEY_BASE_URL = "base_url"
     private const val KEY_SYNCED_IDS = "synced_ids"
+
+    /** Nombre de seances examinees a chaque reprise : au-dela, on reprendra plus tard. */
+    private const val PULL_LIMIT = 200
+
+    /**
+     * Delai minimal entre deux reprises automatiques (ms).
+     *
+     * L'application reprend a chaque retour au premier plan : sans ce garde-fou,
+     * passer d'un ecran a l'autre interrogerait le backend sans arret.
+     */
+    private const val PULL_MIN_INTERVAL_MS = 20_000L
+
+    /** Echecs consecutifs au-dela desquels la reprise s'arrete : le reseau est tombe. */
+    private const val MAX_PULL_FAILURES = 3
+
+    /** Une seule reprise a la fois : le bouton manuel et la reprise auto se croisent. */
+    private val pullLock = AtomicBoolean(false)
+
+    @Volatile
+    private var lastPullAttemptMs = 0L
 
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
@@ -254,6 +279,182 @@ object SyncClient {
         return uploaded
     }
 
+    // ------------------------------------------------------- reprise des seances
+
+    /**
+     * Reprise automatique, sans bloquer l'appelant.
+     *
+     * Appelee au lancement de l'application et a l'ouverture de l'historique :
+     * c'est ce qui fait arriver sur le telephone une seance courue avec la
+     * montre, sans que personne ait rien a demander. Ne fait rien si l'appareil
+     * n'est pas appaire, ou si une reprise vient d'avoir lieu.
+     */
+    fun pullInBackground(context: Context) {
+        val application = context.applicationContext
+        scope.launch {
+            // L'etat affiche se recalcule ici : l'historique ouvre l'application
+            // sans passer par l'ecran de synchronisation, et c'est pourtant lui
+            // qui annonce si l'appareil est appaire. Tout se fait sur le fil IO :
+            // relire l'archive et les preferences n'a rien a faire sur l'ecran.
+            refresh(application)
+            if (!isPaired(application)) {
+                signalerReprise("Backend non appaire : les seances de la montre restent en ligne")
+                return@launch
+            }
+            val maintenant = System.currentTimeMillis()
+            if (maintenant - lastPullAttemptMs < PULL_MIN_INTERVAL_MS) return@launch
+            lastPullAttemptMs = maintenant
+            runCatching { pullWorkouts(application) }
+                .onSuccess { Log.i(TAG, "reprise automatique : " + it + " seance(s)") }
+                .onFailure { Log.w(TAG, "reprise automatique impossible : " + it.message) }
+        }
+    }
+
+    /**
+     * Recupere les seances du compte presentes sur le backend et absentes du
+     * telephone, puis les range dans l'archive locale.
+     *
+     * C'est l'autre moitie de la synchronisation : la montre envoie sa seance au
+     * backend des la fin de la course ([syncInBackground]), le telephone la
+     * reprend ici. Aucun recalcul : le resume repris est celui qu'a produit
+     * mpacer-core, trace GPS et frequence cardiaque comprises.
+     *
+     * @return le nombre de seances reprises pendant cet appel.
+     */
+    suspend fun pullWorkouts(context: Context): Int {
+        val token = token(context)
+        if (token == null) {
+            signalerReprise("Backend non appaire : les seances de la montre restent en ligne")
+            return 0
+        }
+        if (!pullLock.compareAndSet(false, true)) return 0
+        _state.update {
+            it.copy(pulling = true, pullMessage = "Recherche des seances de la montre...")
+        }
+        try {
+            val distantes = try {
+                workoutIds(get(context, token, "/api/v1/workouts?limit=" + PULL_LIMIT))
+            } catch (error: Exception) {
+                signalerReprise("Backend injoignable : " + (error.message ?: error.javaClass.simpleName))
+                return 0
+            }
+
+            val manquantes = missingIds(distantes, localWorkoutIds(context))
+            if (manquantes.isEmpty()) {
+                signalerReprise("Aucune nouvelle seance")
+                return 0
+            }
+
+            val dejaEnvoyees = prefs(context).getStringSet(KEY_SYNCED_IDS, emptySet())
+                ?.toMutableSet() ?: mutableSetOf()
+            var reprises = 0
+            var echecs = 0
+            var echecsDeSuite = 0
+            for (id in manquantes) {
+                val resume = try {
+                    downloadSummary(context, token, id)
+                } catch (error: Exception) {
+                    // Un echec isole (seance supprimee, coupure passagere) ne doit
+                    // pas priver l'utilisateur du reste du lot ; trois echecs
+                    // d'affilee, en revanche, signent une panne : on s'arrete.
+                    echecs += 1
+                    echecsDeSuite += 1
+                    Log.w(TAG, "seance " + id + " non reprise : " + error.message)
+                    if (echecsDeSuite >= MAX_PULL_FAILURES) break
+                    continue
+                } ?: continue
+                echecsDeSuite = 0
+                WorkoutArchive.save(context, resume)
+                // Une seance reprise vient du backend : la marquer comme deja
+                // envoyee, sinon l'envoi suivant la renverrait et les deux
+                // appareils se repondraient sans fin.
+                val identifiant = resume.optString("id").ifBlank {
+                    resume.optLong("started_at_ms").toString()
+                }
+                dejaEnvoyees += identifiant.ifBlank { id }
+                reprises += 1
+            }
+            prefs(context).edit().putStringSet(KEY_SYNCED_IDS, dejaEnvoyees).apply()
+            signalerReprise(
+                text = when {
+                    reprises == 0 && echecs == 0 -> "Aucune nouvelle seance"
+                    echecs == 0 -> reprises.toString() + " seance(s) reprise(s)"
+                    else -> reprises.toString() + " reprise(s), " + echecs + " en echec"
+                },
+                recues = reprises,
+                pending = pendingCount(context),
+            )
+            return reprises
+        } finally {
+            pullLock.set(false)
+            _state.update { it.copy(pulling = false) }
+        }
+    }
+
+    /**
+     * Identifiants des seances presentes sur le backend.
+     *
+     * Reponse attendue de GET /api/v1/workouts : {"total": n, "items": [{"id": ...}]}.
+     * Un corps illisible ne ramene rien plutot que de faire echouer la reprise.
+     */
+    internal fun workoutIds(body: String): List<String> {
+        val racine = runCatching { codec.parseToJsonElement(body) }.getOrNull() as? JsonObject
+            ?: return emptyList()
+        val items = racine["items"] as? JsonArray ?: return emptyList()
+        return items.mapNotNull { element ->
+            (element as? JsonObject)?.get("id")?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        }
+    }
+
+    /** Identifiants distants absents de l'archive locale, dans l'ordre recu. */
+    internal fun missingIds(remote: List<String>, local: Set<String>): List<String> =
+        remote.filter { it.isNotBlank() && it !in local }
+
+    /** Identifiants des seances deja presentes sur le telephone. */
+    private fun localWorkoutIds(context: Context): Set<String> =
+        WorkoutArchive.list(context).mapNotNull { summary ->
+            summary.optString("id").ifBlank { summary.optLong("started_at_ms").toString() }
+                .takeIf { it.isNotBlank() }
+        }.toSet()
+
+    /** Resume complet d'une seance distante : le champ "summary" de sa fiche. */
+    private suspend fun downloadSummary(context: Context, token: String, id: String): JSONObject? {
+        val chemin = "/api/v1/workouts/" + URLEncoder.encode(id, "UTF-8").replace("+", "%20")
+        return JSONObject(get(context, token, chemin)).optJSONObject("summary")
+    }
+
+    private suspend fun get(context: Context, token: String, chemin: String): String =
+        withContext(Dispatchers.IO) {
+            val request = Request.Builder()
+                .url(baseUrl(context) + chemin)
+                .header("Authorization", "Bearer " + token)
+                .get()
+                .build()
+            http.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    throw ApiException(response.code, errorCode(body), "lecture refusee par le backend")
+                }
+                body
+            }
+        }
+
+    /** Publie le compte rendu de reprise, sans toucher a l'ecran d'appairage. */
+    private fun signalerReprise(
+        text: String,
+        recues: Int? = null,
+        pending: Int? = null,
+    ) {
+        _state.update {
+            it.copy(
+                pullMessage = text,
+                received = recues ?: it.received,
+                lastPullMs = System.currentTimeMillis(),
+                pending = pending ?: it.pending,
+            )
+        }
+    }
+
     // -------------------------------------------------------------------- reseau
 
     private suspend fun requestDeviceCode(context: Context, label: String): DeviceCode =
@@ -327,6 +528,18 @@ data class SyncState(
     val pairing: DeviceCode? = null,
     val phase: SyncPhase = SyncPhase.Idle,
     val message: String? = null,
+    /** Vrai pendant une reprise de seances. */
+    val pulling: Boolean = false,
+    /** Instant de la derniere tentative de reprise, aboutie ou non. */
+    val lastPullMs: Long? = null,
+    /** Seances reprises lors de la derniere tentative. */
+    val received: Int = 0,
+    /**
+     * Compte rendu de la reprise, separe de [message] : la reprise tourne toute
+     * seule en arriere-plan et ne doit pas ecraser ce qu'affiche l'ecran
+     * d'appairage.
+     */
+    val pullMessage: String? = null,
 )
 
 enum class SyncPhase { Idle, RequestingCode, WaitingApproval, Syncing, Done, Error }

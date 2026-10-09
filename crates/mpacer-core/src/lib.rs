@@ -34,6 +34,7 @@ pub mod pace;
 pub mod race_import;
 pub mod race_plan;
 pub mod remote_race;
+pub mod report;
 pub mod units;
 pub mod voice;
 pub mod workout;
@@ -53,6 +54,7 @@ pub use music::{
 pub use pace::PaceEngine;
 pub use race_import::{import_race, ImportError, ImportSource, ImportedRace};
 pub use race_plan::{NegativeSplit, RacePlan, ShadowRunnerComparison};
+pub use report::{session_report, Regularity, SessionReport};
 pub use units::UnitSystem;
 pub use workout::{Workout, WorkoutEvent, WorkoutState};
 

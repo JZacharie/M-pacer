@@ -11,6 +11,7 @@
 extern void *mpacer_new(void);
 extern void mpacer_free(void *handle);
 extern char *mpacer_command(void *handle, const char *command);
+extern char *mpacer_report(const char *request);
 extern char *mpacer_version(void);
 extern void mpacer_string_free(char *text);
 
@@ -56,4 +57,23 @@ JNIEXPORT jstring JNICALL
 Java_com_mpacer_core_MpacerCore_nativeVersion(JNIEnv *env, jclass clazz) {
     (void) clazz;
     return take_string(env, mpacer_version());
+}
+
+/* Analyse d'une seance terminee : sans etat, donc sans handle de moteur.
+ *
+ * C'est une methode d'instance de l'objet Kotlin MpacerAnalysis : la signature
+ * JNI recoit donc jobject, et non jclass. */
+JNIEXPORT jstring JNICALL
+Java_com_mpacer_core_MpacerAnalysis_nativeReport(JNIEnv *env, jobject objet, jstring request) {
+    (void) objet;
+    if (request == NULL) {
+        return (*env)->NewStringUTF(env, "{\"error\":\"requete nulle\"}");
+    }
+    const char *utf = (*env)->GetStringUTFChars(env, request, NULL);
+    if (utf == NULL) {
+        return (*env)->NewStringUTF(env, "{\"error\":\"requete illisible\"}");
+    }
+    char *response = mpacer_report(utf);
+    (*env)->ReleaseStringUTFChars(env, request, utf);
+    return take_string(env, response);
 }

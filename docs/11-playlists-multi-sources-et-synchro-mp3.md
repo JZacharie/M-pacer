@@ -149,16 +149,38 @@ playlist est une chaine (`deezer`, `manual`) deja publiee.
 | Methode | Chemin | Role |
 |---|---|---|
 | GET | `/music?q=...` | page complete (6 blocs) |
-| GET | `/music/search?q=...` | recherche de playlists Deezer |
-| GET | `/music/search?vue=mes` | **playlists du compte Deezer** |
+| GET | `/music/search?q=...` | recherche de playlists (**compte lie** si connecte) |
+| GET | `/music/search?q=...&public=1` | recherche dans le **catalogue public** Deezer, sans compte |
+| GET | `/music/search?vue=mes` | **playlists du compte Deezer** (cookie arl ou OAuth) |
+| GET | `/music?playlist={id}&tq=...` | **recherche de titres** a ajouter (bloc 3) |
 | GET | `/auth/deezer` + `/auth/deezer/callback` | OAuth 2.0 Deezer |
 | POST | `/music/deezer/disconnect` | deconnecte le compte Deezer |
-| POST | `/music/import` | `ref`, `target_bpm` |
+| POST | `/music/import` | `ref`, `target_bpm`, `public=1` pour une playlist publique |
+| POST | `/music/playlists/{id}/tracks/add` | **ajoute un titre** Deezer a la playlist (bloc 3) |
 | GET | `/music/playlists/{id}/files` | **liste des MP3 a preparer** (`.txt`) |
 | GET | `/music/playlists/{id}/deemix` | **liste de telechargement Deemix** (`.txt`) : un fichier attendu par ligne, suivi du lien Deemix de la piste |
 | POST | `/music/playlists/{id}/deemix` | **envoie la playlist dans la file de Deemix** (instance de l'utilisateur) |
 | POST | `/music/playlists/{id}/deemix/track` | envoie une piste (`track_id`) dans la file de Deemix |
 | GET | `/music/playlists/{id}/manifest` | manifeste de transfert (inchange) |
+
+**Parametres Deezer utilises** (documentes sur
+`developers.deezer.com/api/parameters` et verifies sur l'API reelle) :
+
+| Parametre | Usage dans M-pacer |
+|---|---|
+| `q` | terme libre, ou syntaxe avancee `artist:"..."`, `track:"..."`, `album:"..."` |
+| `limit`, `index` | pagination (25 titres par recherche, 20 playlists) |
+| `order` | tri : `RANKING` (defaut), `DURATION_ASC/DESC`, `RATING_ASC/DESC`, `TRACK_ASC/DESC` |
+| `strict` | rapprochement strict (transmis, desactive par defaut) |
+| `bpm_min`/`bpm_max`, `dur_min`/`dur_max` | filtres du Search Builder, transmis tels quels |
+| `access_token` | ajoute quand un compte OAuth est lie ; facultatif |
+
+L'API publique `api.deezer.com` repond **sans jeton** pour le contenu public :
+rechercher une playlist et l'importer, ou chercher des titres, ne demande donc
+aucun compte (d'ou le drapeau `public=1` des formulaires). Deux reserves
+verifiees sur l'API reelle : le champ `bpm` de Deezer vaut `0` pour la
+quasi-totalite du catalogue (les filtres de tempo ne remplacent jamais la balise
+du MP3), et `order` peut rester ignore sans jeton.
 
 ### 4.3 Page `/music` (six blocs)
 

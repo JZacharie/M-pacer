@@ -171,6 +171,8 @@ pub fn router() -> Router<AppState> {
             post(music_deemix_enqueue_track),
         )
         .route("/music/playlists/{id}/track-bpm", post(music_track_bpm))
+        // Bloc 3 : ajout d'un titre Deezer trouve par la recherche.
+        .route("/music/playlists/{id}/tracks/add", post(music_track_add))
         .route("/music/playlists/{id}/target", post(music_target))
         .route("/music/playlists/{id}/rename", post(music_rename))
         .route("/music/playlists/{id}/delete", post(music_delete))
@@ -4540,6 +4542,23 @@ struct MusicQuery {
     /// `mes` : liste les playlists du compte lie au lieu de chercher.
     #[serde(default)]
     vue: Option<String>,
+    /// `1` : cherche dans le catalogue **public** Deezer, sans compte.
+    ///
+    /// Explicite : sans ce drapeau, une recherche sans acces lie reste sans
+    /// appel reseau (le service n'interroge Deezer que sur demande).
+    #[serde(default)]
+    public: Option<String>,
+    /// Bloc 3 : terme de recherche de titres a ajouter a la playlist.
+    #[serde(default)]
+    tq: Option<String>,
+    /// Bloc 3 : bornes de tempo de la recherche de titres (filtres Deezer).
+    #[serde(default)]
+    tmin: Option<String>,
+    #[serde(default)]
+    tmax: Option<String>,
+    /// Bloc 3 : tri Deezer (RANKING, DURATION_ASC, RATING_DESC...).
+    #[serde(default)]
+    tordre: Option<String>,
     /// Bloc 6 : course dont on verifie la couverture.
     #[serde(default)]
     race: Option<String>,
@@ -4561,6 +4580,27 @@ struct MusicQuery {
     ok: Option<String>,
 }
 
+/// Tris proposes pour la recherche de titres (parametre `order` documente).
+const SEARCH_ORDER_LABELS: [(&str, &str); 5] = [
+    ("RANKING", "Popularite"),
+    ("DURATION_ASC", "Duree croissante"),
+    ("DURATION_DESC", "Duree decroissante"),
+    ("RATING_DESC", "Note decroissante"),
+    ("TRACK_ASC", "Titre A-Z"),
+];
+
+/// Borne de tempo d'une recherche Deezer : 30..=300, comme le BPM du coeur.
+///
+/// Une valeur hors bornes ou illisible est ignoree plutot que refusee : le filtre
+/// est un confort, pas une condition.
+fn clean_bpm_filter(value: &str) -> Option<u32> {
+    value
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|bpm| (30..=300).contains(bpm))
+}
+
 /// Traduit un code d'erreur de la page musique en message lisible.
 fn music_error_message(code: &str) -> String {
     match code {
@@ -4578,6 +4618,7 @@ fn music_error_message(code: &str) -> String {
         "nom_invalide" => "Le nom de la playlist ne peut pas etre vide.".to_string(),
         "bpm_invalide" => "Le BPM doit etre un nombre entre 30 et 300.".to_string(),
         "audio_non_configure" => "Le depot Wi-Fi des MP3 est eteint sur ce serveur : renseignez MPACER_MEDIA_DIR.".to_string(),
+        "titre_invalide" => "Le titre a ajouter est incomplet : relancez la recherche.".to_string(),
         other => format!("Operation impossible ({other})."),
     }
 }
@@ -4598,6 +4639,7 @@ fn music_ok_message(code: &str) -> String {
         "playlist_renommee" => "Playlist renommee.".to_string(),
         "playlist_supprimee" => "Playlist supprimee.".to_string(),
         "mp3_retire" => "Fichier retire du serveur.".to_string(),
+        "titre_ajoute" => "Titre ajoute a la playlist.".to_string(),
         other => format!("Operation effectuee ({other})."),
     }
 }
@@ -4616,7 +4658,7 @@ fn playlist_source_label(source: &str) -> &'static str {
 
 /// Message affiche quand Deezer n'est pas configure sur ce service.
 fn source_unconfigured_message() -> &'static str {
-    "Deezer n'est pas configure sur ce service : renseignez MPACER_DEEZER_ARL (cookie arl du compte). L'OAuth (MPACER_DEEZER_APP_ID + MPACER_DEEZER_APP_SECRET) reste accepte."
+    "Deezer n'est pas configure sur ce service. La recherche du catalogue public reste disponible sans compte (bloc 1) ; pour vos propres playlists, renseignez MPACER_DEEZER_ARL (cookie arl du compte), ou l'OAuth (MPACER_DEEZER_APP_ID + MPACER_DEEZER_APP_SECRET)."
 }
 
 /// Rappel affiche avant la connexion du compte Deezer (mode OAuth seulement).
@@ -4641,7 +4683,7 @@ fn deezer_source_playlist(item: crate::deezer::PlaylistRef) -> SourcePlaylist {
 /// Regroupe ce qui vient de la requete et de la configuration : le panneau
 /// lui-meme ne connait ni la base ni le reseau.
 struct DeezerPanel<'a> {
-    ready: bool,
+    /// Nom du compte lie (cookie arl ou OAuth) ; `None` = catalogue public seul.
     connected_name: Option<String>,
     results: &'a [SourcePlaylist],
     /// Vrai quand une recherche ou « Mes playlists » a ete demande.
@@ -4651,19 +4693,25 @@ struct DeezerPanel<'a> {
     /// Vrai quand le compte est lie par OAuth (bouton « Deconnecter ») ; faux
     /// quand l'acces vient du cookie ARL du service, qu'il n'y a rien a oter.
     linked_account: bool,
+    /// Vrai quand une application OAuth est configuree (bouton « Connecter »).
+    oauth_available: bool,
+    /// Vrai quand la recherche affichee vient du catalogue public (sans compte).
+    public_search: bool,
 }
 
-/// Panneau Deezer : connexion, recherche, playlists du compte.
+/// Panneau Deezer : recherche (catalogue public ou compte lie) et import.
 fn deezer_panel(panel: DeezerPanel<'_>) -> Markup {
     let DeezerPanel {
-        ready,
         connected_name,
         results,
         searched,
         term,
         error,
         linked_account,
+        oauth_available,
+        public_search,
     } = panel;
+    let connecte = connected_name.is_some();
     html! {
         div class="panel" {
             h3 { "Deezer" }
@@ -4673,44 +4721,26 @@ fn deezer_panel(panel: DeezerPanel<'_>) -> Markup {
                     span { (error) }
                 }
             }
-            @if !ready {
-                p class="muted" { (source_unconfigured_message()) }
-            } @else if let Some(name) = connected_name {
+            // La recherche est toujours proposee : sans compte lie, elle
+            // interroge le catalogue public. Le drapeau `public=1` est
+            // explicite pour que le service ne contacte Deezer que sur une
+            // action de l'utilisateur (voir music_page).
+            form method="get" action="/music/search" class="music-search" {
+                input type="text" name="q" value=(term) placeholder="rock, Daft Punk...";
+                @if !connecte {
+                    input type="hidden" name="public" value="1";
+                }
+                button type="submit" { "Chercher" }
+            }
+            @if let Some(name) = connected_name {
                 p class="split" {
                     span class="pill on" { "Connecte" }
                     span class="muted" { (name) }
-                }
-                form method="get" action="/music/search" class="music-search" {
-                    input type="text" name="q" value=(term) placeholder="rock";
-                    button type="submit" { "Chercher" }
                 }
                 div class="actions" {
                     a class="button small ghost" href="/music/search?vue=mes" {
                         "Mes playlists"
                     }
-                }
-                @if searched && !results.is_empty() {
-                    ul class="music-results" {
-                        @for result in results {
-                            li {
-                                div class="music-result" {
-                                    strong { (result.name) }
-                                    span class="muted" { (result.track_count) " titres" }
-                                    @if let Some(owner) = &result.owner {
-                                        span class="tiny muted" { (owner) }
-                                    }
-                                }
-                                form method="post" action="/music/import" class="music-import" {
-                                    input type="hidden" name="ref" value=(result.id);
-                                    input type="text" name="target_bpm" inputmode="numeric" placeholder="BPM cible (auto)";
-                                    button class="small" type="submit" { "Importer" }
-                                }
-                            }
-                        }
-                    }
-                }
-                @if searched && results.is_empty() {
-                    p class="muted" { "Aucune playlist trouvee." }
                 }
                 @if linked_account {
                     form method="post" action="/music/deezer/disconnect" {
@@ -4722,10 +4752,42 @@ fn deezer_panel(panel: DeezerPanel<'_>) -> Markup {
                     }
                 }
             } @else {
-                p class="muted" { (source_connect_hint()) }
-                div class="actions" {
-                    a class="button" href="/auth/deezer" { "Connecter Deezer" }
+                p class="tiny muted" {
+                    "Recherche dans le catalogue public Deezer, sans compte. Pour vos propres "
+                    "playlists, renseignez MPACER_DEEZER_ARL dans le service ou connectez un compte."
                 }
+                @if oauth_available {
+                    p class="tiny muted" { (source_connect_hint()) }
+                    div class="actions" {
+                        a class="button small" href="/auth/deezer" { "Connecter Deezer" }
+                    }
+                }
+            }
+            @if searched && !results.is_empty() {
+                ul class="music-results" {
+                    @for result in results {
+                        li {
+                            div class="music-result" {
+                                strong { (result.name) }
+                                span class="muted" { (result.track_count) " titres" }
+                                @if let Some(owner) = &result.owner {
+                                    span class="tiny muted" { (owner) }
+                                }
+                            }
+                            form method="post" action="/music/import" class="music-import" {
+                                input type="hidden" name="ref" value=(result.id);
+                                @if public_search {
+                                    input type="hidden" name="public" value="1";
+                                }
+                                input type="text" name="target_bpm" inputmode="numeric" placeholder="BPM cible (auto)";
+                                button class="small" type="submit" { "Importer" }
+                            }
+                        }
+                    }
+                }
+            }
+            @if searched && results.is_empty() {
+                p class="muted" { "Aucune playlist trouvee." }
             }
         }
     }
@@ -5114,8 +5176,10 @@ async fn music_page(
         .as_ref()
         .and_then(|id| playlists.iter().find(|playlist| &playlist.id == id));
 
-    // Recherche (terme) ou playlists du compte (`vue=mes`). Aucun appel reseau
-    // quand Deezer n'est pas configure.
+    // Recherche (terme) ou playlists du compte (`vue=mes`). Le catalogue public
+    // Deezer repond **sans jeton** : la recherche publique est donc proposee meme
+    // sans compte lie, mais seulement sur action explicite (`public=1`), pour
+    // que le service ne contacte jamais Deezer en ouvrant simplement la page.
     let term = query
         .q
         .as_deref()
@@ -5123,18 +5187,15 @@ async fn music_page(
         .filter(|term| !term.is_empty())
         .map(str::to_string);
     let mine = query.vue.as_deref().map(str::trim) == Some("mes");
+    let public_search = query.public.as_deref().map(str::trim) == Some("1");
     let searched = term.is_some() || mine;
+    // Cookie arl : rien a connecter. OAuth : il faut un compte Deezer lie.
+    let connected = deezer_arl_ready || deezer_account.is_some();
 
     let mut source_playlists: Vec<SourcePlaylist> = Vec::new();
     let mut search_error: Option<String> = None;
     if searched {
-        // Cookie arl : rien a connecter. OAuth : il faut un compte Deezer lie.
-        let connected = deezer_arl_ready || deezer_account.is_some();
-        if !deezer_ready {
-            search_error = Some(source_unconfigured_message().to_string());
-        } else if !connected {
-            search_error = Some("Connectez votre compte Deezer pour continuer.".to_string());
-        } else {
+        if connected {
             match deezer_source_playlists(
                 &state,
                 &user.id,
@@ -5148,6 +5209,69 @@ async fn music_page(
                     tracing::warn!(error = %error, "requete Deezer refusee");
                     search_error = Some(music_error_message(deezer_error_code(&state.config)));
                 }
+            }
+        } else if mine {
+            search_error = Some(if deezer_ready {
+                "Connectez votre compte Deezer pour lister vos playlists.".to_string()
+            } else {
+                source_unconfigured_message().to_string()
+            });
+        } else if public_search {
+            match crate::deezer::search_playlists_public(
+                &state.http,
+                term.as_deref().unwrap_or_default(),
+            )
+            .await
+            {
+                Ok(results) => {
+                    source_playlists = results.into_iter().map(deezer_source_playlist).collect();
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "recherche Deezer publique refusee");
+                    search_error = Some(
+                        "Le catalogue public Deezer est injoignable pour le moment.".to_string(),
+                    );
+                }
+            }
+        } else {
+            search_error = Some(if deezer_ready {
+                "Connectez votre compte Deezer pour chercher vos playlists, ou utilisez la recherche du catalogue public.".to_string()
+            } else {
+                source_unconfigured_message().to_string()
+            });
+        }
+    }
+
+    // Bloc 3 : recherche de titres a ajouter a la playlist (API publique Deezer).
+    // Le jeton OAuth sert quand il existe ; sinon Deezer ne renvoie que le contenu
+    // public. Les filtres de tempo suivent la documentation Deezer, sans jamais
+    // remplacer la balise du MP3 (le champ bpm de Deezer vaut 0 presque partout).
+    let track_term = query
+        .tq
+        .as_deref()
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .map(str::to_string);
+    let mut track_results: Vec<crate::deezer::FoundTrack> = Vec::new();
+    let mut track_error: Option<String> = None;
+    if let Some(term) = &track_term {
+        let token = deezer_access_token(&state, &user.id).await?;
+        let request = crate::deezer::TrackSearchQuery {
+            query: term.clone(),
+            limit: 25,
+            index: 0,
+            order: crate::deezer::clean_order(query.tordre.as_deref()),
+            strict: false,
+            bpm_min: query.tmin.as_deref().and_then(clean_bpm_filter),
+            bpm_max: query.tmax.as_deref().and_then(clean_bpm_filter),
+            duration_min_s: None,
+            duration_max_s: None,
+        };
+        match crate::deezer::search_tracks(&state.http, token.as_deref(), &request).await {
+            Ok(found) => track_results = found,
+            Err(error) => {
+                tracing::warn!(error = %error, "recherche de titres Deezer refusee");
+                track_error = Some("La recherche de titres Deezer a echoue.".to_string());
             }
         }
     }
@@ -5209,9 +5333,10 @@ async fn music_page(
         section class="hero" {
             h1 { "Musique" }
             p class="muted" {
-                "Playlists de course Deezer et tempo (BPM) : le serveur publie les fiches, "
-                "la liste des MP3 a telecharger dans Deemix et le manifeste de transfert, "
-                "l'audio est copie sur la montre par USB."
+                "Composez la bande-son de vos courses : catalogue public Deezer sans compte "
+                "(ou vos propres playlists avec un cookie arl), titre par titre ou playlist "
+                "entiere, tempo (BPM) cible, liste des MP3 a telecharger dans Deemix, puis envoi "
+                "vers la montre ou le telephone par USB ou en Wi-Fi."
             }
         }
         @if let Some(erreur) = query.erreur.as_deref() {
@@ -5231,7 +5356,6 @@ async fn music_page(
         div class="section-head" { h2 { "1. Source des playlists" } }
         div class="music-grid" {
             (deezer_panel(DeezerPanel {
-                ready: deezer_ready,
                 connected_name: deezer_name,
                 results: &source_playlists,
                 searched,
@@ -5239,6 +5363,9 @@ async fn music_page(
                 error: search_error.as_deref(),
                 // Cookie arl : rien a deconnecter, le panneau le dit.
                 linked_account: !deezer_arl_ready,
+                // Le bouton « Connecter » n'apparait que si l'OAuth est configure.
+                oauth_available: state.config.deezer_app_configured(),
+                public_search,
             }))
         }
 
@@ -5248,7 +5375,10 @@ async fn music_page(
             div class="empty" {
                 span class="icon icon-music" {}
                 p { "Aucune playlist pour l'instant." }
-                p class="tiny" { "Importez une playlist Deezer pour commencer." }
+                p class="tiny" {
+                    "Cherchez dans le catalogue public Deezer (bloc 1, aucun compte requis), "
+                    "puis Importez la playlist choisie : elle apparaitra ici."
+                }
             }
         } @else {
             div class="table-wrap" {
@@ -5367,6 +5497,80 @@ async fn music_page(
                             }
                         }
                     }
+                }
+            }
+            // Recherche de titres a ajouter (API publique Deezer). Les bornes de
+            // tempo sont des filtres Deezer : la balise du MP3 reste la reference.
+            div class="panel" {
+                h3 { "Ajouter un titre" }
+                form class="music-search" method="get" action="/music" {
+                    input type="hidden" name="playlist" value=(playlist.id);
+                    input type="text" name="tq" inputmode="search"
+                          value=(track_term.as_deref().unwrap_or_default())
+                          placeholder="titre, artiste ou album";
+                    input type="text" name="tmin" inputmode="numeric" size="4"
+                          value=(query.tmin.as_deref().unwrap_or_default()) placeholder="BPM min";
+                    input type="text" name="tmax" inputmode="numeric" size="4"
+                          value=(query.tmax.as_deref().unwrap_or_default()) placeholder="BPM max";
+                    select name="tordre" {
+                        @for (value, label) in SEARCH_ORDER_LABELS {
+                            option value=(value) selected[query.tordre.as_deref() == Some(value)] { (label) }
+                        }
+                    }
+                    button type="submit" { "Chercher" }
+                }
+                @if let Some(error) = &track_error {
+                    p class="alert" {
+                        span class="icon icon-alert" {}
+                        span { (error) }
+                    }
+                }
+                @if !track_results.is_empty() {
+                    div class="table-wrap" {
+                        table {
+                            thead {
+                                tr {
+                                    th { "Titre" }
+                                    th { "Artiste" }
+                                    th { "Album" }
+                                    th { "Duree" }
+                                    th { "Popularite" }
+                                    th {}
+                                }
+                            }
+                            tbody {
+                                @for found in &track_results {
+                                    tr {
+                                        td {
+                                            @if let Some(link) = &found.link {
+                                                a href=(link) target="_blank" rel="noopener" { (found.title) }
+                                            } @else {
+                                                (found.title)
+                                            }
+                                        }
+                                        td { (found.artist.clone().unwrap_or_else(|| "-".to_string())) }
+                                        td { (found.album.clone().unwrap_or_else(|| "-".to_string())) }
+                                        td { (found.duration_s.map(format_duration).unwrap_or_else(|| "-".to_string())) }
+                                        td { (found.rank.map(|rank| rank.to_string()).unwrap_or_else(|| "-".to_string())) }
+                                        td {
+                                            form class="inline-form" method="post"
+                                                 action={ "/music/playlists/" (playlist.id) "/tracks/add" } {
+                                                input type="hidden" name="deezer_id" value=(found.deezer_id);
+                                                input type="hidden" name="title" value=(found.title);
+                                                input type="hidden" name="artist" value=(found.artist.clone().unwrap_or_default());
+                                                input type="hidden" name="album" value=(found.album.clone().unwrap_or_default());
+                                                input type="hidden" name="duration_s"
+                                                      value=(found.duration_s.map(|d| format!("{d:.0}")).unwrap_or_default());
+                                                button class="small" type="submit" { "Ajouter" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } @else if track_term.is_some() && track_error.is_none() {
+                    p class="muted" { "Aucun titre trouve." }
                 }
             }
         } @else {
@@ -5857,6 +6061,9 @@ struct MusicImportForm {
     deezer_ref: String,
     #[serde(default)]
     target_bpm: String,
+    /// `1` : import depuis le catalogue public, sans compte lie.
+    #[serde(default)]
+    public: String,
 }
 
 /// Importe une playlist Deezer.
@@ -5874,7 +6081,14 @@ async fn music_import(
         Ok(value) => crate::models::clean_bpm(value),
         Err(_) => return Ok(Redirect::to("/music?erreur=bpm_invalide").into_response()),
     };
-    import_deezer(&state, &user, &reference, target_bpm).await
+    import_deezer(
+        &state,
+        &user,
+        &reference,
+        target_bpm,
+        form.public.trim() == "1",
+    )
+    .await
 }
 
 /// Importe une playlist Deezer (fiche seule : Deezer n'expose aucun tempo).
@@ -5886,36 +6100,49 @@ async fn import_deezer(
     user: &User,
     reference: &str,
     target_bpm: Option<f64>,
+    public: bool,
 ) -> AppResult<Response> {
-    if !state.config.deezer_configured() {
-        return Ok(Redirect::to("/music?erreur=deezer_non_configure").into_response());
-    }
     let Some(deezer_id) = crate::deezer::playlist_id_from_ref(reference) else {
         return Ok(Redirect::to("/music?erreur=deezer_ref_invalide").into_response());
     };
-    let mut session = match deezer_session(state, &user.id).await {
-        Ok(Some(session)) => session,
-        Ok(None) => {
-            return Ok(Redirect::to("/music?erreur=deezer_non_connecte").into_response());
+    let detail = if public {
+        // Catalogue public : l'API Deezer repond sans jeton, aucun compte n'est
+        // requis (les playlists privees, elles, exigent le cookie arl).
+        match crate::deezer::get_playlist_public(&state.http, &deezer_id).await {
+            Ok(detail) => detail,
+            Err(error) => {
+                tracing::warn!(error = %error, "import Deezer public refuse");
+                return Ok(Redirect::to("/music?erreur=deezer_refuse").into_response());
+            }
         }
-        Err(error) => {
-            tracing::warn!(error = %error, "session Deezer refusee");
-            return Ok(Redirect::to(&format!(
-                "/music?erreur={}",
-                deezer_error_code(&state.config)
-            ))
-            .into_response());
+    } else {
+        if !state.config.deezer_configured() {
+            return Ok(Redirect::to("/music?erreur=deezer_non_configure").into_response());
         }
-    };
-    let detail = match deezer_playlist_detail(state, &mut session, &deezer_id).await {
-        Ok(detail) => detail,
-        Err(error) => {
-            tracing::warn!(error = %error, "import Deezer refuse");
-            return Ok(Redirect::to(&format!(
-                "/music?erreur={}",
-                deezer_error_code(&state.config)
-            ))
-            .into_response());
+        let mut session = match deezer_session(state, &user.id).await {
+            Ok(Some(session)) => session,
+            Ok(None) => {
+                return Ok(Redirect::to("/music?erreur=deezer_non_connecte").into_response());
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "session Deezer refusee");
+                return Ok(Redirect::to(&format!(
+                    "/music?erreur={}",
+                    deezer_error_code(&state.config)
+                ))
+                .into_response());
+            }
+        };
+        match deezer_playlist_detail(state, &mut session, &deezer_id).await {
+            Ok(detail) => detail,
+            Err(error) => {
+                tracing::warn!(error = %error, "import Deezer refuse");
+                return Ok(Redirect::to(&format!(
+                    "/music?erreur={}",
+                    deezer_error_code(&state.config)
+                ))
+                .into_response());
+            }
         }
     };
 
@@ -6005,6 +6232,94 @@ async fn music_target(
         return Ok(Redirect::to("/music?erreur=playlist_inconnue").into_response());
     }
     Ok(Redirect::to(&format!("/music?playlist={id}")).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct MusicTrackAddForm {
+    /// Identifiant Deezer de la piste (champ cache du resultat de recherche).
+    #[serde(default)]
+    deezer_id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    artist: String,
+    #[serde(default)]
+    album: String,
+    #[serde(default)]
+    duration_s: String,
+}
+
+/// Ajoute un titre Deezer a une playlist existante.
+///
+/// Complement de la recherche de titres du bloc 3 : la playlist se compose piste
+/// par piste, sans importer une playlist entiere. L'identifiant Deezer est
+/// conserve, donc le lien Deemix et le nom de fichier attendu restent disponibles
+/// pour la piste ajoutee.
+async fn music_track_add(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Form(form): Form<MusicTrackAddForm>,
+) -> AppResult<Response> {
+    if crate::db::get_music_playlist(&state.pool, &user.id, &id)
+        .await?
+        .is_none()
+    {
+        return Ok(Redirect::to("/music?erreur=playlist_inconnue").into_response());
+    }
+    let title = form.title.trim();
+    if title.is_empty() {
+        return Ok(
+            Redirect::to(&format!("/music?playlist={id}&erreur=titre_invalide")).into_response(),
+        );
+    }
+    // Un identifiant Deezer est facultatif, mais s'il est fourni il doit etre
+    // numerique : c'est lui qui construit le lien Deemix.
+    let deezer_id = form.deezer_id.trim();
+    if !deezer_id.is_empty()
+        && !deezer_id
+            .chars()
+            .all(|caractere| caractere.is_ascii_digit())
+    {
+        return Ok(
+            Redirect::to(&format!("/music?playlist={id}&erreur=titre_invalide")).into_response(),
+        );
+    }
+    let duration_s = parse_number(&form.duration_s, "la duree")
+        .ok()
+        .flatten()
+        .filter(|value| *value > 0.0);
+    let artist = Some(form.artist.trim().to_string()).filter(|value| !value.is_empty());
+    let album = Some(form.album.trim().to_string()).filter(|value| !value.is_empty());
+
+    // Position suivante : la playlist garde l'ordre d'ajout.
+    let position = crate::db::list_music_tracks(&state.pool, &user.id, &id)
+        .await?
+        .iter()
+        .map(|track| track.position)
+        .max()
+        .map_or(0, |max| max + 1);
+
+    crate::db::insert_music_track(
+        &state.pool,
+        &user.id,
+        &id,
+        &MusicTrackInput {
+            position,
+            title: title.chars().take(300).collect(),
+            artist,
+            album,
+            duration_s,
+            bpm: None,
+            bpm_source: None,
+            deezer_track_id: (!deezer_id.is_empty()).then(|| deezer_id.to_string()),
+        },
+        state.now_ms(),
+    )
+    .await?;
+
+    tracing::info!(utilisateur = %user.id, playlist = %id, "titre Deezer ajoute");
+    Ok(Redirect::to(&format!("/music?playlist={id}&ok=titre_ajoute")).into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -7918,6 +8233,53 @@ mod music_web_tests {
     }
 
     #[test]
+    fn bpm_filters_stay_in_the_documented_range() {
+        assert_eq!(clean_bpm_filter("170"), Some(170));
+        assert_eq!(clean_bpm_filter(" 30 "), Some(30));
+        assert_eq!(clean_bpm_filter("300"), Some(300));
+        assert_eq!(clean_bpm_filter("29"), None);
+        assert_eq!(clean_bpm_filter("301"), None);
+        assert_eq!(clean_bpm_filter(""), None);
+        assert_eq!(clean_bpm_filter("vite"), None);
+    }
+
+    #[test]
+    fn the_deezer_panel_searches_the_public_catalogue_without_an_account() {
+        let markup = deezer_panel(DeezerPanel {
+            connected_name: None,
+            results: &[],
+            searched: false,
+            term: "",
+            error: None,
+            linked_account: true,
+            oauth_available: false,
+            public_search: false,
+        })
+        .into_string();
+        // La recherche est proposee meme sans compte, via le catalogue public.
+        assert!(markup.contains("action=\"/music/search\""), "{markup}");
+        assert!(markup.contains("name=\"public\" value=\"1\""), "{markup}");
+        // Sans application OAuth, aucun bouton de connexion trompeur.
+        assert!(!markup.contains("Connecter Deezer"), "{markup}");
+
+        // Avec un compte lie, la recherche vise le compte et « Mes playlists »
+        // apparait.
+        let markup = deezer_panel(DeezerPanel {
+            connected_name: Some("Zach".to_string()),
+            results: &[],
+            searched: false,
+            term: "rock",
+            error: None,
+            linked_account: true,
+            oauth_available: true,
+            public_search: false,
+        })
+        .into_string();
+        assert!(markup.contains("Mes playlists"), "{markup}");
+        assert!(markup.contains("value=\"rock\""), "{markup}");
+    }
+
+    #[test]
     fn sizes_are_written_in_plain_french() {
         assert_eq!(human_size(0), "0 o");
         assert_eq!(human_size(512), "512 o");
@@ -7954,6 +8316,11 @@ mod music_web_tests {
             playlist: Some("p1".into()),
             q: None,
             vue: None,
+            public: None,
+            tq: None,
+            tmin: None,
+            tmax: None,
+            tordre: None,
             race: None,
             distance_km: Some(distance_km.into()),
             allure: Some(allure.into()),

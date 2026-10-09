@@ -10,9 +10,15 @@
 //! Deux particularites :
 //! * l'echange du code OAuth se fait en `GET` et Deezer repond par une chaine de
 //!   requete (ou du JSON avec `output=json`) : voir `parse_token_body` ;
-//! * l'API Deezer n'expose **aucun tempo** : le BPM d'une playlist Deezer reste
-//!   inconnu a l'import et se complete par la balise du fichier, le tap-tempo ou
-//!   la saisie manuelle sur la page `/music`.
+//! * Deezer expose un champ `bpm`, mais il vaut **0 pour la quasi-totalite du
+//!   catalogue** : le BPM d'une playlist Deezer reste inconnu a l'import et se
+//!   complete par la balise du fichier, le tap-tempo ou la saisie manuelle sur la
+//!   page `/music`. Les filtres `bpm_min`/`bpm_max` de la recherche sont
+//!   transmis tels quels, mais la balise du MP3 reste la reference ;
+//! * l'API publique `api.deezer.com` repond **sans jeton** pour tout contenu
+//!   public : recherche de playlists et de titres, fiche d'une playlist. M-pacer
+//!   s'en sert quand aucun compte n'est lie (la lecture du compte, elle, exige le
+//!   cookie `MPACER_DEEZER_ARL` ou l'OAuth).
 //!
 //! Deezer renvoie ses erreurs applicatives en HTTP 200 avec un corps
 //! `{"error":{...}}` : chaque reponse passe donc par `check_error`.
@@ -83,6 +89,55 @@ pub struct PlaylistDetail {
     pub tracks: Vec<TrackRef>,
 }
 
+/// Ordres de tri documentes par Deezer (parametre `order` de la recherche).
+pub const SEARCH_ORDERS: [&str; 9] = [
+    "RANKING",
+    "TRACK_ASC",
+    "TRACK_DESC",
+    "ARTIST_ASC",
+    "ARTIST_DESC",
+    "RATING_ASC",
+    "RATING_DESC",
+    "DURATION_ASC",
+    "DURATION_DESC",
+];
+
+/// Recherche de titres : parametres documentes du Search Builder Deezer.
+///
+/// `q` accepte la syntaxe avancee (`artist:"..."`, `track:"..."`,
+/// `album:"..."`, `label:"..."`), `limit` / `index` paginent, `order`
+/// trie et `strict` desactive le rapprochement approximatif. Les filtres
+/// `bpm_min`/`bpm_max` et `dur_min`/`dur_max` sont transmis tels quels :
+/// Deezer ne remplit pas son champ `bpm` pour la plupart des titres, donc le
+/// filtre ne remplace jamais la balise du MP3.
+#[derive(Debug, Clone, Default)]
+pub struct TrackSearchQuery {
+    pub query: String,
+    pub limit: u32,
+    pub index: u32,
+    pub order: Option<String>,
+    pub strict: bool,
+    pub bpm_min: Option<u32>,
+    pub bpm_max: Option<u32>,
+    pub duration_min_s: Option<u32>,
+    pub duration_max_s: Option<u32>,
+}
+
+/// Titre trouve par la recherche Deezer.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FoundTrack {
+    /// Identifiant Deezer de la piste : il construit le lien Deemix et reste
+    /// stocke sur la piste importee.
+    pub deezer_id: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub duration_s: Option<f64>,
+    /// Popularite Deezer (champ `rank`), pour afficher les titres connus d'abord.
+    pub rank: Option<i64>,
+    pub link: Option<String>,
+}
+
 /// Profil du compte lie.
 #[derive(Debug, Clone)]
 pub struct Profile {
@@ -126,6 +181,12 @@ struct RawTrack {
     artist: Option<RawArtist>,
     #[serde(default)]
     album: Option<RawAlbum>,
+    /// Popularite Deezer (0..1_000_000) : ordre par defaut de la recherche.
+    #[serde(default)]
+    rank: Option<i64>,
+    /// Page publique du titre (`https://www.deezer.com/track/{id}`).
+    #[serde(default)]
+    link: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -134,6 +195,9 @@ struct RawTrackPage {
     data: Vec<RawTrack>,
     #[serde(default)]
     next: Option<String>,
+    /// Deezer signale une recherche refusee par un champ `error` (HTTP 200).
+    #[serde(default)]
+    error: Option<RawError>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -347,6 +411,26 @@ pub async fn get_playlist(
         encode(access_token)
     );
     let raw: RawPlaylist = get_json(http, &url).await?;
+    playlist_detail(http, raw, id, Some(access_token)).await
+}
+
+/// Fiche d'une playlist **publique**, sans aucun compte Deezer.
+///
+/// L'API publique repond sans jeton : c'est ce qui permet d'importer une
+/// playlist partagee sans arl ni OAuth (les playlists privees, elles, exigent le
+/// cookie `MPACER_DEEZER_ARL`).
+pub async fn get_playlist_public(http: &reqwest::Client, id: &str) -> AppResult<PlaylistDetail> {
+    let raw: RawPlaylist = get_json(http, &format!("{API_BASE}/playlist/{id}")).await?;
+    playlist_detail(http, raw, id, None).await
+}
+
+/// Metadonnees et pistes d'une fiche de playlist, jeton facultatif.
+async fn playlist_detail(
+    http: &reqwest::Client,
+    raw: RawPlaylist,
+    id: &str,
+    access_token: Option<&str>,
+) -> AppResult<PlaylistDetail> {
     if let Some(message) = error_message(raw.error.as_ref()) {
         return Err(AppError::internal(format!(
             "playlist Deezer illisible : {message}"
@@ -358,7 +442,7 @@ pub async fn get_playlist(
         .tracks
         .as_ref()
         .and_then(|page| page.next.clone())
-        .map(|next| with_token(next, access_token));
+        .map(|next| with_optional_token(next, access_token));
     if let Some(page) = &raw.tracks {
         tracks.extend(page.data.iter().filter_map(track_ref));
     }
@@ -371,7 +455,9 @@ pub async fn get_playlist(
         pages += 1;
         let page: RawTrackPage = get_json(http, &page_url).await?;
         tracks.extend(page.data.iter().filter_map(track_ref));
-        next = page.next.map(|next| with_token(next, access_token));
+        next = page
+            .next
+            .map(|next| with_optional_token(next, access_token));
     }
 
     Ok(PlaylistDetail {
@@ -388,6 +474,110 @@ pub async fn get_playlist(
             .clone()
             .or_else(|| raw.picture_medium.clone()),
         tracks,
+    })
+}
+
+/// Ajoute le jeton a une URL `next` quand il y en a un.
+fn with_optional_token(url: String, access_token: Option<&str>) -> String {
+    match access_token {
+        Some(token) => with_token(url, token),
+        None => url,
+    }
+}
+
+/// Recherche de playlists **publiques**, sans aucun compte Deezer.
+pub async fn search_playlists_public(
+    http: &reqwest::Client,
+    query: &str,
+) -> AppResult<Vec<PlaylistRef>> {
+    let response = http
+        .get(format!("{API_BASE}/search/playlist"))
+        .query(&[("q", query), ("limit", "20")])
+        .send()
+        .await?;
+    let page: RawPlaylistPage = json_or_error(response).await?;
+    Ok(page.data.iter().filter_map(playlist_ref).collect())
+}
+
+/// Recherche de titres (API publique).
+///
+/// Le jeton est facultatif : sans lui, Deezer ne renvoie que le contenu public.
+/// Les parametres suivent la documentation Deezer (recherche avancee, pagination,
+/// tri) : voir [`TrackSearchQuery`].
+pub async fn search_tracks(
+    http: &reqwest::Client,
+    access_token: Option<&str>,
+    request: &TrackSearchQuery,
+) -> AppResult<Vec<FoundTrack>> {
+    let query = request.query.trim();
+    if query.is_empty() {
+        return Err(AppError::bad_request(
+            "recherche vide : indiquez un titre, un artiste ou un album".to_string(),
+        ));
+    }
+    let mut params: Vec<(&str, String)> = vec![
+        ("q", query.to_string()),
+        ("limit", request.limit.clamp(1, 50).to_string()),
+        ("index", request.index.to_string()),
+    ];
+    if request.strict {
+        params.push(("strict", "on".to_string()));
+    }
+    if let Some(order) = clean_order(request.order.as_deref()) {
+        params.push(("order", order));
+    }
+    // Filtres du Search Builder Deezer. Deezer ne remplit pas `bpm` pour la
+    // plupart des titres : le filtre ne remplace pas la balise du MP3.
+    if let Some(min) = request.bpm_min {
+        params.push(("bpm_min", min.to_string()));
+    }
+    if let Some(max) = request.bpm_max {
+        params.push(("bpm_max", max.to_string()));
+    }
+    if let Some(min) = request.duration_min_s {
+        params.push(("dur_min", min.to_string()));
+    }
+    if let Some(max) = request.duration_max_s {
+        params.push(("dur_max", max.to_string()));
+    }
+    if let Some(token) = access_token {
+        params.push(("access_token", token.to_string()));
+    }
+    let response = http
+        .get(format!("{API_BASE}/search/track"))
+        .query(&params)
+        .send()
+        .await?;
+    let page: RawTrackPage = json_or_error(response).await?;
+    if let Some(message) = error_message(page.error.as_ref()) {
+        return Err(AppError::internal(format!(
+            "recherche Deezer refusee : {message}"
+        )));
+    }
+    Ok(page.data.iter().filter_map(found_track).collect())
+}
+
+/// Ordre de tri valide (documente par Deezer), ou None pour laisser le defaut
+/// (popularite, `RANKING`).
+pub fn clean_order(value: Option<&str>) -> Option<String> {
+    let value = value?.trim().to_ascii_uppercase();
+    SEARCH_ORDERS.contains(&value.as_str()).then_some(value)
+}
+
+/// Traduit une piste de recherche en resultat affichable.
+fn found_track(raw: &RawTrack) -> Option<FoundTrack> {
+    let deezer_id = raw.id?;
+    Some(FoundTrack {
+        deezer_id: deezer_id.to_string(),
+        title: raw
+            .title
+            .clone()
+            .unwrap_or_else(|| format!("Titre {deezer_id}")),
+        artist: raw.artist.as_ref().and_then(|artist| artist.name.clone()),
+        album: raw.album.as_ref().and_then(|album| album.title.clone()),
+        duration_s: raw.duration.map(|duration| duration as f64),
+        rank: raw.rank,
+        link: raw.link.clone(),
     })
 }
 
@@ -1390,5 +1580,41 @@ mod tests {
             Some("https://exemple.org/cover.jpg")
         );
         assert!(gw_cover_url("hash").unwrap().contains("/cover/hash/"));
+    }
+
+    #[test]
+    fn search_orders_follow_the_documented_values() {
+        assert_eq!(clean_order(Some("ranking")).as_deref(), Some("RANKING"));
+        assert_eq!(
+            clean_order(Some(" duration_desc ")).as_deref(),
+            Some("DURATION_DESC")
+        );
+        assert_eq!(clean_order(Some("bidon")), None);
+        assert_eq!(clean_order(None), None);
+    }
+
+    #[test]
+    fn a_searched_track_is_mapped_to_metadata_only() {
+        let payload: RawTrack = serde_json::from_str(
+            r#"{"id":42,"title":"Levels","duration":200,"rank":900000,
+                "link":"https://www.deezer.com/track/42",
+                "artist":{"name":"Avicii"},"album":{"title":"True"}}"#,
+        )
+        .expect("charge utile Deezer valide");
+        let found = found_track(&payload).expect("piste mappee");
+        assert_eq!(found.deezer_id, "42");
+        assert_eq!(found.title, "Levels");
+        assert_eq!(found.artist.as_deref(), Some("Avicii"));
+        assert_eq!(found.album.as_deref(), Some("True"));
+        assert_eq!(found.duration_s, Some(200.0));
+        assert_eq!(found.rank, Some(900000));
+        assert_eq!(
+            found.link.as_deref(),
+            Some("https://www.deezer.com/track/42")
+        );
+
+        // Sans identifiant Deezer, la piste ne peut pas construire de lien Deemix.
+        let sans_id: RawTrack = serde_json::from_str(r#"{"title":"X"}"#).unwrap();
+        assert!(found_track(&sans_id).is_none());
     }
 }

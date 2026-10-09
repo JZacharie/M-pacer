@@ -40,8 +40,10 @@ allure / cardio / altitude, plan contre réalisé, zones de fréquence cardiaque
 chronologie des pauses), les écrans se composent à partir de **neuf widgets**, les
 courses à venir ont leur fiche, leur planning et une **recherche dans le calendrier
 Finishers** (la fiche d'une course trouvée arrive pré-remplie), et la page `/music` prépare la
-bande-son (playlists Deezer par cookie `arl`, BPM cible, liste des MP3 à
-télécharger, envoi dans la file **Deemix** et manifeste à copier sur la montre).
+bande-son (playlists Deezer par cookie `arl` **ou catalogue public sans compte**,
+recherche de titres à ajouter, BPM cible, liste des MP3 à télécharger, envoi dans
+la file **Deemix**, manifeste à copier sur la montre et envoi direct vers la
+montre ou le téléphone par USB ou Wi-Fi).
 
 ## 2. Architecture
 

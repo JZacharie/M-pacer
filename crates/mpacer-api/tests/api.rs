@@ -2103,6 +2103,108 @@ async fn music_page_has_six_blocks_and_downloads_the_manifest() {
 }
 
 #[tokio::test]
+async fn a_searched_track_can_be_added_to_a_playlist() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (_user, session) = dev_user_session(&state).await;
+
+    let playlist = mpacer_api::db::insert_music_playlist(
+        &state.pool,
+        &_user.id,
+        &mpacer_api::models::MusicPlaylistInput {
+            name: "Run".into(),
+            source: "manual".into(),
+            deezer_id: None,
+            cover_url: None,
+            target_bpm: None,
+        },
+        state.now_ms(),
+    )
+    .await
+    .unwrap();
+
+    // Bloc 3 : la recherche de titres est proposee sans compte (catalogue public).
+    let page_url = format!("/music?playlist={}", playlist.id);
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie(&page_url, &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("Ajouter un titre"), "{body}");
+    assert!(body.contains("name=\"tq\""), "{body}");
+
+    // Ajout d'un titre trouve par la recherche : il prend la position suivante.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/music/playlists/{}/tracks/add", playlist.id),
+            "deezer_id=4273247042&title=Levels&artist=Avicii&album=True&duration_s=200",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers()[header::LOCATION],
+        format!("/music?playlist={}&ok=titre_ajoute", playlist.id)
+    );
+
+    let tracks = mpacer_api::db::list_music_tracks(&state.pool, &_user.id, &playlist.id)
+        .await
+        .unwrap();
+    assert_eq!(tracks.len(), 1);
+    assert_eq!(tracks[0].title, "Levels");
+    assert_eq!(tracks[0].artist.as_deref(), Some("Avicii"));
+    assert_eq!(tracks[0].position, 0);
+    assert_eq!(tracks[0].deezer_track_id.as_deref(), Some("4273247042"));
+
+    // Un titre sans nom est refuse sans rien ecrire.
+    let response = app
+        .clone()
+        .oneshot(form_request(
+            "POST",
+            &format!("/music/playlists/{}/tracks/add", playlist.id),
+            "title=&deezer_id=1",
+            &session,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers()[header::LOCATION],
+        format!("/music?playlist={}&erreur=titre_invalide", playlist.id)
+    );
+    let tracks = mpacer_api::db::list_music_tracks(&state.pool, &_user.id, &playlist.id)
+        .await
+        .unwrap();
+    assert_eq!(tracks.len(), 1, "aucun titre invalide n'est ecrit");
+}
+
+#[tokio::test]
+async fn the_music_page_stays_usable_without_deezer_credentials() {
+    let (app, state) = app_or_skip!(test_app(true).await);
+    let (_user, session) = dev_user_session(&state).await;
+
+    // Sans aucun identifiant Deezer, la page n'est pas une impasse : le bloc 1
+    // propose la recherche du catalogue public, sans compte.
+    let body = body_text(
+        app.clone()
+            .oneshot(get_with_cookie("/music", &session))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(body.contains("catalogue public Deezer"), "{body}");
+    assert!(body.contains("action=\"/music/search\""), "{body}");
+    assert!(body.contains("name=\"public\" value=\"1\""), "{body}");
+    // La marche a suivre reste indiquee quand rien n'est prepare.
+    assert!(body.contains("Aucune playlist pour l'instant"), "{body}");
+    assert!(body.contains("aucun compte requis"), "{body}");
+}
+
+#[tokio::test]
 async fn deezer_stays_optional_without_credentials() {
     let (app, state) = app_or_skip!(test_app(true).await);
     let (_user, session) = dev_user_session(&state).await;

@@ -19,6 +19,9 @@ permissions:
   contents: read
   packages: write
 
+env:
+  ACTIONS_RUNNER_FORCE_NODE24: "true"
+
 jobs:
   image:
     runs-on: ubuntu-latest

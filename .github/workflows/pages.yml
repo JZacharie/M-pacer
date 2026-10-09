@@ -22,6 +22,10 @@ permissions:
   pages: write
   id-token: write
 
+env:
+  ACTIONS_RUNNER_FORCE_NODE24: "true"
+
+
 # Une seule publication a la fois, sans annuler une execution en cours.
 concurrency:
   group: pages

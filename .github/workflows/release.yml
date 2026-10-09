@@ -24,6 +24,7 @@ permissions:
 env:
   TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   API_URL: ${{ vars.MPACER_API_URL || 'https://mpacer.p.zacharie.org' }}
+  ACTIONS_RUNNER_FORCE_NODE24: "true"
 
 jobs:
   # Numero de version sans le prefixe « v » : c'est celui des fichiers publies

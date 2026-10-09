@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+env:
+  ACTIONS_RUNNER_FORCE_NODE24: "true"
+
 jobs:
   rust:
     runs-on: ubuntu-latest

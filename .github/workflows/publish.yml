@@ -22,6 +22,12 @@ permissions:
 env:
   ACTIONS_RUNNER_FORCE_NODE24: "true"
 
+# Les executions s'enchainent, sans annulation : deux publications simultanees
+# ne doivent pas se marcher dessus quand le tag epingle est mis a jour.
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   image:
     runs-on: ubuntu-latest
@@ -62,3 +68,43 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Le cluster jo3 execute exactement l'etiquette ecrite dans
+  # charts/mpacer/values-jo3.yaml. Un nom de tag qui ne change pas (« latest »)
+  # ne modifie aucun manifeste : ArgoCD reste « Synced » sur la revision
+  # precedente et le site continue de servir une image ancienne. Ce job epingle
+  # donc le sha du commit publie : le fichier de valeurs change a chaque
+  # publication, ArgoCD synchronise et le pod redemarre sur l'image exacte.
+  epinglage:
+    name: Epinglage de l'image deployee
+    needs: image
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Ecrire tag: sha-<court> dans values-jo3.yaml"
+        shell: bash
+        env:
+          SHA_PUBLIE: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          court="${SHA_PUBLIE:0:7}"
+          fichier="charts/mpacer/values-jo3.yaml"
+          lignes_avant="$(wc -l < "$fichier")"
+          sed -i -E "s|^  tag: .*$|  tag: sha-${court}|" "$fichier"
+          # Garde-fous : la substitution ne doit toucher qu'une seule ligne.
+          test "$(wc -l < "$fichier")" = "$lignes_avant"
+          test "$(grep -c "^  tag: sha-${court}$" "$fichier")" = "1"
+          if git diff --quiet -- "$fichier"; then
+            echo "values-jo3.yaml pointe deja sur sha-${court} : rien a publier."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$fichier"
+          git commit -m "chore(deploy): image jo3 sha-${court} [skip ci]"
+          git pull --rebase origin main
+          git push origin HEAD:main

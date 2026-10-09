@@ -338,6 +338,42 @@ helm rollback mpacer -n mpacer
 Le secret de session est conserve entre les upgrades (`lookup` + `resource-policy: keep`) :
 les utilisateurs deja connectes ne sont pas deconnectes.
 
+### 9.1 Publication automatique (push sur `main`)
+
+Un push sur `main` declenche `.github/workflows/publish.yml` : l'image est publiee
+sous `latest`, `sha-<court>` et la version du chart, puis le job **epinglage**
+reecrit `image.tag` dans `charts/mpacer/values-jo3.yaml` avec le `sha-<court>`
+du commit publie et pousse ce commit (`[skip ci]`). Le rendu Helm change donc a
+chaque publication : ArgoCD synchronise et le pod redemarre sur l'image exacte.
+
+Sans ce job, un tag dont le **nom** ne change pas (y compris `latest`) ne modifie
+aucun manifeste : ArgoCD reste `Synced` sur la revision precedente et le site
+sert une image ancienne. Cas rencontre le 9 octobre 2026 : le chart epingle
+`sha-1501e41` (image du 6 octobre) alors que 7 images avaient ete publiees
+depuis, soit 3 jours d'interface obsolete.
+
+Verifier ce qui tourne :
+
+```bash
+# Etiquette demandee par le cluster
+kubectl -n mpacer get deploy mpacer -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+
+# Empreinte reellement telechargee
+kubectl -n mpacer get pod -l app.kubernetes.io/instance=mpacer \
+  -o jsonpath='{.items[0].status.containerStatuses[0].imageID}{"\n"}'
+
+# Dernier commit qui a bouge l'epingle : doit citer le meme sha court
+git log -1 --format='%h %s' -- charts/mpacer/values-jo3.yaml
+
+# Revision GitOps synchronisee
+kubectl -n argocd get application mpacer -o jsonpath='{.status.sync.revision}{"\n"}'
+```
+
+Si le job `epinglage` echoue (branche `main` protegee contre les pushes du bot),
+la publication d'image reste valide mais le cluster garde l'image precedente :
+appliquer l'epingle a la main (`--set image.tag=sha-<court>`) ou autoriser
+`github-actions[bot]` a pousser sur `main`.
+
 ## 10. Depannage
 
 | Symptome | Cause probable | Action |
@@ -350,6 +386,7 @@ les utilisateurs deja connectes ne sont pas deconnectes.
 | « Connexion impossible » apres Google | redirect URI differente de `publicUrl` | aligner `config.publicUrl` et la console Google |
 | Certificat jamais emis | ClusterIssuer DNS non resolu | `kubectl -n mpacer describe certificate mpacer` |
 | La montre ne synchronise pas hors du domicile | ingress public desactive | activer `cloudflareIngress.enabled` et pointer le tunnel sur le service |
+| Le site sert une ancienne version | `image.tag` dont le nom ne change jamais (`latest`) ou epingle non mis a jour : ArgoCD reste `Synced` | comparer l'etiquette du Deployment au dernier commit et re-epingler (section 9.1) |
 
 ## 11. Desinstallation
 

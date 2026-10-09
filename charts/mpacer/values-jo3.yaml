@@ -5,15 +5,24 @@
 
 image:
   repository: ghcr.io/jzacharie/mpacer
-  # Etiquette publiee par la CI (.github/workflows/publish.yml) : « latest » sur
-  # main, plus une etiquette « sha-<court> » par commit.
+  # Etiquette EXACTE executee par le cluster : c'est elle qui declenche (ou non)
+  # le redeploiement. Le job « epinglage » de .github/workflows/publish.yml la
+  # reecrit en sha-<court> du commit publie a chaque push sur main : le rendu
+  # Helm change, ArgoCD synchronise et le pod redemarre sur l'image exacte.
   #
-  # ATTENTION : ce tag est ce que le cluster execute. S'il pointe sur un commit
-  # ancien ou sur une autre branche, le site continue de servir l'ancienne
-  # interface meme si main est plus recent. Apres chaque publication :
-  #   git log -1 --format=%h           # le sha court du commit deploye
-  #   -> reporter la valeur ici, commit, push ; ArgoCD synchronise seul.
-  tag: latest
+  # ATTENTION : un tag qui ne change pas de nom (« latest ») ne declenche RIEN.
+  # ArgoCD reste « Synced » sur la revision precedente et le site continue de
+  # servir une image ancienne : incident du 9 octobre 2026, tag sha-1501e41
+  # reste 3 jours alors que 7 images avaient ete publiees sur main.
+  #
+  # Verifier ce qui tourne :
+  #   kubectl -n mpacer get deploy mpacer \
+  #     -o jsonpath='{.spec.template.spec.containers[0].image}'
+  #   git log -1 --format='%h' -- charts/mpacer/values-jo3.yaml
+  #
+  # Test manuel : publier la meme etiquette depuis le poste, puis reporter ici.
+  #   pwsh deploy/build-image.ps1 -Push -Tag sha-<court>
+  tag: sha-708d210
   pullPolicy: Always
 
 imagePullSecrets:

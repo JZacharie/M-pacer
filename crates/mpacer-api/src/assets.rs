@@ -18,4 +18,3 @@ pub const ILLUSTRATION_USB_SVG: &str = include_str!("../static/illustration-usb.
 pub const MARATHON_PACER_JPG: &[u8] = include_bytes!("../static/marathon-pacer.jpg");
 /// Image trail running pour la page de presentation.
 pub const TRAIL_RUNNING_JPG: &[u8] = include_bytes!("../static/trail-running.jpg");
-

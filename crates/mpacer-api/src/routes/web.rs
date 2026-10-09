@@ -155,10 +155,7 @@ pub fn router() -> Router<AppState> {
 async fn marathon_pacer_image() -> Response {
     (
         StatusCode::OK,
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("image/jpeg"),
-        )],
+        [(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg"))],
         crate::assets::MARATHON_PACER_JPG,
     )
         .into_response()
@@ -167,10 +164,7 @@ async fn marathon_pacer_image() -> Response {
 async fn trail_running_image() -> Response {
     (
         StatusCode::OK,
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("image/jpeg"),
-        )],
+        [(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg"))],
         crate::assets::TRAIL_RUNNING_JPG,
     )
         .into_response()

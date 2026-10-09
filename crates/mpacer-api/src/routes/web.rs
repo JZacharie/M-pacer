@@ -146,9 +146,35 @@ pub fn router() -> Router<AppState> {
         .route("/static/logo.svg", get(logo))
         .route("/static/logo-mark.svg", get(logo_mark))
         .route("/static/illustration-usb.svg", get(illustration_usb))
+        .route("/static/marathon-pacer.jpg", get(marathon_pacer_image))
+        .route("/static/trail-running.jpg", get(trail_running_image))
 }
 
 // ------------------------------------------------------------------ ressources
+
+async fn marathon_pacer_image() -> Response {
+    (
+        StatusCode::OK,
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("image/jpeg"),
+        )],
+        crate::assets::MARATHON_PACER_JPG,
+    )
+        .into_response()
+}
+
+async fn trail_running_image() -> Response {
+    (
+        StatusCode::OK,
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("image/jpeg"),
+        )],
+        crate::assets::TRAIL_RUNNING_JPG,
+    )
+        .into_response()
+}
 
 async fn stylesheet() -> Response {
     (
@@ -355,34 +381,115 @@ async fn dashboard(
 
 fn landing() -> Markup {
     layout(
-        "Accueil",
+        "M-pacer - Votre meneur d'allure personnel",
         "",
         None,
         html! {
-            section class="hero" {
-                span class="badge-live" { span class="dot" {} "Auto-heberge" }
-                h1 { "M-pacer" }
-                p class="muted" {
-                    "Controlez votre allure en course, suivez un plan et retrouvez toutes vos seances."
-                }
-                div class="hero-actions" {
-                    a class="button" href="/login" {
-                        span class="icon icon-google" {} "Se connecter"
+            div class="landing-container" {
+                // Section Hero
+                section class="landing-hero" {
+                    span class="landing-badge" {
+                        span class="dot" {}
+                        "Meneur d'allure digital & auto-hébergé"
+                    }
+                    h1 { "Le rythme parfait, de la ligne de départ à l'arrivée" }
+                    p class="lead" {
+                        "En course à pied, un " strong { "pacer" } " (meneur d'allure) est le coureur expérimenté qui maintient un tempo millimétré pour vous guider vers votre record personnel. "
+                        strong { "M-pacer" } " embarque cette expertise directement à votre poignet et dans vos écouteurs."
+                    }
+                    div class="hero-actions" {
+                        a class="landing-cta" href="/login" {
+                            span class="icon icon-google" {}
+                            "Commencer avec Google"
+                        }
                     }
                 }
-            }
-            section class="cards" {
-                div class="card reveal" {
-                    span class="card-label" { span class="icon icon-watch" {} " Montre" }
-                    p { "L'application Wear OS enregistre la seance et l'envoie seule, meme si le telephone reste a la maison." }
+
+                // Galerie visuelle Marathon & Trail
+                section class="visual-banner" {
+                    div class="visual-card" {
+                        img src="/static/marathon-pacer.jpg" alt="Meneur d'allure sur marathon" loading="lazy";
+                        div class="visual-overlay" {
+                            span class="visual-tag" { "Sur Route & Marathon" }
+                            h3 { "Gestion d'allure au millimètre" }
+                            p { "Ne vous laissez plus déborder par la foule et l'adrénaline des premiers kilomètres." }
+                        }
+                    }
+                    div class="visual-card" {
+                        img src="/static/trail-running.jpg" alt="Coureur de trail en haute montagne" loading="lazy";
+                        div class="visual-overlay" {
+                            span class="visual-tag" { "En Trail & Montagne" }
+                            h3 { "Énergie & Régularité préservées" }
+                            p { "Anticipez le dénivelé, le relief et régulez votre effort sans vous épuiser prématurément." }
+                        }
+                    }
                 }
-                div class="card reveal" {
-                    span class="card-label" { span class="icon icon-key" {} " Backend" }
-                    p { "Rust, PostgreSQL et votre hebergement : aucune donnee revendue." }
+
+                // Titre de section : Les 3 rôles du Pacer
+                div class="section-title" {
+                    h2 { "Pourquoi courir avec un Pacer ?" }
+                    p { "Un véritable guide chronométrique et un coach mental sur le terrain." }
                 }
-                div class="card reveal" {
-                    span class="card-label" { span class="icon icon-stats" {} " Analyse" }
-                    p { "Tours, meilleures distances, statistiques et export GPX vers Strava ou Garmin." }
+
+                // Grille des 3 rôles clés
+                section class="pacer-grid" {
+                    div class="pacer-card" {
+                        span class="pacer-num" { "1" }
+                        h3 { "Régularité & The Pace Maker" }
+                        p {
+                            "Le piège classique en compétition est de partir trop vite sous le coup de l'excitation, pour le payer cruellement aux derniers kilomètres."
+                        }
+                        p {
+                            "Le pacer agit en " strong { "métronome" } " infaillible. Il verrouille votre cadence pour atteindre votre objectif chronométrique (3h30 au marathon, 45 min sur 10 km)."
+                        }
+                    }
+                    div class="pacer-card" {
+                        span class="pacer-num" { "2" }
+                        h3 { "Soutien Psychologique & Mental" }
+                        p {
+                            "Courir avec un repère précis libère l'esprit du coureur pour une concentration optimale :"
+                        }
+                        ul {
+                            li { strong { "Moins de stress : " } "Fini de surveiller sa montre toutes les 30 secondes pour calculer ses temps de passage." }
+                            li { strong { "Effet d'entraînement : " } "Garder le cap, ne pas lâcher prise dans les passages difficiles et préserver ses ressources." }
+                        }
+                    }
+                    div class="pacer-card" {
+                        span class="pacer-num" { "3" }
+                        h3 { "Tactique, Relance & Vigilance" }
+                        p {
+                            "Repérable de loin avec son ballon ou sa flamme, le pacer donne le tempo tactique de l'épreuve :"
+                        }
+                        ul {
+                            li { strong { "Gestion du terrain : " } "Ajustement dans les côtes, relances après les virages et gestion du vent." }
+                            li { strong { "Rappels clés : " } "Alertes régulières d'hydratation et d'alimentation aux ravitaillements." }
+                        }
+                    }
+                }
+
+                // Carte récapitulative des piliers techniques de l'application M-pacer
+                div class="tech-banner" {
+                    div class="tech-item" {
+                        div class="tech-item-head" {
+                            span class="icon icon-watch" {}
+                            "Montre Autonome"
+                        }
+                        p { "Application Garmin & Wear OS : suivi temps réel en direct, sans nécessité d'emporter votre smartphone." }
+                    }
+                    div class="tech-item" {
+                        div class="tech-item-head" {
+                            span class="icon icon-key" {}
+                            "Auto-hébergé & Souverain"
+                        }
+                        p { "Propulsé par Rust et PostgreSQL. Vos traces et données physiologiques vous appartiennent à 100 %." }
+                    }
+                    div class="tech-item" {
+                        div class="tech-item-head" {
+                            span class="icon icon-stats" {}
+                            "Analyse & Partage"
+                        }
+                        p { "Statistiques avancées par intervalles, détection de dérive cardiaque et synchronisation GPX." }
+                    }
                 }
             }
         },

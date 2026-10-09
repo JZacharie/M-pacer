@@ -2,10 +2,54 @@
 # M-pacer, en deux minutes
 
 <p class="lead">
-Une application de <strong>contrôle d'allure</strong> pour montre Android (Wear OS),
-et un <strong>site web auto-hébergé</strong> pour relire, analyser et préparer vos courses.
-Tout le calcul tient dans un cœur Rust unique, testé sans montre et sans serveur.
+En course à pied, un <strong>pacer</strong> (meneur d'allure) est un coureur expérimenté dont le rôle est de maintenir un rythme régulier et précis du départ à l'arrivée pour vous aider à franchir la ligne dans votre objectif chronométrique. <strong>M-pacer</strong> digitalise ce métronome humain directement dans votre montre et votre navigateur.
 </p>
+
+<div class="pacer-banner-wrap">
+  <div class="pacer-photo-card">
+    <img src="{{ '/assets/images/marathon-pacer.jpg' | relative_url }}" alt="Meneurs d'allure sur marathon">
+    <div class="pacer-photo-caption">
+      <span class="tag">Sur Route & Marathon</span>
+      <h4>Gestion d'allure au millimètre</h4>
+      <p>Ne partez plus trop vite sous l'effet de l'adrénaline et de la foule.</p>
+    </div>
+  </div>
+  <div class="pacer-photo-card">
+    <img src="{{ '/assets/images/trail-running.jpg' | relative_url }}" alt="Coureur de trail en haute montagne">
+    <div class="pacer-photo-caption">
+      <span class="tag">En Trail & Montagne</span>
+      <h4>Régularité et endurance préservées</h4>
+      <p>Gérez l'effort selon le relief sans vous épuiser prématurément.</p>
+    </div>
+  </div>
+</div>
+
+<div class="pacer-roles-grid">
+  <div class="pacer-role-item">
+    <div class="pacer-badge-num">1</div>
+    <h3>Régularité & Métronome</h3>
+    <p>Le piège classique est de partir trop vite et de s'effondrer au fil des kilomètres. Le pacer court à vitesse constante, calculée pour un temps précis (3h30 au marathon, 45 min sur 10 km).</p>
+  </div>
+  <div class="pacer-role-item">
+    <div class="pacer-badge-num">2</div>
+    <h3>Soutien Psychologique & Mental</h3>
+    <p>Libérez votre esprit de la charge mentale pendant la course :</p>
+    <ul>
+      <li><strong>Moins de stress :</strong> Fini de scruter la montre à chaque kilomètre pour calculer les temps de passage.</li>
+      <li><strong>Effet d'aspiration :</strong> Rester motivé, ne rien lâcher et franchir les coups de mou en confiance.</li>
+    </ul>
+  </div>
+  <div class="pacer-role-item">
+    <div class="pacer-badge-num">3</div>
+    <h3>Tactique & Signalisation</h3>
+    <p>Reconnaissable à sa flamme ou son drapeau, le meneur guide l'épreuve :</p>
+    <ul>
+      <li><strong>Lecture du parcours :</strong> Anticipation des côtes, relances et gestion du vent de face.</li>
+      <li><strong>Rappels réguliers :</strong> Encouragements et alertes pour bien s'hydrater aux ravitaillements.</li>
+    </ul>
+  </div>
+</div>
+
 
 <div class="mockups">
   <figure class="mockup">

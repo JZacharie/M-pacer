@@ -13,3 +13,9 @@ pub const LOGO_SVG: &str = include_str!("../static/logo.svg");
 pub const LOGO_MARK_SVG: &str = include_str!("../static/logo-mark.svg");
 /// Schema du bloc 4 : playlist, cable USB, montre.
 pub const ILLUSTRATION_USB_SVG: &str = include_str!("../static/illustration-usb.svg");
+
+/// Image marathon & pacer pour la page de presentation.
+pub const MARATHON_PACER_JPG: &[u8] = include_bytes!("../static/marathon-pacer.jpg");
+/// Image trail running pour la page de presentation.
+pub const TRAIL_RUNNING_JPG: &[u8] = include_bytes!("../static/trail-running.jpg");
+

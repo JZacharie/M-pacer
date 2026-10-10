@@ -43,6 +43,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 thiserror = "2"
 anyhow = "1"
+# Observabilite (docs/18, phase D) : facade de metriques et exportateur texte
+# Prometheus. L'exportateur est pris SANS son ecouteur HTTP : /metrics est servi
+# par le routeur Axum existant, donc sur le meme port que l'API.
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
 
 [profile.release]
 lto = "thin"

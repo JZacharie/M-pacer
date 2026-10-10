@@ -295,6 +295,40 @@ acceptable **uniquement** parce que le service n'est joignable que dans le
 cluster (`ClusterIP`, aucun Ingress). Pour un broker expose, activez
 l'authentification et `mqtts://` (voir docs/10 § 6).
 
+## 7 ter. Supervision (Prometheus, optionnel)
+
+Le service expose `/metrics` au format texte Prometheus : requetes et latences
+par gestionnaire, pool PostgreSQL, suivi en direct, stockage audio (docs/18,
+phase D). L'endpoint est servi sur le port HTTP de l'API ; le port nomme
+`metrics` du Service n'existe que pour le scrape interne.
+
+```bash
+curl -s https://mpacer.p.zacharie.org/metrics | grep mpacer_http_requests_total
+kubectl -n mpacer port-forward svc/mpacer 9090:9090 &
+curl -s http://127.0.0.1:9090/metrics | head
+```
+
+Pour que l'operateur Prometheus du cluster (kube-prometheus-stack) scrape le
+service, activer les ressources optionnelles du chart :
+
+```bash
+helm upgrade mpacer charts/mpacer -n mpacer -f charts/mpacer/values-jo3.yaml \
+  --set metrics.serviceMonitor.enabled=true \
+  --set metrics.prometheusRule.enabled=true
+```
+
+- `ServiceMonitor` : scrape `http://<service>:9090/metrics` toutes les 30 s, par
+  l'adresse interne (ClusterIP) — la supervision ne passe pas par l'ingress.
+  Si l'instance Prometheus selectionne ses ServiceMonitors par etiquette,
+  renseigner `metrics.serviceMonitor.labels`.
+- `PrometheusRule` : alertes memoire du pod (90 % de la limite pendant 10 min),
+  saturation du pool PostgreSQL (> 80 % des connexions) et suivi en direct
+  interrompu (des appareils publient, le service n'est plus abonne).
+
+`/metrics` reste joignable depuis l'ingress public (la route est servie sur le
+meme port). Si cela n'est pas souhaite, bloquer le chemin `/metrics` au niveau
+de Traefik (middleware `ipAllowList` sur ce `PathPrefix`).
+
 ## 8. Sauvegarde et restauration
 
 ### 8.1 Sauvegarde logique a la demande

@@ -143,6 +143,10 @@ s'ajoute.
     <h3>Le site web</h3>
     <p>Pages, analyse de séance, courses, API.</p>
   </a>
+  <a class="card" href="{{ '/guide/' | relative_url }}">
+    <h3>Guide utilisateur</h3>
+    <p>Installer, appairer, courir, synchroniser, relire : le mode d'emploi pas à pas.</p>
+  </a>
   <a class="card" href="https://github.com/JZacharie/M-pacer/tree/main/docs">
     <h3>Documentation technique</h3>
     <p>Analyse fonctionnelle, architecture Wear OS, backend, courses, analyse de séance.</p>

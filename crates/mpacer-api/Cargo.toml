@@ -44,6 +44,9 @@ webpki-roots = { workspace = true }
 # Telechargement des MP3 deposes sur le volume audio : flux de fichier sans
 # charger l'octet en memoire (module media, route .../tracks/{id}/file).
 tokio-util = { version = "0.7", default-features = false, features = ["io"] }
+# Metriques d'exploitation exposees sur GET /metrics (module metrics, docs/18).
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

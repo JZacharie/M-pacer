@@ -15,11 +15,19 @@ use tower_http::trace::TraceLayer;
 
 /// Routeur complet du service.
 pub fn router(state: AppState) -> Router {
+    // La route /metrics existe : le recorder doit exister avant la premiere
+    // requete, sinon celles servies entre-temps ne seraient jamais comptees.
+    // L'appel est idempotent et ne coute rien.
+    let _ = crate::metrics::install();
     let mut app = Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        // Supervision : le texte est rendu sur le meme port que l'API, ce qui
+        // evite un second serveur (voir crate::metrics).
+        .route(crate::metrics::ENDPOINT, get(crate::metrics::exporter))
         .merge(api::router())
         .merge(web::router())
+        .layer(axum::middleware::from_fn(crate::metrics::track))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http());
 

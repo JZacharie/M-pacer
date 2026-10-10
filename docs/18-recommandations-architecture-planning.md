@@ -92,23 +92,18 @@ flowchart TD
 
 ---
 
-### Phase D : Observabilité & Monitoring de Production (jo3)
+### Phase D : Observabilité & Monitoring de Production (jo3) (Livré ✅)
 - **Objectif :** Instrumenter le backend pour surveiller en temps réel l'utilisation des ressources et la santé du cluster k3s.
-
-#### 1. Endpoint `/metrics` Prometheus (`crates/mpacer-api`)
-* Intégration de `metrics` et `metrics-exporter-prometheus`.
-* Métriques clés exposées :
-  - `mpacer_http_requests_total{handler, code}` : Volume et codes retour HTTP.
-  - `mpacer_http_request_duration_seconds` : Latence des requêtes (histogramme).
-  - `mpacer_db_pool_active_connections` : Connexions SQLx utilisées par rapport au max (10).
-  - `mpacer_active_live_devices` : Nombre de montres et téléphones publiant actuellement.
-  - `mpacer_media_storage_bytes` : Espace disque audio occupé par rapport au quota de 4 Go.
-
-#### 2. Intégration Helm & Kubernetes (`charts/mpacer`)
-* Ajout d'une ressource `ServiceMonitor` optionnelle pour Prometheus Operator.
-* Affinage des seuils de mémoire du Pod :
-  - `limits.memory: 256Mi`
-  - `requests.memory: 64Mi`
+- **Réalisation :**
+  - [`crates/mpacer-api/src/metrics.rs`](file:///e:/git/JZacharie/M-pacer/crates/mpacer-api/src/metrics.rs) : exportateur Prometheus installé au démarrage. L'exportateur `metrics-exporter-prometheus` est pris **sans son écouteur HTTP** (feature `http-listener` désactivée) : le texte est rendu par le routeur Axum existant, sur le port de l'API — aucun second serveur, aucun second port à ouvrir.
+  - Middleware `track` : chaque requête alimente `mpacer_http_requests_total{handler, code}` et l'histogramme `mpacer_http_request_duration_seconds` (bornes 1 ms → 5 s). L'étiquette `handler` vient de `MatchedPath` (« /api/v1/workouts/{id} »), jamais de l'URI brute : pas d'explosion de cardinalité, et les routes inconnues tombent dans un libellé fixe `inconnu`.
+  - Jauges relues **au moment du scrape** (aucune requête périodique) : `mpacer_db_pool_active_connections`, `_idle_`, `_max_` (10 par défaut), `mpacer_active_live_devices`, `mpacer_mqtt_connected`, `mpacer_mqtt_messages_total`, `mpacer_media_storage_bytes` (somme SQL des octets stockés, bornée à 2 s) et `mpacer_media_quota_bytes`.
+  - [`crates/mpacer-api/src/db/music.rs`](file:///e:/git/JZacharie/M-pacer/crates/mpacer-api/src/db/music.rs) : `music_storage_bytes_total` — l'occupation audio est lue en base, pas en parcourant le volume.
+- **Intégration Helm & Kubernetes** (`charts/mpacer`) :
+  - Port nommé `metrics` sur le Service (ClusterIP) ; le conteneur continue de n'écouter que sur `http`.
+  - `ServiceMonitor` **optionnel** (`metrics.serviceMonitor.enabled`, désactivé par défaut) qui scrape `/metrics` toutes les 30 s via l'adresse interne du Service — le trafic de supervision ne passe pas par l'ingress public.
+  - `PrometheusRule` **optionnel** (`metrics.prometheusRule.enabled`) : alertes mémoire (`container_memory_working_set_bytes` / limite > 90 % pendant 10 min), saturation du pool (> 80 % des connexions) et suivi en direct interrompu. Seuils mémoire du Pod déjà en place : `limits.memory: 256Mi`, `requests.memory: 64Mi`.
+- **Validation :** 1 test unitaire du middleware (route, code, histogramme), 2 tests d'intégration (`tests/metrics.rs` : format d'exposition, comptage par route, 404 regroupés sous `inconnu`) et `helm lint` / `helm template` du chart avec les deux ressources activées.
 
 ---
 
@@ -181,7 +176,7 @@ pub struct IntervalPlan {
 | :--- | :--- | :--- | :--- |
 | **Sprint 1** (livré ✅) | **Phase B (Live)** : file de 20 min / 120 points, décharge en rafale, ingestion triée côté backend. | Faible | Trace sans trou à la reconnexion, validée par 11 tests. |
 | **Sprint 2** | **Phase C (Garmin)** : Fixtures JSON + Harnais de tests comparés. | Moyen | Rapport de conformité < 0.5% d'écart. |
-| **Sprint 3** | **Phase D (Observabilité)** : Route `/metrics` + Sondes k8s sur `jo3`. | Faible | Dashboard Grafana / métriques Prometheus. |
+| **Sprint 3** (livré ✅) | **Phase D (Observabilité)** : route `/metrics` + port `metrics` du Service, ServiceMonitor et PrometheusRule optionnels. | Faible | Métriques Prometheus et alertes prêtes pour le tableau de bord Grafana. |
 | **Sprint 4** | **Phase E (Fractionné)** : Machine à états Rust + alertes vocales. | Élevé | Support des séances par intervalles dans le moteur. |
 | **Sprint 5** | **Phase F (Health Connect)** : Intégration Android Health Connect API. | Moyen | Écriture locale des séances dans le hub santé Android. |
 | **Sprint 6** | **Phase G (GAP & Kalman)** : Fusion baromètre/GPS et GAP temps réel. | Moyen | Widget d'allure ajustée à la pente en direct. |

@@ -33,6 +33,7 @@ pub mod finishers;
 pub mod friends;
 pub mod live;
 pub mod media;
+pub mod metrics;
 pub mod models;
 pub mod mqtt;
 pub mod race_import;

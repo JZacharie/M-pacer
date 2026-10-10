@@ -1,0 +1,61 @@
+{{- if .Values.metrics.prometheusRule.enabled }}
+{{/*
+  Alertes d'exploitation. La memoire du pod vient du kubelet (cAdvisor), les
+  autres series viennent de l'application elle-meme (module metrics) : c'est
+  exactement ce que la phase D du document 18 demande de surveiller.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "mpacer.fullname" . }}
+  labels:
+    {{- include "mpacer.labels" . | nindent 4 }}
+    {{- with .Values.metrics.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: mpacer
+      rules:
+        # Le pod approche sa limite memoire (256 Mi par defaut) : PostgreSQL
+        # et les chemins de rendu web sont les premiers a en souffrir.
+        - alert: MpacerMemoireElevee
+          expr: >-
+            container_memory_working_set_bytes{namespace="{{ .Release.Namespace }}",container="mpacer"}
+            /
+            container_spec_memory_limit_bytes{namespace="{{ .Release.Namespace }}",container="mpacer"}
+            > 0.9
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "M-pacer approche sa limite memoire"
+            description: "Le conteneur mpacer consomme plus de 90 % de sa limite memoire depuis 10 minutes."
+        # Pool PostgreSQL : au-dela de 80 % des connexions, les requetes
+        # attendent une connexion libre et la latence s'envole.
+        - alert: MpacerPoolSature
+          expr: >-
+            mpacer_db_pool_active_connections
+            / mpacer_db_pool_max_connections
+            > 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pool PostgreSQL sature"
+            description: "Plus de 80 % des connexions du pool M-pacer sont utilisees depuis 5 minutes."
+        # Suivi en direct : des appareils publient mais le service n'est plus
+        # abonne au broker (l'utilisateur ne voit plus la position de son
+        # proche, alors que la montre continue d'envoyer).
+        - alert: MpacerSuiviEnDirectInterrompu
+          expr: mpacer_active_live_devices > 0 and mpacer_mqtt_connected == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Suivi en direct interrompu"
+            description: "Des appareils partagent leur position mais le service est deconnecte du broker MQTT."
+        {{- with .Values.metrics.prometheusRule.extraRules }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+{{- end }}

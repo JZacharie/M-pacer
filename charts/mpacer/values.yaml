@@ -43,6 +43,34 @@ service:
   type: ClusterIP
   port: 8080
 
+# Supervision Prometheus (docs/18, phase D). L'endpoint /metrics est toujours
+# servi par l'API, sur son port HTTP ; ces valeurs ajoutent le port nomme du
+# Service et les ressources de l'operateur Prometheus.
+metrics:
+  # Port nomme "metrics" sur le Service (ClusterIP), celui que scrape le
+  # ServiceMonitor. Le conteneur, lui, n'ecoute que sur "http".
+  enabled: true
+  port: 9090
+  serviceMonitor:
+    # Necessite l'operateur Prometheus (CRD monitoring.coreos.com) : a activer
+    # seulement si le cluster en dispose.
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    # Etiquettes posees sur le ServiceMonitor, pour qu'il soit selectionne par
+    # l'instance Prometheus (serviceMonitorSelector).
+    labels: {}
+    # Namespace ou creer le ServiceMonitor ; vide => namespace de la release.
+    namespace: ""
+  prometheusRule:
+    # Necessite l'operateur Prometheus (CRD monitoring.coreos.com).
+    enabled: false
+    labels: {}
+    # Regles supplementaires, ajoutees aux alertes par defaut (memoire du pod,
+    # saturation du pool PostgreSQL, suivi en direct muet) definies dans
+    # templates/prometheusrule.yaml.
+    extraRules: []
+
 # Configuration non sensible (ConfigMap)
 config:
   environment: production

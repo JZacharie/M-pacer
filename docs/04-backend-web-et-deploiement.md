@@ -93,6 +93,7 @@ session d'au moins 32 caractères.
 | DELETE | `/api/v1/races/{id}` | Bearer | supprime la course et son suivi |
 | GET | `/api/v1/stats?days=30` | Bearer | totaux sur une période |
 | GET | `/healthz` `/readyz` | — | sondes Kubernetes |
+| GET | `/metrics` | — | métriques Prometheus (docs/18, phase D) |
 
 Les erreurs sont homogènes : `{"error":"code_stable","message":"explication"}`.
 `authorization_pending` est le seul cas où la montre doit simplement repoller.
@@ -225,6 +226,7 @@ identifiants de la base dans le secret applicatif généré par l'opérateur.
 | Mise à jour applicative | `helm upgrade … --set image.tag=…` — sans coupure (`RollingUpdate`) |
 | Retour arrière | `helm rollback mpacer -n mpacer` |
 | Sondes | `/healthz` (vivacité), `/readyz` (base joignable) |
+| Métriques | `/metrics` (Prometheus), port `metrics` du Service pour le `ServiceMonitor` |
 | Journal | `RUST_LOG` (défaut `info,mpacer_api=info,tower_http=warn`) |
 
 ## 9. Limites connues

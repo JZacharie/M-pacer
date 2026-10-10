@@ -29,6 +29,14 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // Supervision : le recorder Prometheus est installe avant le premier appel
+    // (sans lui, les macros de metriques seraient des no-op silencieuses).
+    let _ = mpacer_api::metrics::install();
+    tracing::info!(
+        endpoint = mpacer_api::metrics::ENDPOINT,
+        "metriques Prometheus exposees"
+    );
+
     let pool = db::connect(&config).await?;
     let state = AppState::new(pool, Arc::new(config.clone()));
     // Suivi en direct : sans MPACER_MQTT_URL, aucune tache n'est creee.

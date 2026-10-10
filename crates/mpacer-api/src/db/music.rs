@@ -256,6 +256,20 @@ pub async fn music_storage_bytes(pool: &PgPool, user_id: &str) -> Result<i64, sq
     .await
 }
 
+/// Octets audio stockes sur le serveur, tous comptes confondus.
+///
+/// Alimente la jauge `mpacer_media_storage_bytes` de `/metrics` : comparer
+/// l'occupation au quota sans parcourir le volume (un parcours couterait cher
+/// des que la bibliotheque grossit, et bloquerait le scrape).
+pub async fn music_storage_bytes_total(pool: &PgPool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(SUM(size_bytes), 0)::bigint FROM music_tracks
+          WHERE storage_path IS NOT NULL",
+    )
+    .fetch_one(pool)
+    .await
+}
+
 /// Enregistre les octets d'un MP3 televerse sur un titre.
 #[allow(clippy::too_many_arguments)]
 pub async fn set_music_track_storage(

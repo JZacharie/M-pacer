@@ -76,6 +76,18 @@ class LiveQueueTest {
     }
 
     @Test
+    fun anInterruptedWritePutsThePointBackAtTheFront() {
+        val file = LiveQueue()
+        file.add(paquet(1_000))
+        file.add(paquet(2_000))
+        val enCours = file.removeFirst()!!
+        // L'ecriture echoue : le point ne doit pas etre perdu.
+        file.requeueFront(enCours)
+        assertEquals(listOf(1_000L, 2_000L), horodatages(file))
+        assertEquals(0, file.dropped)
+    }
+
+    @Test
     fun clearingResetsTheCounters() {
         val file = LiveQueue(maxPoints = 2, windowMs = 1_000_000)
         for (index in 0 until 8) file.add(paquet(index * 10_000L))

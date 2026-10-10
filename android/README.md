@@ -379,8 +379,9 @@ de ressources et limites : [docs/10](../docs/10-suivi-temps-reel.md).
 - **Budget** : ~55 ko/h de trafic, un fil en priorite basse, aucune minuterie,
   aucun wake lock. Si le reseau tombe, la file garde la trace (120 points, 20
   minutes) et la republie en rafale a la reconnexion ; au-dela, l'historique est
-  compresse de moitie plutot que jete. L'ecran Reglages affiche l'etat de la
-  liaison, les points publies et les points abandonnes.
+  compresse de moitie plutot que jete, et une ecriture interrompue remet le point
+  en file. L'ecran Reglages affiche l'etat de la liaison, les points publies et
+  les points abandonnes.
 - **Tests** (JVM, sans montre) :
 
   ```powershell

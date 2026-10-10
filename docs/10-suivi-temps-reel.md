@@ -246,8 +246,10 @@ jusqu'à 60 s. À la reconnexion, les positions accumulées **repartent en rafal
 (espacées de 50 ms) : les proches ne voient pas de trou de plusieurs minutes.
 Au-delà de vingt minutes de coupure, l'historique est **compressé de moitié**
 (un point sur deux) plutôt que tronqué : le tracé garde sa forme et la position
-courante survit toujours. À l'arrêt de la séance, seule la position courante est
-gardée, pour que le message `stop` parte sans attendre.
+courante survit toujours. Une écriture interrompue par la perte du lien remet le
+point en tête de file : rien n'est perdu au moment précis de la coupure. À l'arrêt
+de la séance, seule la position courante est gardée, pour que le message `stop`
+parte sans attendre.
 
 ### 5.2 Service
 

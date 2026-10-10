@@ -55,6 +55,15 @@ internal class LiveQueue(
 
     fun removeFirst(): Entry? = entrees.removeFirstOrNull()
 
+    /**
+     * Remet un point en tete. Une ecriture interrompue par la perte du lien ne
+     * doit pas effacer la position : elle repartira a la reconnexion, a sa place
+     * chronologique (le backend remplace un horodatage deja vu).
+     */
+    fun requeueFront(entry: Entry) {
+        entrees.addFirst(entry)
+    }
+
     /** A l'arret : ne garder que la position courante, tout de suite. */
     fun keepNewest() {
         while (entrees.size > 1) {

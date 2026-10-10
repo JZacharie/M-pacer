@@ -236,7 +236,12 @@ object LiveTracker {
             while (actif && socket != null) {
                 val paquet = retirer(ATTENTE_FILE_MS)
                 if (paquet != null) {
-                    if (!ecrire(paquet.packet)) break
+                    if (!ecrire(paquet.packet)) {
+                        // La socket est perdue : la position repart en tete de
+                        // file, elle sera renvoyee a la prochaine connexion.
+                        synchronized(verrou) { file.requeueFront(paquet) }
+                        break
+                    }
                     // Decharge en rafale : le retard accumule part d'un coup,
                     // espace de [RAFALE_MS] pour ne pas saturer la socket.
                     if (aDesPaquets()) attendre(RAFALE_MS)

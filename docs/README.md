@@ -37,6 +37,8 @@ Index des documents. Le point d'entrée reste le [README principal](../README.md
 | [Création d'un tableau de bord](images/dashboards/nouveau.png) | Constructeur : nom, gabarit, cases à cocher |
 | [Dépôt des MP3 — section 5 de `/music`](images/upload/musique-section-depot.png) | Agent local (USB) et zone de dépôt Wi-Fi, avec la progression du transfert |
 | [Importer une ancienne course](images/upload/course-import.png) | Page `/courses/importer` : un export Strava ou Garmin en GPX ou TCX |
+| [Réglages de la montre — version](images/upload/montre-version.png) | La montre affiche la version de l'APK installé et son jour de compilation |
+| [Bibliothèque musicale de la montre](images/upload/montre-musique.png) | Importer par USB ou télécharger depuis le serveur : les deux arrivées des MP3 |
 
 La vue d'ensemble est également reprise en tête de
 [02 - Architecture Rust / Wear OS](02-architecture-rust-wearos.md). Toutes ces images

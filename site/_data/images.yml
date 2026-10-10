@@ -54,6 +54,18 @@
   group: "Écrans web"
   alt: "Page Musique complète avec la playlist Sortie longue 21 km et ses cinq titres"
 
+- file: "upload/montre-version.png"
+  title: "Réglages de la montre — version"
+  caption: "La montre affiche la version de l'APK installe et son jour de compilation."
+  group: "Applications"
+  alt: "Ecran Reglages de la montre M-pacer, section Version : 0.2.0, compile le 10/10/2026, build 2"
+
+- file: "upload/montre-musique.png"
+  title: "Bibliothèque musicale de la montre"
+  caption: "Importer par USB ou télécharger depuis le serveur : les deux arrivées des MP3."
+  group: "Applications"
+  alt: "Ecran Musique de la montre M-pacer : boutons Importer (USB) et Telecharger (serveur), espace libre et playlists"
+
 - file: "logo-mpacer-cible-neon.jpg"
   title: "Logo — cible néon"
   caption: "Cible d'athlétisme et flèche d'allure, dégradé cyan et rose."

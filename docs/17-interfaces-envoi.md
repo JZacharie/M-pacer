@@ -100,6 +100,20 @@ seance et l'envoie au backend, en arriere-plan, apres la course.
 | Cote application | `SyncClient` (socle), ecran de synchronisation de la montre et du telephone |
 | Application d'appoint | choix d'un fichier du telephone, puis envoi vers la montre par le Data Layer (`WearSync`) ou partage systeme |
 
+### 3.1 Ce que la montre affiche
+
+Sur la montre, deux ecrans repondent a ces envois : la **bibliotheque** dit ce
+qui est deja la, et les **reglages** rappellent quelle version de l'APK tourne,
+version et jour de compilation compris.
+
+| Bibliotheque (`Musique`) | Reglages (bas de l'ecran) |
+|---|---|
+| ![Bibliotheque de la montre : importer en USB, telecharger depuis le serveur](images/upload/montre-musique.png) | ![Reglages de la montre : version et jour de compilation](images/upload/montre-version.png) |
+
+`Importer (USB)` lit les fichiers deposes par le cable, `Telecharger (serveur)`
+recupere ceux du depot Wi-Fi et les acquitte ; l'espace libre et utilise est
+affiche sous les deux boutons.
+
 ---
 
 ## 4. Reproduire ces captures
@@ -111,6 +125,21 @@ pwsh ./local-db.ps1 -Action Start
 pwsh ./local-db.ps1 -Action Run        # MPACER_DEV_AUTH=1, http://localhost:8080
 # puis, dans le navigateur : /  /courses/importer  /music?playlist=<id>
 ```
+
+Les deux captures de la montre viennent de l'appareil, pas d'une maquette :
+
+```bash
+# ADB sans fil (Debogage sans fil active sur la montre)
+adb devices                                  # noter la serie exacte, espaces compris
+adb -s "<serie>" shell monkey -p com.mpacer.watch -c android.intent.category.LAUNCHER 1
+adb -s "<serie>" shell input tap 337 366     # icone Reglages
+adb -s "<serie>" shell input swipe 225 300 225 120 300   # descendre jusqu'a la section Version
+adb -s "<serie>" shell screencap -p /sdcard/e.png && adb -s "<serie>" pull /sdcard/e.png montre-version.png
+adb -s "<serie>" shell input tap 118 360     # icone Musique (bibliotheque)
+```
+
+La serie ADB d'un appareil en Wi-Fi contient un espace et un suffixe mDNS : il
+faut la citer telle quelle (`adb -s "adb-XXXX (2)._adb-tls-connect._tcp"`).
 
 Pour voir les deux panneaux de depot des MP3, lancer le serveur avec un volume
 et un agent local :

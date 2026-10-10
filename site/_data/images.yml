@@ -56,9 +56,9 @@
 
 - file: "upload/montre-version.png"
   title: "Réglages de la montre — version"
-  caption: "La montre affiche la version de l'APK installe et son jour de compilation."
+  caption: "La montre affiche la version de l'APK installe et son horodatage de compilation."
   group: "Applications"
-  alt: "Ecran Reglages de la montre M-pacer, section Version : 0.2.0, compile le 10/10/2026, build 2"
+  alt: "Ecran Reglages de la montre M-pacer, section Version : 0.2.0, compile le 10/10/2026 06:50, build 2"
 
 - file: "upload/montre-musique.png"
   title: "Bibliothèque musicale de la montre"

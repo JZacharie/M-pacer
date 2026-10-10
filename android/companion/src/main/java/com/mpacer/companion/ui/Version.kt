@@ -6,44 +6,54 @@ import android.os.Build
 import com.mpacer.companion.BuildConfig
 
 /**
- * Version de l'application d'appoint et jour de compilation.
+ * Version de l'application d'appoint et moment de compilation.
  *
  * L'application d'appoint n'embarque pas le socle `:core` (elle ne fait
  * qu'appeler l'API) : elle lit donc sa propre version dans le
- * `PackageManager` et sa date dans le champ de compilation de Gradle, avec le
- * meme affichage que la montre et le telephone.
+ * `PackageManager` et son horodatage dans le champ de compilation de Gradle,
+ * avec le meme affichage que la montre et le telephone.
  */
 internal fun versionAffichee(context: Context): String =
     resumeVersion(nomInstalle(context), BuildConfig.BUILD_DATE)
 
 /**
- * Composition du resume, par exemple « Version 0.2.0 - compile le 10/10/2026 ».
+ * Composition du resume, par exemple « Version 0.2.0 - compile le 10/10/2026 07:42 ».
  *
  * Separee de la lecture du paquet : c'est la seule partie qui merite un test,
  * et elle n'a besoin ni d'Android ni d'un gestionnaire de paquets.
  */
-internal fun resumeVersion(nom: String, jourIso: String): String {
+internal fun resumeVersion(nom: String, horodatageIso: String): String {
     val nomMontre = nom.trim().ifBlank { "?" }
-    val jour = jourLisible(jourIso)
-    return if (jour.isBlank()) "Version $nomMontre" else "Version $nomMontre - compile le $jour"
+    val horodatage = horodatageLisible(horodatageIso)
+    return if (horodatage.isBlank()) {
+        "Version $nomMontre"
+    } else {
+        "Version $nomMontre - compile le $horodatage"
+    }
 }
 
 /**
- * `AAAA-MM-JJ` devient `JJ/MM/AAAA` (comme les dates de l'application) ; une
- * valeur ecrite autrement — variable d'environnement mal formee — est rendue
- * sans transformation plutot que de faire disparaitre la date.
+ * `AAAA-MM-JJ HH:MM` devient `JJ/MM/AAAA HH:MM` (comme les dates de
+ * l'application) ; une valeur plus ancienne qui ne porte que le jour reste
+ * lisible, et une valeur ecrite autrement — variable d'environnement mal
+ * formee — est rendue sans transformation plutot que de disparaitre.
  */
-internal fun jourLisible(jour: String): String {
-    val propre = jour.trim()
+internal fun horodatageLisible(valeur: String): String {
+    val propre = valeur.trim()
     if (propre.isEmpty()) return ""
-    val analyse = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.ROOT)
+    val avecHeure = propre.length > 10
+    val analyse = java.text.SimpleDateFormat(
+        if (avecHeure) "yyyy-MM-dd HH:mm" else "yyyy-MM-dd",
+        java.util.Locale.ROOT,
+    )
     analyse.isLenient = false
-    val minute = try {
+    val instant = try {
         analyse.parse(propre)?.time ?: return propre
     } catch (_: Exception) {
         return propre
     }
-    return Format.date(minute).substringBefore(' ')
+    val affichage = Format.date(instant)
+    return if (avecHeure) affichage else affichage.substringBefore(' ')
 }
 
 /** Nom de version de l'APK installe, ou « ? » si le paquet est illisible. */
@@ -61,7 +71,7 @@ private fun nomInstalle(context: Context): String {
         }
         paquet?.versionName ?: "?"
     } catch (_: Exception) {
-        // Installation en cours, profil de travail... : la date reste juste.
+        // Installation en cours, profil de travail... : l'horodatage reste juste.
         "?"
     }
 }

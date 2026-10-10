@@ -8,17 +8,18 @@ import java.text.SimpleDateFormat
 import java.util.Locale
 
 /**
- * Version de l'application et jour de compilation, pour l'ecran Reglages.
+ * Version de l'application et moment de compilation, pour l'ecran Reglages.
  *
  * Le numero vient du `PackageManager` : c'est le `versionName` de l'APK
  * reellement installe, donc celui que l'utilisateur peut comparer a la
  * publication GitHub. Il n'est pas recopie dans le code, ou il finirait par
  * mentir au premier oubli lors d'une release.
  *
- * La date, elle, est posee a la compilation par Gradle
- * (`BuildConfig.BUILD_DATE`, voir `android/build.gradle.kts`) : l'APK porte
- * le jour ou il a ete construit — celui du tag lors d'une release — et non le
- * jour ou l'application a ete ouverte.
+ * L'horodatage, lui, est pose a la compilation par Gradle
+ * (`BuildConfig.BUILD_DATE`, voir `android/build.gradle.kts`) : l'APK porte le
+ * moment ou il a ete construit — celui du tag lors d'une release — et non le
+ * moment ou l'application a ete ouverte. La precision est la minute : deux
+ * compilations du meme jour restent discernables.
  *
  * Ce module est partage par les trois applications (`:app`, `:phone`,
  * `:companion`) : le socle ne connait aucun nom d'ecran.
@@ -29,7 +30,7 @@ object BuildInfo {
     @Volatile
     private var resumeMemorise: String? = null
 
-    /** Resume affichable, par exemple « Version 0.2.0 - compile le 2026-10-10 ». */
+    /** Resume affichable, par exemple « Version 0.2.0 - compile le 10/10/2026 07:42 ». */
     fun resume(context: Context): String {
         resumeMemorise?.let { return it }
         val texte = composer(context.applicationContext)
@@ -37,7 +38,7 @@ object BuildInfo {
         return texte
     }
 
-    /** Jour de compilation (AAAA-MM-JJ), tel qu'inscrit dans l'APK. */
+    /** Horodatage de compilation (`AAAA-MM-JJ HH:MM`), tel qu'inscrit dans l'APK. */
     fun dateDeCompilation(): String = BuildConfig.BUILD_DATE
 
     private fun composer(context: Context): String {
@@ -45,10 +46,10 @@ object BuildInfo {
         val nom = paquet?.versionName?.takeIf { it.isNotBlank() } ?: "?"
         val texte = StringBuilder("Version ").append(nom)
 
-        // Les trois applications sont compilees ensemble : la date vient du
-        // meme jour pour toutes, et suffit a distinguer deux versions.
-        dateDeCompilation().takeIf { it.isNotBlank() }?.let { jour ->
-            texte.append(" - compile le ").append(lireDate(jour))
+        // Les trois applications sont compilees ensemble : le meme horodatage
+        // vaut pour toutes, et suffit a distinguer deux compilations.
+        dateDeCompilation().takeIf { it.isNotBlank() }?.let { horodatage ->
+            texte.append(" - compile le ").append(horodatageLisible(horodatage))
         }
 
         // Numero de build Android : utile pour comparer deux APK de meme version.
@@ -78,7 +79,7 @@ object BuildInfo {
             }
         } catch (_: Exception) {
             // Paquet illisible (installation en cours, profil de travail...) :
-            // l'ecran montre la date seule plutot que d'echouer.
+            // l'ecran montre l'horodatage seul plutot que d'echouer.
             null
         }
     }
@@ -95,16 +96,20 @@ object BuildInfo {
     }
 
     /**
-     * `AAAA-MM-JJ` reste lisible tel quel ; une date écrite autrement
-     * (variable d'environnement mal formee) est rendue sans transformation.
+     * `AAAA-MM-JJ HH:MM` devient `JJ/MM/AAAA HH:MM`. Un APK plus ancien, qui ne
+     * porte que le jour, reste lisible ; une valeur ecrite autrement (variable
+     * d'environnement mal formee) est rendue sans transformation.
      */
-    private fun lireDate(jour: String): String {
-        val analyse = SimpleDateFormat("yyyy-MM-dd", Locale.ROOT)
+    private fun horodatageLisible(valeur: String): String {
+        val propre = valeur.trim()
+        val avecHeure = propre.length > 10
+        val analyse = SimpleDateFormat(if (avecHeure) "yyyy-MM-dd HH:mm" else "yyyy-MM-dd", Locale.ROOT)
         analyse.isLenient = false
+        val affichage = if (avecHeure) "dd/MM/yyyy HH:mm" else "dd/MM/yyyy"
         return try {
-            SimpleDateFormat("dd/MM/yyyy", Locale.FRANCE).format(analyse.parse(jour)!!)
+            SimpleDateFormat(affichage, Locale.FRANCE).format(analyse.parse(propre)!!)
         } catch (_: Exception) {
-            jour
+            propre
         }
     }
 }

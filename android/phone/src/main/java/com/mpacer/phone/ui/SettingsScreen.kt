@@ -386,8 +386,8 @@ fun SettingsScreen(
                 fontSize = 12.sp,
             )
             Text(
-                "Le jour indique est celui de la compilation de l'APK (celui de la " +
-                    "publication pour une version publiee).",
+                "L'horodatage indique est celui de la compilation de l'APK, en heure " +
+                    "UTC (celui de la publication pour une version publiee).",
                 color = Palette.muted2,
                 fontSize = 11.sp,
             )

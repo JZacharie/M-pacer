@@ -28,7 +28,7 @@ fn main() {
 
     println!(
         "cargo:rustc-env=MPACER_BUILD_DATE={}",
-        date_iso::jour_iso(epoch)
+        date_iso::horodatage_iso(epoch)
     );
     println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
 }

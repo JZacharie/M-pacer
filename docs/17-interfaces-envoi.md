@@ -104,11 +104,11 @@ seance et l'envoie au backend, en arriere-plan, apres la course.
 
 Sur la montre, deux ecrans repondent a ces envois : la **bibliotheque** dit ce
 qui est deja la, et les **reglages** rappellent quelle version de l'APK tourne,
-version et jour de compilation compris.
+avec son horodatage de compilation (date et heure).
 
 | Bibliotheque (`Musique`) | Reglages (bas de l'ecran) |
 |---|---|
-| ![Bibliotheque de la montre : importer en USB, telecharger depuis le serveur](images/upload/montre-musique.png) | ![Reglages de la montre : version et jour de compilation](images/upload/montre-version.png) |
+| ![Bibliotheque de la montre : importer en USB, telecharger depuis le serveur](images/upload/montre-musique.png) | ![Reglages de la montre : version et horodatage de compilation](images/upload/montre-version.png) |
 
 `Importer (USB)` lit les fichiers deposes par le cable, `Telecharger (serveur)`
 recupere ceux du depot Wi-Fi et les acquitte ; l'espace libre et utilise est
@@ -132,10 +132,11 @@ Les deux captures de la montre viennent de l'appareil, pas d'une maquette :
 # ADB sans fil (Debogage sans fil active sur la montre)
 adb devices                                  # noter la serie exacte, espaces compris
 adb -s "<serie>" shell monkey -p com.mpacer.watch -c android.intent.category.LAUNCHER 1
-adb -s "<serie>" shell input tap 337 366     # icone Reglages
+adb -s "<serie>" shell input tap 290 362     # icone Reglages (a droite de Musique)
 adb -s "<serie>" shell input swipe 225 300 225 120 300   # descendre jusqu'a la section Version
+# L'ecran d'accueil de la montre ne porte que deux icones : Musique et Reglages.
 adb -s "<serie>" shell screencap -p /sdcard/e.png && adb -s "<serie>" pull /sdcard/e.png montre-version.png
-adb -s "<serie>" shell input tap 118 360     # icone Musique (bibliotheque)
+adb -s "<serie>" shell input tap 160 362     # icone Musique (bibliotheque)
 ```
 
 La serie ADB d'un appareil en Wi-Fi contient un espace et un suffixe mDNS : il

@@ -80,21 +80,21 @@ $KeyPath = Join-Path $ProjectRoot 'developer_key.der'
 function Write-Step([string]$Text) { Write-Host "==> $Text" -ForegroundColor Cyan }
 function Write-Ok([string]$Text) { Write-Host "    $Text" -ForegroundColor Green }
 function Write-Note([string]$Text) { Write-Host "    $Text" -ForegroundColor Yellow }
-# --- Version et date de compilation -----------------------------------------
-# L'ecran Reglages de la montre affiche la version et le jour de compilation.
-# Le numero vient du manifeste (le meme que celui envoye a la Connect IQ Store)
-# et la date de SOURCE_DATE_EPOCH quand la chaine de construction la fournit
-# (date de la release), sinon de l'horloge, en UTC - comme build.rs cote Rust
-# et build.gradle.kts cote Android.
+# --- Version et horodatage de compilation ------------------------------------
+# L'ecran Reglages de la montre affiche la version et le moment de compilation
+# (date et heure, a la minute). Le numero vient du manifeste (le meme que celui
+# envoye a la Connect IQ Store) et l'horodatage de SOURCE_DATE_EPOCH quand la
+# chaine de construction la fournit (celle de la release), sinon de l'horloge,
+# en UTC - comme build.rs cote Rust et build.gradle.kts cote Android.
 function Get-BuildDate {
     if ($env:MPACER_BUILD_DATE) { return $env:MPACER_BUILD_DATE.Trim() }
     if ($env:SOURCE_DATE_EPOCH) {
         $epoch = 0
         if ([long]::TryParse($env:SOURCE_DATE_EPOCH.Trim(), [ref] $epoch)) {
-            return [DateTimeOffset]::FromUnixTimeSeconds($epoch).UtcDateTime.ToString('yyyy-MM-dd')
+            return [DateTimeOffset]::FromUnixTimeSeconds($epoch).UtcDateTime.ToString('yyyy-MM-dd HH:mm')
         }
     }
-    return [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+    return [DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm')
 }
 
 function Get-ManifestVersion {

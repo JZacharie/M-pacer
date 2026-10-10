@@ -263,7 +263,7 @@ Etape 'Environnement'
 # garmin/build.ps1 dans le meme environnement. Elle est fixee une seule fois,
 # ici, pour que les artefacts d'une meme execution portent la meme date, et
 # exportee pour les processus enfants.
-$env:MPACER_BUILD_DATE = if ($BuildDate) { $BuildDate } else { [DateTime]::UtcNow.ToString('yyyy-MM-dd') }
+$env:MPACER_BUILD_DATE = if ($BuildDate) { $BuildDate } else { [DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm') }
 Info ('date de compilation : ' + $env:MPACER_BUILD_DATE)
 
 $javaHome = Resolve-JavaHome

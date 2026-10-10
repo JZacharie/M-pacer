@@ -79,13 +79,15 @@ Voir [garmin/README.md](../garmin/README.md).
 Le workflow met à jour la publication existante si elle existe déjà : relancer
 le tag ne crée pas de doublon.
 
-### Version visible dans les applications
+### Version et horodatage visibles dans les applications
 
-Chaque application affiche sa **version** et son **jour de compilation** dans
-ses réglages (et, pour le site, dans le pied de page). Deux APK portant la même
-version restent donc discernables, et un correctif se vérifie à l'œil.
+Chaque application affiche sa **version** et le **moment de sa compilation**
+dans ses réglages (et, pour le site, dans le pied de page). Deux APK portant la
+même version restent donc discernables — y compris deux compilations du même
+jour, puisque l'horodatage descend à la minute — et un correctif se vérifie à
+l'œil.
 
-| Application | Où | Version lue dans | Date lue dans |
+| Application | Où | Version lue dans | Horodatage lu dans |
 |---|---|---|---|
 | Montre Wear OS | Réglages, section « Version » | `versionName` de l'APK | `BuildConfig.BUILD_DATE` |
 | Course au téléphone | Réglages, section « Version » | `versionName` de l'APK | `BuildConfig.BUILD_DATE` |
@@ -94,14 +96,19 @@ version restent donc discernables, et un correctif se vérifie à l'œil.
 | Site web | Réglages, section « Version » | `Cargo.toml` | `build.rs` (`BUILD_DATE`) |
 | Documentation | Pied de page | `site/_data/version.yml` | `site.time` (Jekyll) |
 
-La date est choisie **à la compilation**, dans cet ordre :
+Le format stocké est **`AAAA-MM-JJ HH:MM`**, en UTC ; l'affichage le traduit en
+`JJ/MM/AAAA HH:MM` (montre, téléphone, compagnon) ou le laisse tel quel (site,
+Garmin). Un APK plus ancien, qui ne porte que le jour, reste lisible.
 
-1. `MPACER_BUILD_DATE` (variable d'environnement ou `-Pmpacer.buildDate`) :
-   c'est ce que posent `release.yml` et `local-ci.ps1`, à partir du commit tagué
-   — la date de la release, pas celle du runner qui rejoue le build ;
+L'horodatage est choisi **à la compilation**, dans cet ordre :
+
+1. `MPACER_BUILD_DATE` (variable d'environnement ou propriété Gradle
+   `-Pmpacer.buildDate`) : c'est ce que posent `release.yml` et `local-ci.ps1`, à
+   partir du commit tagué — le moment de la release, pas celui du runner qui
+   rejoue le build ;
 2. `SOURCE_DATE_EPOCH` (secondes UNIX), la variable normalisée de
    reproductibilité ;
-3. l'horloge de la machine, en **UTC** (le même jour sur un poste, en CI et dans
+3. l'horloge de la machine, en **UTC** (la même heure sur un poste, en CI et dans
    l'image DEBIAN).
 
 ---

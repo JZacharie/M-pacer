@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Le site web
-description: Ce que fait le site M-pacer : tableau de bord des seances, analyse complete, statistiques, courses et planning, appairage des montres, API et export GPX.
+description: "Ce que fait le site M-pacer : tableau de bord des seances, analyse complete, statistiques, courses et planning, appairage des montres, API et export GPX."
 permalink: /site-web/
 ---
 

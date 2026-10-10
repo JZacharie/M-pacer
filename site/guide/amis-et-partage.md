@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Amis et suivi en direct
-description: Courir a plusieurs avec M-pacer : demandes d'amis, invitation par code, cercle, partage de position sur carte OpenStreetMap et suivi en direct par MQTT.
+description: "Courir a plusieurs avec M-pacer : demandes d'amis, invitation par code, cercle, partage de position sur carte OpenStreetMap et suivi en direct par MQTT."
 permalink: /guide/amis-et-partage/
 ---
 

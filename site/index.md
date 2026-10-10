@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Accueil
-description: M-pacer, controle d'allure auto-heberge pour montre Wear OS : allure lissee, shadow runner, retour vocal, analyse de seance et preparation des courses.
+description: "M-pacer, controle d'allure auto-heberge pour montre Wear OS : allure lissee, shadow runner, retour vocal, analyse de seance et preparation des courses."
 permalink: /
 ---
 

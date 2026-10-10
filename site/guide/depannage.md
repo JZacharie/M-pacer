@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Depannage
-description: Les problemes courants de M-pacer et leur solution : GPS, allure, synchronisation, appairage, voix, cardio, musique, suivi en direct et limites connues.
+description: "Les problemes courants de M-pacer et leur solution : GPS, allure, synchronisation, appairage, voix, cardio, musique, suivi en direct et limites connues."
 permalink: /guide/depannage/
 ---
 

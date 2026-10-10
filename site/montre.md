@@ -1,7 +1,7 @@
 ---
 layout: default
 title: La montre
-description: Ce que fait l'application montre M-pacer : allure lissee, quatre modes d'assistant, shadow runner, voix, tours, archive locale et synchronisation Wear OS.
+description: "Ce que fait l'application montre M-pacer : allure lissee, quatre modes d'assistant, shadow runner, voix, tours, archive locale et synchronisation Wear OS."
 permalink: /montre/
 ---
 

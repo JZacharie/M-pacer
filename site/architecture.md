@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Architecture
-description: Architecture de M-pacer : coeur Rust partage, pont JNI vers Wear OS, synchronisation idempotente, backend Axum, PostgreSQL et deploiement Kubernetes.
+description: "Architecture de M-pacer : coeur Rust partage, pont JNI vers Wear OS, synchronisation idempotente, backend Axum, PostgreSQL et deploiement Kubernetes."
 permalink: /architecture/
 ---
 

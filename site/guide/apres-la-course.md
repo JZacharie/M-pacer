@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Lire l'analyse d'une seance
-description: Comprendre l'ecran d'analyse M-pacer : resume, courbes, plan contre realise, zones cardiaques, derive, temps de passage, pauses, acceleration et export GPX.
+description: "Comprendre l'ecran d'analyse M-pacer : resume, courbes, plan contre realise, zones cardiaques, derive, temps de passage, pauses, acceleration et export GPX."
 permalink: /guide/apres-la-course/
 ---
 

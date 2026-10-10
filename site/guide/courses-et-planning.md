@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Courses et planning
-description: Preparer une course dans M-pacer : fiche, dossard, hebergement, suivi, recherche dans le calendrier Finishers et planning des echeances.
+description: "Preparer une course dans M-pacer : fiche, dossard, hebergement, suivi, recherche dans le calendrier Finishers et planning des echeances."
 permalink: /guide/courses-et-planning/
 ---
 

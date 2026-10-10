@@ -1,7 +1,7 @@
 ---
 layout: default
 title: La montre Garmin
-description: M-pacer sur une montre Garmin : application Connect IQ en Monkey C, meme coeur d'allure que la version Wear OS, enregistrement FIT, alertes par vibration et synchronisation vers le meme backend.
+description: "M-pacer sur une montre Garmin : application Connect IQ en Monkey C, meme coeur d'allure que la version Wear OS, enregistrement FIT, alertes par vibration et synchronisation vers le meme backend."
 permalink: /montre-garmin/
 ---
 

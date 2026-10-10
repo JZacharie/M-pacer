@@ -1,0 +1,34 @@
+name: "Demande de fonctionnalité / Architecture"
+description: "Proposer une évolution d'architecture, d'optimisation ou une nouvelle fonctionnalité"
+title: "[ARCH/FEAT]: "
+labels: ["enhancement", "architecture"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci de détailler la proposition d'amélioration ou de refactorisation.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problématique ou limitation constatée
+      description: Quel est le problème actuel, le risque de performance ou de maintenabilité ?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Solution / Architecture proposée
+      description: Décrire la conception cible, les composants impactés et le découplage prévu.
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priorité estimée
+      options:
+        - "P0 - Critique / Bloquant"
+        - "P1 - Élevée (Robustesse, Performance clé)"
+        - "P2 - Moyenne (Qualité de code, Outillage)"
+        - "P3 - Faible (Confort, Documentation)"
+    validations:
+      required: true

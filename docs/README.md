@@ -22,6 +22,7 @@ Index des documents. Le point d'entrée reste le [README principal](../README.md
 | [15 - Versions et publications](15-releases.md) | publier une version : ce que contient une *release* GitHub (APK des trois applications, outils Rust, image conteneur), comment taguer, secrets de signature Android et ce qui reste à construire à la main (Garmin) |
 | [17 - Interfaces d'envoi de fichiers (captures)](17-interfaces-envoi.md) | voir, page par page, ou l'on depose un fichier : les deux depots de MP3 de `/music` (agent local USB, relais Wi-Fi) et l'import d'une ancienne course GPX/TCX, avec routes, formats et limites |
 | [16 - Pousser des MP3 depuis le front end](16-poussee-mp3-front-vers-appareils.md) | déposer des MP3 dans la page `/music` et les envoyer **sur la montre ou le téléphone** : relais serveur livré (volume `MPACER_MEDIA_DIR`, quota 4 Go, téléchargement avec reprise et acquittement) **et** passerelle avec l'agent local `mpacer-music` (USB, sans serveur), plan et état d'implémentation |
+| [18 - Recommandations d'architecture et planning](18-recommandations-architecture-planning.md) | synthèse des chantiers techniques prioritaires (parité Garmin, buffer live mobile, observabilité Prometheus, fractionné) et feuille de route |
 | [Guide de déploiement](../deploy/README.md) | déployer concrètement sur le cluster k3s **jo3** : image, secrets, Helm, ingress, TLS, sauvegardes, dépannage |
 
 ## Illustrations

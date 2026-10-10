@@ -106,7 +106,8 @@ alors « séance terminée » et cesse de se rafraîchir.
 | `.../watch/live/LivePolicy.kt` | **politique de cadence** : une publication par période, filtre de précision |
 | `.../watch/live/LivePayload.kt` | charge utile JSON compacte (locale `ROOT`, texte assaini) |
 | `.../watch/live/MqttCodec.kt` | sérialisation MQTT 3.1.1 (CONNECT, PUBLISH, PINGREQ, DISCONNECT) |
-| `.../watch/live/LiveTracker.kt` | un fil de fond : file bornée, connexion, reconnexion, compteurs |
+| `.../watch/live/LiveTracker.kt` | un fil de fond : connexion, reconnexion, décharge en rafale, compteurs |
+| `.../watch/live/LiveQueue.kt` | la file bornée (20 min / 120 points) : fenêtre, compression, compteurs |
 | `.../watch/live/LiveSettings.kt` | persistance (mot de passe en `EncryptedSharedPreferences`) |
 | `.../watch/live/LiveProbe.kt` | **test de connexion** demandé depuis la montre (CONNACK + point de test) |
 | `.../watch/TrackingService.kt` | branche le suivi au départ et à l'arrêt, tend chaque position |
@@ -177,7 +178,7 @@ Les valeurs locales vivent dans un fichier `.env` **non versionné** (gabarit :
 | Fichier | Rôle |
 |---|---|
 | `crates/mpacer-api/src/mqtt.rs` | client MQTT minimal (TCP ou TLS), reconnexion 2 s → 60 s, `PINGREQ` toutes les 30 s |
-| `crates/mpacer-api/src/live.rs` | magasin en mémoire (`LiveStore`), purge, résumé de trace |
+| `crates/mpacer-api/src/live.rs` | magasin en mémoire (`LiveStore`), purge, insertion triée par `t_ms`, résumé de trace |
 | `crates/mpacer-api/src/routes/web.rs` | page `/live` (SVG, sans JavaScript) et `/live.json` |
 | `crates/mpacer-api/src/state.rs` | `AppState.live` partagé par les gestionnaires |
 | `crates/mpacer-api/src/main.rs` | démarrage de l'abonnement si `MPACER_MQTT_URL` est défini |
@@ -235,14 +236,18 @@ la position exacte.
 | Fils | 1 | priorité `THREAD_PRIORITY_BACKGROUND`, endormi sur condition |
 | Wake locks | 0 | aucun |
 | Demandes GPS | 0 en plus | la boucle 1 Hz du service existe déjà, elle est seulement observée |
-| Mémoire | ~2 ko | file de 16 paquets au maximum |
+| Mémoire | ~20 ko | file de 120 points au maximum (20 minutes), compressée si la coupure dure |
 | Batterie (estimation) | < 1 %/h | le GPS 1 Hz reste le poste dominant ; la radio est réveillée 6 fois par minute pendant ~50 ms |
 | Suivi désactivé | 0 | aucun fil, aucune connexion, aucun objet créé |
 
-Si le broker tombe : la file se remplit (16 paquets), **les positions les plus
-anciennes sont jetées** et la reconnexion retente 2 s, 4 s, 8 s… jusqu'à 60 s.
-À la reconnexion, seule la position courante est conservée : pendant une course,
-une position d'il y a trois minutes n'intéresse personne.
+Si le broker tombe : la file **garde la trace** — bornée à 120 points et à
+20 minutes après le dernier point — et la reconnexion retente 2 s, 4 s, 8 s…
+jusqu'à 60 s. À la reconnexion, les positions accumulées **repartent en rafale**
+(espacées de 50 ms) : les proches ne voient pas de trou de plusieurs minutes.
+Au-delà de vingt minutes de coupure, l'historique est **compressé de moitié**
+(un point sur deux) plutôt que tronqué : le tracé garde sa forme et la position
+courante survit toujours. À l'arrêt de la séance, seule la position courante est
+gardée, pour que le message `stop` parte sans attendre.
 
 ### 5.2 Service
 

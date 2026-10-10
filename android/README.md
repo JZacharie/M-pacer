@@ -377,9 +377,10 @@ de ressources et limites : [docs/10](../docs/10-suivi-temps-reel.md).
 - **Cadence** : 10 s en course, 60 s en pause (auto-pause comprise, l'etat vient
   du moteur) ; un point dont la precision GPS depasse 50 m n'est pas publie.
 - **Budget** : ~55 ko/h de trafic, un fil en priorite basse, aucune minuterie,
-  aucun wake lock, file de 16 paquets au maximum (les plus anciens sont jetes si
-  le reseau tombe). L'ecran Reglages affiche l'etat de la liaison, les points
-  publies et les points jetes.
+  aucun wake lock. Si le reseau tombe, la file garde la trace (120 points, 20
+  minutes) et la republie en rafale a la reconnexion ; au-dela, l'historique est
+  compresse de moitie plutot que jete. L'ecran Reglages affiche l'etat de la
+  liaison, les points publies et les points abandonnes.
 - **Tests** (JVM, sans montre) :
 
   ```powershell

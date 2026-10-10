@@ -251,6 +251,11 @@ pub struct LiveSession {
     pub last_ms: i64,
     pub received: u64,
     points: VecDeque<LivePoint>,
+    /// Vrai depuis qu'une nouvelle seance a remplace la precedente.
+    ///
+    /// Sert a ecarter un point de l'ancienne seance arrive apres coup : sans
+    /// cette marque, un message retarde pourrait relancer une trace close.
+    restarted: bool,
 }
 
 impl LiveSession {
@@ -262,6 +267,7 @@ impl LiveSession {
             last_ms: t_ms,
             received: 0,
             points: VecDeque::with_capacity(64),
+            restarted: false,
         }
     }
 
@@ -280,15 +286,40 @@ impl LiveSession {
         self.started_ms = t_ms;
         self.last_ms = t_ms;
         self.received = 0;
+        self.restarted = true;
     }
 
+    /// Ajoute un point a sa place chronologique.
+    ///
+    /// Le reseau ne garantit pas l'ordre d'arrivee : la montre decharge sa file
+    /// en rafale a la reconnexion, MQTT est en QoS 0 et un message retenu peut
+    /// etre republie. Un point plus ancien que le dernier recu est donc insere a
+    /// sa date au lieu d'etre colle en fin de trace (ce qui ferait zigzaguer le
+    /// trace et fausserait la position courante).
     fn push(&mut self, point: LivePoint) {
-        if let Some(etat) = point.state.as_deref() {
-            self.state = etat.to_string();
+        // Apres une reprise, un point anterieur au debut de la seance courante
+        // appartient a la precedente (il arrive apres un stop, en retard) : le
+        // meler a cette trace n'aurait aucun sens.
+        if self.restarted && point.t_ms < self.started_ms {
+            return;
         }
-        self.last_ms = self.last_ms.max(point.t_ms);
         self.received += 1;
-        self.points.push_back(point);
+        // Un point en retard peut preciser le debut reel de la trace.
+        self.started_ms = self.started_ms.min(point.t_ms);
+        // L'etat et la date de fin suivent le point le plus recent, pas le
+        // dernier message arrive : un retardataire ne fait pas reculer la montre.
+        if point.t_ms >= self.last_ms {
+            if let Some(etat) = point.state.as_deref() {
+                self.state = etat.to_string();
+            }
+            self.last_ms = point.t_ms;
+        }
+        match self.points.binary_search_by(|p| p.t_ms.cmp(&point.t_ms)) {
+            // Meme horodatage : c'est une rediffusion, on remplace le point au
+            // lieu d'empiler un doublon sur la trace.
+            Ok(index) => self.points[index] = point,
+            Err(index) => self.points.insert(index, point),
+        }
         while self.points.len() > MAX_POINTS {
             self.points.pop_front();
         }
@@ -521,7 +552,8 @@ impl LiveStore {
             .sessions
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut vues: Vec<LiveSessionView> = sessions.values().map(|session| self.vue(session)).collect();
+        let mut vues: Vec<LiveSessionView> =
+            sessions.values().map(|session| self.vue(session)).collect();
         vues.sort_by_key(|vue| std::cmp::Reverse(vue.last_ms));
         vues.truncate(max_sessions);
         vues
@@ -841,12 +873,8 @@ mod tests {
     #[test]
     fn a_planned_route_gives_the_position_and_the_percentage() {
         // Deux kilometres plein est : le point median doit tomber a mi-parcours.
-        let route = PlannedRoute::new(
-            "montre",
-            vec![[48.0, 2.0], [48.0, 2.02]],
-            1_000,
-        )
-        .expect("parcours valide");
+        let route = PlannedRoute::new("montre", vec![[48.0, 2.0], [48.0, 2.02]], 1_000)
+            .expect("parcours valide");
         assert!(route.total_m > 1_000.0, "total = {}", route.total_m);
 
         let milieu = route.nearest(48.0, 2.01);
@@ -934,6 +962,105 @@ mod tests {
             .unwrap();
         store.prune(1_000 + ROUTE_TTL_MS + 1);
         assert_eq!(store.routes_len(), 0);
+    }
+
+    #[test]
+    fn out_of_order_points_keep_the_trace_in_time_order() {
+        let store = LiveStore::new();
+        store
+            .ingest(
+                "mpacer/live/m",
+                &charge(&point(2_000, 48.02, 2.0, Some(20.0))),
+            )
+            .unwrap();
+        // La montre decharge sa file en rafale : un point peut arriver apres
+        // son suivant.
+        store
+            .ingest(
+                "mpacer/live/m",
+                &charge(&point(1_000, 48.01, 2.0, Some(10.0))),
+            )
+            .unwrap();
+        store
+            .ingest(
+                "mpacer/live/m",
+                &charge(&point(3_000, 48.03, 2.0, Some(30.0))),
+            )
+            .unwrap();
+
+        let vue = &store.snapshot(4_000, 4)[0];
+        let horodatages: Vec<i64> = vue.trace.iter().map(|p| p.t_ms).collect();
+        assert_eq!(
+            horodatages,
+            vec![1_000, 2_000, 3_000],
+            "le trace reste ordonne"
+        );
+        assert_eq!(vue.points, 3);
+        assert_eq!(vue.last.as_ref().unwrap().t_ms, 3_000, "position courante");
+        assert_eq!(vue.last_ms, 3_000);
+        assert_eq!(vue.started_ms, 1_000, "le debut reel est retenu");
+    }
+
+    #[test]
+    fn a_late_point_does_not_move_the_clock_backwards() {
+        let store = LiveStore::new();
+        store
+            .ingest("mpacer/live/m", &charge(&point(5_000, 48.05, 2.0, None)))
+            .unwrap();
+        let mut retardataire = point(4_000, 48.04, 2.0, None);
+        retardataire.state = Some("pause".to_string());
+        store
+            .ingest("mpacer/live/m", &charge(&retardataire))
+            .unwrap();
+
+        let vue = &store.snapshot(5_001, 4)[0];
+        assert_eq!(vue.last_ms, 5_000, "la montre ne recule pas");
+        assert_eq!(
+            vue.state, "run",
+            "un vieux point ne change pas l'etat courant"
+        );
+        assert_eq!(vue.last.as_ref().unwrap().t_ms, 5_000);
+        assert_eq!(vue.points, 2, "le point en retard reste sur la trace");
+    }
+
+    #[test]
+    fn a_retransmitted_point_replaces_instead_of_duplicating() {
+        let store = LiveStore::new();
+        store
+            .ingest("mpacer/live/m", &charge(&point(1_000, 48.0, 2.0, None)))
+            .unwrap();
+        // Meme horodatage, position corrigee : c'est une rediffusion (message
+        // retenu republie a la reconnexion), pas un nouveau point.
+        store
+            .ingest("mpacer/live/m", &charge(&point(1_000, 48.5, 2.5, None)))
+            .unwrap();
+
+        let vue = &store.snapshot(2_000, 4)[0];
+        assert_eq!(vue.points, 1);
+        assert_eq!(vue.last.as_ref().unwrap().lat, 48.5);
+    }
+
+    #[test]
+    fn a_late_point_from_a_previous_session_is_ignored() {
+        let store = LiveStore::new();
+        let mut fin = point(1_000, 48.0, 2.0, Some(900.0));
+        fin.state = Some("stop".to_string());
+        store.ingest("mpacer/live/m", &charge(&fin)).unwrap();
+        store
+            .ingest("mpacer/live/m", &charge(&point(2_000, 48.1, 2.1, None)))
+            .unwrap();
+        // Un point de la seance precedente arrive apres la nouvelle.
+        store
+            .ingest(
+                "mpacer/live/m",
+                &charge(&point(1_500, 48.05, 2.05, Some(950.0))),
+            )
+            .unwrap();
+
+        let vue = &store.snapshot(3_000, 4)[0];
+        assert_eq!(vue.points, 1);
+        assert_eq!(vue.started_ms, 2_000);
+        assert_eq!(vue.distance_m, None, "la seance precedente ne revient pas");
     }
 
     #[test]

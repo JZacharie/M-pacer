@@ -28,8 +28,14 @@ data class LiveConfig(
      * apres le depart voit immediatement la position courante.
      */
     val retain: Boolean = true,
-    /** Taille maximale de la file d'attente (positions non encore ecrites). */
-    val maxQueue: Int = 16,
+    /**
+     * Taille maximale de la file d'attente (positions non encore ecrites).
+     *
+     * Vingt minutes a la cadence de course (10 s) : c'est la duree pendant
+     * laquelle une coupure reseau reste rattrapable pour les suiveurs. Au-dela,
+     * la file compresse l'historique (un point sur deux) au lieu de le perdre.
+     */
+    val maxQueue: Int = MAX_QUEUE_POINTS,
 ) {
     /** Vrai si le suivi en direct est reellement actif. */
     val configured: Boolean get() = enabled && url.isNotBlank()
@@ -61,6 +67,9 @@ data class LiveConfig(
          */
         const val MIN_INTERVAL_S = 5
         const val MAX_INTERVAL_S = 300
+
+        /** File d'attente par defaut : 20 minutes a la cadence de course. */
+        const val MAX_QUEUE_POINTS = 120
 
         val DEFAULT = LiveConfig()
 

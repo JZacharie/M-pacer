@@ -57,23 +57,14 @@ flowchart TD
 
 ---
 
-### Phase B : Résilience Live MQTT & Gestion du Mode Déconnecté
+### Phase B : Résilience Live MQTT & Gestion du Mode Déconnecté (Livré ✅)
 - **Objectif :** Éviter la perte de positions en zone blanche ou sous-bois sans épuiser la batterie de la montre ou du téléphone.
-
-#### 1. Architecture Côté Client Android (`android/core/src/main/java/com/mpacer/core/live/LiveTracker.kt`)
-* **Problème actuel :** La file d'attente est bornée à 16 éléments et purgée violemment à un seul élément lors d'une reconnexion (`while (file.size > 1) file.removeFirst()`), causant des trous de plusieurs minutes sur la trace de suivi des proches.
-* **Spécification technique :**
-  1. **Buffer Circulaire Temporel (Time-Window FIFO) :**
-     - Stocker jusqu'à 120 points (soit 20 minutes à 10s d'intervalle) avec horodatage strict `tMs`.
-     - Prioriser la mémoire compacte : sérialisation binaire légère ou trames JSON compactes (116 octets/point).
-  2. **Politique de Reconnexion et Décharge (Burst Drain) :**
-     - Dès le retour du réseau, émettre les paquets en rafale avec un espacement minimal (ex: 50 ms) pour ne pas saturer la socket TCP.
-     - Si la déconnexion dépasse 20 minutes, échantillonner en ne conservant qu'un point sur deux pour comprimer l'historique sans perdre le tracé global.
-
-#### 2. Architecture Côté Backend (`crates/mpacer-api/src/live.rs`)
-* **Spécification technique :**
-  - Maintien du ring buffer `LiveStore` en mémoire (`Arc<RwLock<LiveStore>>`).
-  - Tolérance aux arrivées asynchrones désordonnées : insertion triée par `t_ms` dans le `VecDeque<LivePoint>` au lieu de supposer une stricte monotonicité temporelle d'arrivée réseau.
+- **Réalisation :**
+  - [`LiveQueue.kt`](file:///e:/git/JZacharie/M-pacer/android/core/src/main/java/com/mpacer/core/live/LiveQueue.kt) : file bornée **par le temps** (20 minutes après le point le plus récent) **et par le nombre** (120 points, réglable). Au-delà, l'historique est **compressé de moitié** (un point sur deux) au lieu d'être tronqué : le tracé garde sa forme et la position courante survit toujours. À l'arrêt, seule la position courante est gardée, pour que le message `stop` parte immédiatement.
+  - [`LiveTracker.kt`](file:///e:/git/JZacharie/M-pacer/android/core/src/main/java/com/mpacer/core/live/LiveTracker.kt) : **plus aucune purge à la reconnexion**. Les positions accumulées pendant la coupure repartent en **rafale**, espacées de 50 ms, dès que le broker répond ; aucun espacement n'est ajouté quand la file est vide (cas normal). Le compteur de points abandonnés remonte à l'écran Réglages.
+  - [`LiveConfig.kt`](file:///e:/git/JZacharie/M-pacer/android/core/src/main/java/com/mpacer/core/live/LiveConfig.kt) : file par défaut de **120 points** au lieu de 16 — vingt minutes à la cadence de course.
+  - [`crates/mpacer-api/src/live.rs`](file:///e:/git/JZacharie/M-pacer/crates/mpacer-api/src/live.rs) : insertion **triée par `t_ms`** dans le `VecDeque<LivePoint>` (`binary_search_by`), date de fin et état publié qui suivent le point le plus récent (et non le dernier message arrivé), même horodatage qui **remplace** le point au lieu de le dupliquer, point de la séance précédente écarté après un `stop`.
+- **Validation :** 4 tests d'ingestion désordonnée côté Rust (`out_of_order_points_keep_the_trace_in_time_order`, `a_late_point_does_not_move_the_clock_backwards`, `a_retransmitted_point_replaces_instead_of_duplicating`, `a_late_point_from_a_previous_session_is_ignored`) et 7 tests Kotlin `LiveQueueTest` (fenêtre, compression, arrêt, compteurs) ; les 21 tests du module `live` passent.
 
 ---
 
@@ -188,7 +179,7 @@ pub struct IntervalPlan {
 
 | Sprint | Contenu / Tâches Principales | Risque | Livrable |
 | :--- | :--- | :--- | :--- |
-| **Sprint 1** | **Phase B (Live)** : Buffer FIFO Android + Tests déconnexion 4G. | Faible | APK Mobile avec reprise sans trou de trace. |
+| **Sprint 1** (livré ✅) | **Phase B (Live)** : file de 20 min / 120 points, décharge en rafale, ingestion triée côté backend. | Faible | Trace sans trou à la reconnexion, validée par 11 tests. |
 | **Sprint 2** | **Phase C (Garmin)** : Fixtures JSON + Harnais de tests comparés. | Moyen | Rapport de conformité < 0.5% d'écart. |
 | **Sprint 3** | **Phase D (Observabilité)** : Route `/metrics` + Sondes k8s sur `jo3`. | Faible | Dashboard Grafana / métriques Prometheus. |
 | **Sprint 4** | **Phase E (Fractionné)** : Machine à états Rust + alertes vocales. | Élevé | Support des séances par intervalles dans le moteur. |

@@ -25,8 +25,9 @@ import javax.net.ssl.SSLSocketFactory
  *  * aucun point publie si la precision GPS est mauvaise (50 m par defaut) ;
  *  * un seul fil, en priorite basse, cree au depart de la seance et detruit a
  *    l'arrivee ; aucun reveil, aucun verrou de sommeil, aucune minuterie ;
- *  * une file de 16 paquets au maximum : si le reseau tombe, la montre perd les
- *    positions anciennes au lieu de consommer de la memoire et de la radio ;
+ *  * une file d'attente bornee (20 minutes, 120 points) : si le reseau tombe,
+ *    la montre garde la trace et la republie en rafale a la reconnexion, en la
+ *    compressant (un point sur deux) au lieu de la jeter a l'aveugle ;
  *  * QoS 0 et charge utile de 116 octets (132 avec l'altitude) : moins de 70 ko
  *    par heure, en-tetes compris.
  *
@@ -44,13 +45,19 @@ object LiveTracker {
     private const val ATTENTE_MAX_MS = 60000L
     private const val ATTENTE_FILE_MS = 1000L
     private const val VIDAGE_MAX_MS = 1500L
+    /** Espacement des ecritures pendant la decharge d'un retard (ms). */
+    private const val RAFALE_MS = 50L
 
     private val _state = MutableStateFlow(LiveState())
     /** Etat observe par l'ecran de reglages. */
     val state: StateFlow<LiveState> = _state.asStateFlow()
 
     private val verrou = Object()
-    private val file = ArrayDeque<ByteArray>()
+    /**
+     * Positions en attente de publication. Remplacee au depart de chaque seance
+     * (taille reglee), puis accedee sous [verrou] uniquement.
+     */
+    private var file = LiveQueue()
 
     @Volatile private var actif = false
     private var fil: Thread? = null
@@ -65,7 +72,6 @@ object LiveTracker {
     private var sortie: OutputStream? = null
     private var contexte: Context? = null
     private var envoyes = 0L
-    private var perdus = 0L
 
     /** Derniere position connue, pour republier un changement d'etat. */
     private class Position(
@@ -120,8 +126,11 @@ object LiveTracker {
         dernierMs = 0L
         derniere = null
         envoyes = 0L
-        perdus = 0L
-        synchronized(verrou) { file.clear() }
+        synchronized(verrou) {
+            // La file reprend la taille reglee : elle nait avec la seance et
+            // repart d'un historique vide.
+            file = LiveQueue(config.maxQueue)
+        }
         _state.value = LiveState(enabled = true, url = config.url, topic = sujet)
         actif = true
         fil = Thread(Runnable { boucle() }, "mpacer-live").apply {
@@ -179,6 +188,9 @@ object LiveTracker {
     /** Arret de la seance : dernier message retenu, puis fermeture propre. */
     fun stop() {
         if (!actif) return
+        // La seance est finie : la position courante suffit, inutile de rejouer
+        // vingt minutes d'historique pour un dernier message.
+        synchronized(verrou) { file.keepNewest() }
         publierEtat("stop")
         if (_state.value.connected) drainer(VIDAGE_MAX_MS)
         arreter()
@@ -224,7 +236,10 @@ object LiveTracker {
             while (actif && socket != null) {
                 val paquet = retirer(ATTENTE_FILE_MS)
                 if (paquet != null) {
-                    if (!ecrire(paquet)) break
+                    if (!ecrire(paquet.packet)) break
+                    // Decharge en rafale : le retard accumule part d'un coup,
+                    // espace de [RAFALE_MS] pour ne pas saturer la socket.
+                    if (aDesPaquets()) attendre(RAFALE_MS)
                 } else if (SystemClock.elapsedRealtime() - dernierPing >= PING_MS) {
                     // La liaison est gardee ouverte par un PINGREQ toutes les 30 s :
                     // beaucoup moins couteux que de se reconnecter a chaque point.
@@ -234,19 +249,15 @@ object LiveTracker {
             }
             _state.update { it.copy(connected = false) }
             fermer()
-            // A la reconnexion, seule la position courante a un interet.
-            synchronized(verrou) {
-                while (file.size > 1) {
-                    file.removeFirst()
-                    perdus++
-                }
-            }
-            _state.update { it.copy(dropped = perdus) }
+            // La file n'est pas videe ici : c'est tout l'interet du suivi
+            // resilient. Les positions de la coupure repartiront en rafale des
+            // que le broker repondra, la file restant bornee par sa fenetre.
+            _state.update { it.copy(dropped = file.dropped.toLong()) }
         }
     }
 
-    private fun retirer(attenteMs: Long): ByteArray? = synchronized(verrou) {
-        if (file.isEmpty() && actif) {
+    private fun retirer(attenteMs: Long): LiveQueue.Entry? = synchronized(verrou) {
+        if (file.isEmpty && actif) {
             try {
                 verrou.wait(attenteMs)
             } catch (interrompu: InterruptedException) {
@@ -254,8 +265,11 @@ object LiveTracker {
                 return null
             }
         }
-        if (!actif) null else file.removeFirstOrNull()
+        if (!actif) null else file.removeFirst()
     }
+
+    /** Reste-t-il un retard a decharger ? (espacement de la rafale) */
+    private fun aDesPaquets(): Boolean = synchronized(verrou) { !file.isEmpty }
 
     private fun ecrire(paquet: ByteArray): Boolean {
         val flux = sortie ?: return false
@@ -362,12 +376,11 @@ object LiveTracker {
         )
         val paquet = MqttCodec.publish(sujet, charge, config.retain)
         synchronized(verrou) {
-            if (file.size >= config.maxQueue) {
-                file.removeFirst()
-                perdus++
-            }
-            file.addLast(paquet)
+            file.add(LiveQueue.Entry(point.tMs, paquet))
             verrou.notifyAll()
+            // La file borne elle-meme sa taille : le compte des points
+            // abandonnes remonte tel quel a l'ecran de reglages.
+            _state.update { it.copy(dropped = file.dropped.toLong()) }
         }
     }
 
@@ -394,7 +407,7 @@ object LiveTracker {
     private fun drainer(maxMs: Long) {
         val fin = SystemClock.elapsedRealtime() + maxMs
         while (SystemClock.elapsedRealtime() < fin) {
-            val vide = synchronized(verrou) { file.isEmpty() }
+            val vide = synchronized(verrou) { file.isEmpty }
             if (vide) return
             attendre(50)
         }

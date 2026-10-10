@@ -810,7 +810,9 @@ async fn set_live_route(
             "nom d'appareil vide : renseignez le nom de l'appareil dans les reglages",
         ));
     }
-    let appareils = crate::db::list_live_devices(&state.pool, &[user.id.clone()]).await?;
+    // from_ref : un seul identifiant, sans cloner la chaine pour un tableau.
+    let appareils =
+        crate::db::list_live_devices(&state.pool, std::slice::from_ref(&user.id)).await?;
     if !appareils.iter().any(|appareil| appareil.device == device) {
         return Err(AppError::bad_request(
             "revendiquez d'abord l'appareil (POST /api/v1/live/register) avant de publier un parcours",

@@ -29,6 +29,7 @@
 
     <!-- Écrans secondaires -->
     <string id="Sync">Synchronisation</string>
+    <string id="WordVersion">Version</string>
     <string id="SettingsScreen">Réglages</string>
     <string id="NotPaired">Non appairée</string>
     <string id="Paired">Appairée</string>

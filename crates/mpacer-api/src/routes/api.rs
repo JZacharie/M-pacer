@@ -142,7 +142,13 @@ async fn me(AuthUser(user): AuthUser) -> Json<MeResponse> {
 }
 
 async fn version() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "core": mpacer_core::VERSION, "api": env!("CARGO_PKG_VERSION") }))
+    // La date de compilation accompagne la version : elle distingue deux
+    // deploiements d'un meme numero (voir crate::build_info).
+    Json(serde_json::json!({
+        "core": mpacer_core::VERSION,
+        "api": crate::build_info::VERSION,
+        "build_date": crate::build_info::BUILD_DATE,
+    }))
 }
 
 /// Envoie une seance (idempotent : un renvoi remplace la version precedente).

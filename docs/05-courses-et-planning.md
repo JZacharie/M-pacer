@@ -127,8 +127,11 @@ ne survit a sa course, ni a la suppression du compte.
 ## 7. Importer une ancienne course (export Strava ou Garmin)
 
 Le passe se remplit aussi depuis l'exterieur : la page `/courses/importer` accepte
-un export **GPX** ou **TCX** de Strava ou Garmin Connect. Le fichier est relu par le
-coeur Rust (`mpacer_core::race_import`), jamais conserve tel quel : seule la trace
+un export **GPX** ou **TCX** de Strava ou Garmin Connect.
+
+![Page d'import d'une ancienne course : choix du fichier GPX ou TCX](images/upload/course-import.png)
+
+Le fichier est relu par le coeur Rust (`mpacer_core::race_import`), jamais conserve tel quel : seule la trace
 normalisee reste en base, dans `race_tracks`.
 
 | Ce qui est repris | Source dans le fichier |

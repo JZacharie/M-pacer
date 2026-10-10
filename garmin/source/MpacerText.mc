@@ -32,6 +32,7 @@ class MpacerText {
 
     static function sync() { return WatchUi.loadResource(Rez.Strings.Sync); }
     static function settings() { return WatchUi.loadResource(Rez.Strings.SettingsScreen); }
+    static function versionLabel() { return WatchUi.loadResource(Rez.Strings.WordVersion); }
     static function notPaired() { return WatchUi.loadResource(Rez.Strings.NotPaired); }
     static function paired() { return WatchUi.loadResource(Rez.Strings.Paired); }
     static function pending() { return WatchUi.loadResource(Rez.Strings.Pending); }

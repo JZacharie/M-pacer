@@ -36,6 +36,24 @@
   group: "Écrans web"
   alt: "Formulaire de création d'un tableau de bord avec la liste des widgets disponibles"
 
+- file: "upload/musique-section-depot.png"
+  title: "Dépôt des MP3 — section 5 de /music"
+  caption: "Agent local en USB et zone de dépôt Wi-Fi, avec la progression du transfert."
+  group: "Écrans web"
+  alt: "Section 5 de la page Musique : panneau de l'agent local USB et zone de dépôt Wi-Fi avec une barre de progression"
+
+- file: "upload/course-import.png"
+  title: "Importer une ancienne course"
+  caption: "Page /courses/importer : un export Strava ou Garmin en GPX ou TCX suffit."
+  group: "Écrans web"
+  alt: "Page d'import d'une course avec le bouton de choix de fichier GPX ou TCX"
+
+- file: "upload/musique-page.png"
+  title: "Page Musique complète"
+  caption: "Les six blocs de /music : source, playlists, titres, fichiers à préparer, envoi et couverture."
+  group: "Écrans web"
+  alt: "Page Musique complète avec la playlist Sortie longue 21 km et ses cinq titres"
+
 - file: "logo-mpacer-cible-neon.jpg"
   title: "Logo — cible néon"
   caption: "Cible d'athlétisme et flèche d'allure, dégradé cyan et rose."

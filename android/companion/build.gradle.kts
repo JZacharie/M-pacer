@@ -40,6 +40,9 @@ android {
         buildConfigField("String", "DEFAULT_API_URL", "\"$apiUrlDefaut\"")
         buildConfigField("String", "WATCH_PACKAGE", "\"com.mpacer.watch\"")
         buildConfigField("String", "DEVICE_LABEL", "\"Telephone M-pacer\"")
+
+        // Jour de compilation, affiche avec la version sur la liste des seances.
+        buildConfigField("String", "BUILD_DATE", "\"" + rootProject.extra["mpacerBuildDate"] + "\"")
     }
 
     signingConfigs {

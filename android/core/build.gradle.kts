@@ -43,6 +43,10 @@ android {
         val apiUrlDefaut = (findProperty("mpacer.apiUrl") as String?) ?: "http://10.0.2.2:8080"
         buildConfigField("String", "DEFAULT_API_URL", "\"$apiUrlDefaut\"")
 
+        // Jour de compilation, affiche avec la version par les trois
+        // applications (voir com.mpacer.core.BuildInfo).
+        buildConfigField("String", "BUILD_DATE", "\"" + rootProject.extra["mpacerBuildDate"] + "\"")
+
         // Le module est consomme par deux applications : ce sont les regles des
         // applications qui s'appliquent a l'assemblage final.
         consumerProguardFiles("proguard-rules.pro")

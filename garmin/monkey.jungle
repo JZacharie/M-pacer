@@ -5,5 +5,8 @@
 # build soit reproductible en ligne de commande comme dans VS Code.
 
 project.manifest = manifest.xml
-base.sourcePath = source
+# Le dossier source precedent, puis le source genere par build.ps1 : il porte la
+# version et le jour de compilation (build/gen/MpacerBuildInfo.mc), affiches
+# dans l'ecran Reglages de la montre.
+base.sourcePath = source;build/gen
 base.resourcePath = resources

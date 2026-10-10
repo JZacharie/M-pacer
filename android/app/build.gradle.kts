@@ -45,6 +45,9 @@ android {
 
         // Libelle de l'appareil envoye au backend pendant l'appairage.
         buildConfigField("String", "PAIRING_LABEL", "\"Montre M-pacer\"")
+
+        // Jour de compilation, affiche avec la version dans les reglages.
+        buildConfigField("String", "BUILD_DATE", "\"" + rootProject.extra["mpacerBuildDate"] + "\"")
     }
 
     signingConfigs {

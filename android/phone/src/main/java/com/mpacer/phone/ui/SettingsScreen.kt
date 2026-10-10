@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mpacer.core.AssistantConfig
 import com.mpacer.core.AssistantMode
+import com.mpacer.core.BuildInfo
 import com.mpacer.core.MusicPolicy
 import com.mpacer.core.VoiceFrequency
 import com.mpacer.core.VoiceLanguage
@@ -373,6 +374,21 @@ fun SettingsScreen(
                 text = probeState.message,
                 color = if (probeState.ok) Palette.ok else Palette.muted,
                 fontSize = 12.sp,
+            )
+        }
+
+        // ------------------------------------------------------------- version
+        Section("Version") {
+            Text(
+                BuildInfo.resume(context),
+                color = Palette.muted,
+                fontSize = 12.sp,
+            )
+            Text(
+                "Le jour indique est celui de la compilation de l'APK (celui de la " +
+                    "publication pour une version publiee).",
+                color = Palette.muted2,
+                fontSize = 11.sp,
             )
         }
     }

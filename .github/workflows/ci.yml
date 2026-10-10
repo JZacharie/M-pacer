@@ -7,11 +7,23 @@ on:
 env:
   ACTIONS_RUNNER_FORCE_NODE24: "true"
 
+# Date de compilation des artefacts : la CI verifie les memes chemins que la
+# publication et pose `MPACER_BUILD_DATE` (et `SOURCE_DATE_EPOCH`, la variable
+# normalisee de reproductibilite) au lieu de laisser chaque build lire l'horloge.
 jobs:
   rust:
     runs-on: ubuntu-latest
+    env:
+      MPACER_BUILD_DATE: ${{ steps.date.outputs.jour }}
+      SOURCE_DATE_EPOCH: ${{ steps.date.outputs.epoch }}
     steps:
       - uses: actions/checkout@v4
+      - name: Date de compilation
+        id: date
+        shell: bash
+        run: |
+          echo "jour=$(git log -1 --format=%cd --date=format:%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "epoch=$(git log -1 --format=%ct)" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -36,8 +48,14 @@ jobs:
 
   garmin:
     runs-on: ubuntu-latest
+    env:
+      MPACER_BUILD_DATE: ${{ steps.date.outputs.jour }}
     steps:
       - uses: actions/checkout@v4
+      - name: Date de compilation
+        id: date
+        shell: bash
+        run: echo "jour=$(git log -1 --format=%cd --date=format:%Y-%m-%d)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-java@v5
         with:
           distribution: temurin

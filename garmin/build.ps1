@@ -80,6 +80,62 @@ $KeyPath = Join-Path $ProjectRoot 'developer_key.der'
 function Write-Step([string]$Text) { Write-Host "==> $Text" -ForegroundColor Cyan }
 function Write-Ok([string]$Text) { Write-Host "    $Text" -ForegroundColor Green }
 function Write-Note([string]$Text) { Write-Host "    $Text" -ForegroundColor Yellow }
+# --- Version et date de compilation -----------------------------------------
+# L'ecran Reglages de la montre affiche la version et le jour de compilation.
+# Le numero vient du manifeste (le meme que celui envoye a la Connect IQ Store)
+# et la date de SOURCE_DATE_EPOCH quand la chaine de construction la fournit
+# (date de la release), sinon de l'horloge, en UTC - comme build.rs cote Rust
+# et build.gradle.kts cote Android.
+function Get-BuildDate {
+    if ($env:MPACER_BUILD_DATE) { return $env:MPACER_BUILD_DATE.Trim() }
+    if ($env:SOURCE_DATE_EPOCH) {
+        $epoch = 0
+        if ([long]::TryParse($env:SOURCE_DATE_EPOCH.Trim(), [ref] $epoch)) {
+            return [DateTimeOffset]::FromUnixTimeSeconds($epoch).UtcDateTime.ToString('yyyy-MM-dd')
+        }
+    }
+    return [DateTime]::UtcNow.ToString('yyyy-MM-dd')
+}
+
+function Get-ManifestVersion {
+    [xml]$manifest = Get-Content -Raw $ManifestPath
+    $manager = New-Object System.Xml.XmlNamespaceManager($manifest.NameTable)
+    $manager.AddNamespace('iq', 'http://www.garmin.com/xml/connectiq')
+    $node = $manifest.SelectSingleNode('//iq:application', $manager)
+    if ($node -and $node.HasAttribute('version')) { return $node.GetAttribute('version') }
+    return '0.0.0'
+}
+
+function New-VersionSource {
+    param(
+        [string]$OutputDirectory,
+        [string]$Version,
+        [string]$Date
+    )
+    New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
+    $path = Join-Path $OutputDirectory 'MpacerBuildInfo.mc'
+    $quotedVersion = [char]34 + $Version + [char]34
+    $quotedDate = [char]34 + $Date + [char]34
+    $ligneVersion = '        return ' + $quotedVersion + ';'
+    $ligneDate = '        return ' + $quotedDate + ';'
+    $lines = @(
+        '// Fichier genere par garmin/build.ps1 : ne pas modifier a la main.',
+        '// Version (manifeste) et jour de compilation, affiches dans les reglages.',
+        'class MpacerBuildInfo {',
+        '    static function version() {',
+        $ligneVersion,
+        '    }',
+        '',
+        '    static function buildDate() {',
+        $ligneDate,
+        '    }',
+        '}',
+        ''
+    )
+    Set-Content -Path $path -Value $lines -Encoding UTF8
+    return $path
+}
+
 
 function Resolve-Java {
     $java = Get-Command java -ErrorAction SilentlyContinue
@@ -241,6 +297,11 @@ if ($missing.Count -gt 0 -and $installedDevices.Count -gt 0) {
 
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 Ensure-DeveloperKey
+
+$buildDate = Get-BuildDate
+$appVersion = Get-ManifestVersion
+$versionSource = New-VersionSource -OutputDirectory (Join-Path $BuildDir 'gen') -Version $appVersion -Date $buildDate
+Write-Ok "Version $appVersion du $buildDate ($versionSource)"
 
 $targetDevice = $Device
 if (!$targetDevice -and $installedDevices.Count -gt 0) { $targetDevice = $installedDevices[0] }

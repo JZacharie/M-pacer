@@ -5,7 +5,9 @@
 #   pwsh ./garmin/build.ps1 -Test -Device fr965
 #
 # Le résultat s'affiche dans le simulateur Connect IQ (ou dans la console de test).
+# build/gen porte le fichier de version généré par build.ps1 (MpacerBuildInfo.mc) :
+# le code de l'écran Reglages le référence, les tests le compilent donc aussi.
 
 project.manifest = manifest.xml
-base.sourcePath = source;test
+base.sourcePath = source;test;build/gen
 base.resourcePath = resources

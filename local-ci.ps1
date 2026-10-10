@@ -11,6 +11,10 @@
          (courir avec le telephone) et :companion (appoint)
       4. installation sur une montre ou un emulateur connecte (-Install)
 
+    La date de compilation (-BuildDate, defaut : le jour courant en UTC) est
+    exportee dans MPACER_BUILD_DATE : les APK l'affichent dans Reglages > Version,
+    et garmin/build.ps1 la lit s'il est lance depuis le meme terminal.
+
 .PARAMETER Target
     watch (defaut) : la montre. phone : l'application de course du telephone.
     companion : l'application d'appoint. all : les trois. rust : le coeur Rust seul.
@@ -18,6 +22,10 @@
 .PARAMETER ApiUrl
     URL du backend inscrite dans l'APK (BuildConfig.DEFAULT_API_URL).
     Par defaut : http://10.0.2.2:8080 (l'hote vu depuis l'emulateur Android).
+
+.PARAMETER BuildDate
+    Jour de compilation inscrit dans les APK (AAAA-MM-JJ). Une publication y met
+    la date de son tag ; en local, le jour courant en UTC convient.
 
 .PARAMETER CargoProfile
     Profil cargo du coeur Rust : release (defaut) ou debug.
@@ -29,6 +37,7 @@
     pwsh ./local-ci.ps1 -RestoreSleep         # retablit la veille normale
     pwsh ./local-ci.ps1 -Target all -ApiUrl http://192.168.0.152:8080 -Install
     pwsh ./local-ci.ps1 -Release -CargoProfile release -Test
+    pwsh ./local-ci.ps1 -Release -BuildDate 2026-10-10   # meme date dans les trois APK
 #>
 [CmdletBinding()]
 param(
@@ -44,6 +53,11 @@ param(
     [switch] $Test,
 
     [string] $ApiUrl,
+
+    # Jour de compilation inscrit dans les APK (Reglages > Version). Par defaut,
+    # le jour courant en UTC ; une publication reprend la date de son tag.
+    [string] $BuildDate,
+
     [ValidateSet('debug', 'release')]
     [string] $CargoProfile = 'release',
 
@@ -245,6 +259,13 @@ function Invoke-Gradle([string[]] $arguments) {
 # ---------------------------------------------------------------- 1. environnement
 
 Etape 'Environnement'
+# Date de compilation des APK : Gradle la lit dans MPACER_BUILD_DATE, et
+# garmin/build.ps1 dans le meme environnement. Elle est fixee une seule fois,
+# ici, pour que les artefacts d'une meme execution portent la meme date, et
+# exportee pour les processus enfants.
+$env:MPACER_BUILD_DATE = if ($BuildDate) { $BuildDate } else { [DateTime]::UtcNow.ToString('yyyy-MM-dd') }
+Info ('date de compilation : ' + $env:MPACER_BUILD_DATE)
+
 $javaHome = Resolve-JavaHome
 $script:JavaHomeTrouve = $null
 if ($javaHome -eq 'PATH') {

@@ -19,6 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -41,6 +42,7 @@ fun WorkoutListScreen(
     onDisconnect: () -> Unit,
     onOpenMusic: () -> Unit,
 ) {
+    val context = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -58,6 +60,13 @@ fun WorkoutListScreen(
                 Text("M-pacer", fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 Text(
                     state.me?.email ?: state.baseUrl,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                // Version et jour de compilation : l'application d'appoint n'a
+                // pas d'ecran Reglages, l'en-tete de la liste fait office.
+                Text(
+                    versionAffichee(context),
+                    fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }

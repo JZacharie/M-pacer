@@ -48,6 +48,10 @@ Deux faits qui decident de la suite :
 | Travail | **petit** (le plus gros existe) | **chantier** (stockage, reprise, service Android) |
 | Regle « aucun audio cote serveur » | respectee | abandonnee (assumee, avec expiration) |
 
+Les deux panneaux, tels qu'ils s'affichent dans le bloc 5 de `/music` :
+
+![Agent local USB et depot Wi-Fi des MP3](images/upload/musique-section-depot.png)
+
 **Recommandation : livrer A d'abord** (1 a 2 jours, aucune decision d'architecture
 a revoir), puis B seulement si le besoin « sans cable / depuis le telephone »
 apparait. Les deux se completent sans se contredire : A reste le chemin rapide

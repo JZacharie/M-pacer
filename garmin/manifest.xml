@@ -16,6 +16,7 @@
                     name="@Strings.AppName"
                     entry="MpacerApp"
                     launcherIcon="@Drawables.LauncherIcon"
+                    version="0.2.0"
                     minApiLevel="4.0.0">
         <iq:products>
             <iq:product id="approachs7042mm"/>

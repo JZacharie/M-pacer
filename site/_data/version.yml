@@ -1,0 +1,6 @@
+# Version du projet affichee dans le pied de page du site.
+#
+# Elle reprend le numero de la derniere publication (tag vX.Y.Z), comme le
+# `versionName` des applications et le `version` du chart Helm. Le jour de
+# construction, lui, vient de `site.time` : Jekyll le fige a chaque build.
+version: "0.2.0"

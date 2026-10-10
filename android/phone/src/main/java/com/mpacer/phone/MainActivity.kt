@@ -73,6 +73,10 @@ class MainActivity : ComponentActivity() {
         // assiste) : les valeurs sont enregistrees, donc elles survivent au
         // redemarrage de l'application.
         appliquerBroker(intent)
+        appliquerBackend(intent)
+        // Trace la configuration effective (jamais le mot de passe) : c'est ce
+        // qui permet de verifier ce que l'application utilise vraiment.
+        journaliserConfiguration()
         demanderPermissions.launch(permissions())
         setContent {
             MpacerTheme {
@@ -86,6 +90,39 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         appliquerBroker(intent)
+        appliquerBackend(intent)
+    }
+
+    /**
+     * Configuration effective, journalisee au demarrage.
+     *
+     * Le mot de passe du broker n'apparait jamais : seuls l'adresse, le nom
+     * d'utilisateur et le nom d'appareil sont utiles au diagnostic.
+     */
+    private fun journaliserConfiguration() {
+        val live = LiveSettings.load(this)
+        Log.i(
+            TAG,
+            "configuration : backend=" + SyncClient.baseUrl(this) +
+                " broker=" + live.url +
+                " utilisateur=" + live.username.ifBlank { "(aucun)" } +
+                " appareil=" + live.deviceName(LiveSettings.deviceId(this)),
+        )
+    }
+
+    /**
+     * Adresse du backend transmise au lancement, pour le deploiement assiste :
+     *
+     *   adb shell am start -n com.mpacer.phone/.MainActivity \
+     *     --es api_url https://mpacer.p.zacharie.org
+     *
+     * Elle sert a la synchronisation des seances, a l'appairage et au partage
+     * entre amis. Enregistree, elle survit au redemarrage de l'application.
+     */
+    private fun appliquerBackend(intent: Intent?) {
+        val url = intent?.getStringExtra(EXTRA_API_URL)?.takeIf { it.isNotBlank() } ?: return
+        SyncClient.setBaseUrl(this, url.trim())
+        Log.i(TAG, "backend applique : " + url.trim())
     }
 
     /**
@@ -152,6 +189,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "MpacerConfig"
+        const val EXTRA_API_URL = "api_url"
         const val EXTRA_MQTT_URL = "mqtt_url"
         const val EXTRA_MQTT_USER = "mqtt_user"
         const val EXTRA_MQTT_PASSWORD = "mqtt_password"

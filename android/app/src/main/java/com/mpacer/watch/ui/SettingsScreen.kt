@@ -5,11 +5,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material.Text
 import com.mpacer.core.AssistantMode
+import com.mpacer.core.BuildInfo
 import com.mpacer.core.live.LiveConfig
 import com.mpacer.core.live.LiveState
 import com.mpacer.core.ui.Palette
@@ -134,6 +136,16 @@ fun SettingsScreen(
             onClick = onLive,
             selected = settings.live.url.isNotBlank(),
             icon = WatchIcons.Sync,
+        )
+
+        // Version et jour de compilation : la montre affiche l'APK qu'elle
+        // execute, comme le telephone et le compagnon.
+        SectionTitle("Version")
+        Text(
+            text = BuildInfo.resume(LocalContext.current),
+            color = Palette.muted,
+            fontSize = 11.sp,
+            textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(4.dp))
     }

@@ -20,6 +20,7 @@ Index des documents. Le point d'entrée reste le [README principal](../README.md
 | [12 - Courir avec le téléphone](12-course-telephone.md) | courir sans montre : socle partagé `:core`, écran de course Material 3, ceinture cardiaque Bluetooth LE, permissions, réglages persistants, musique et limites connues |
 | [14 - Analyse de trace : VisuGPX](14-analyse-trace-visugpx.md) | comparer la fiche d'une trace sur **VisuGPX** (carte, profil altimétrique coloré, dénivelé horaire, vitesse maximale, KML) avec l'écran de séance de M-pacer, et savoir ce qui a été repris, comment, et ce qui reste dehors |
 | [15 - Versions et publications](15-releases.md) | publier une version : ce que contient une *release* GitHub (APK des trois applications, outils Rust, image conteneur), comment taguer, secrets de signature Android et ce qui reste à construire à la main (Garmin) |
+| [17 - Interfaces d'envoi de fichiers (captures)](17-interfaces-envoi.md) | voir, page par page, ou l'on depose un fichier : les deux depots de MP3 de `/music` (agent local USB, relais Wi-Fi) et l'import d'une ancienne course GPX/TCX, avec routes, formats et limites |
 | [16 - Pousser des MP3 depuis le front end](16-poussee-mp3-front-vers-appareils.md) | déposer des MP3 dans la page `/music` et les envoyer **sur la montre ou le téléphone** : relais serveur livré (volume `MPACER_MEDIA_DIR`, quota 4 Go, téléchargement avec reprise et acquittement) **et** passerelle avec l'agent local `mpacer-music` (USB, sans serveur), plan et état d'implémentation |
 | [Guide de déploiement](../deploy/README.md) | déployer concrètement sur le cluster k3s **jo3** : image, secrets, Helm, ingress, TLS, sauvegardes, dépannage |
 
@@ -34,6 +35,8 @@ Index des documents. Le point d'entrée reste le [README principal](../README.md
 | [Tableau de bord « Pace Control »](images/dashboards/pace-control.png) | Écran de course composé dans l'interface web : allure, tours, meilleures distances |
 | [Tableau de bord « Analyse de séance »](images/dashboards/analyse.png) | Résumé, carte GPS, tours, cardio et meilleures distances |
 | [Création d'un tableau de bord](images/dashboards/nouveau.png) | Constructeur : nom, gabarit, cases à cocher |
+| [Dépôt des MP3 — section 5 de `/music`](images/upload/musique-section-depot.png) | Agent local (USB) et zone de dépôt Wi-Fi, avec la progression du transfert |
+| [Importer une ancienne course](images/upload/course-import.png) | Page `/courses/importer` : un export Strava ou Garmin en GPX ou TCX |
 
 La vue d'ensemble est également reprise en tête de
 [02 - Architecture Rust / Wear OS](02-architecture-rust-wearos.md). Toutes ces images

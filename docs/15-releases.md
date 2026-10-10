@@ -56,6 +56,8 @@ Voir [garmin/README.md](../garmin/README.md).
    | `android/app/build.gradle.kts` | `versionCode` (+1) et `versionName` |
    | `android/phone/build.gradle.kts` | `versionCode` (+1) et `versionName` |
    | `android/companion/build.gradle.kts` | `versionCode` (+1) et `versionName` |
+   | [`garmin/manifest.xml`](../garmin/manifest.xml) | attribut `version` de `<iq:application>` |
+   | [`site/_data/version.yml`](../site/_data/version.yml) | `version` (pied de page du site) |
    | [`charts/mpacer/Chart.yaml`](../charts/mpacer/Chart.yaml) | `version` et `appVersion` |
 
 2. **Vérifier** : `cargo test --workspace`, `cargo fmt --all --check`,
@@ -76,6 +78,31 @@ Voir [garmin/README.md](../garmin/README.md).
 
 Le workflow met à jour la publication existante si elle existe déjà : relancer
 le tag ne crée pas de doublon.
+
+### Version visible dans les applications
+
+Chaque application affiche sa **version** et son **jour de compilation** dans
+ses réglages (et, pour le site, dans le pied de page). Deux APK portant la même
+version restent donc discernables, et un correctif se vérifie à l'œil.
+
+| Application | Où | Version lue dans | Date lue dans |
+|---|---|---|---|
+| Montre Wear OS | Réglages, section « Version » | `versionName` de l'APK | `BuildConfig.BUILD_DATE` |
+| Course au téléphone | Réglages, section « Version » | `versionName` de l'APK | `BuildConfig.BUILD_DATE` |
+| Application d'appoint | En-tête de la liste des séances | `versionName` de l'APK | `BuildConfig.BUILD_DATE` |
+| Montre Garmin | Écran Réglages | `version` du manifeste | `MpacerBuildInfo` généré |
+| Site web | Réglages, section « Version » | `Cargo.toml` | `build.rs` (`BUILD_DATE`) |
+| Documentation | Pied de page | `site/_data/version.yml` | `site.time` (Jekyll) |
+
+La date est choisie **à la compilation**, dans cet ordre :
+
+1. `MPACER_BUILD_DATE` (variable d'environnement ou `-Pmpacer.buildDate`) :
+   c'est ce que posent `release.yml` et `local-ci.ps1`, à partir du commit tagué
+   — la date de la release, pas celle du runner qui rejoue le build ;
+2. `SOURCE_DATE_EPOCH` (secondes UNIX), la variable normalisée de
+   reproductibilité ;
+3. l'horloge de la machine, en **UTC** (le même jour sur un poste, en CI et dans
+   l'image DEBIAN).
 
 ---
 

@@ -200,6 +200,11 @@ class MpacerView extends WatchUi.View {
         var height = dc.getHeight();
         var settings = self.app.settings;
         self.center(dc, center, (height * 0.10).toNumber(), Graphics.FONT_SMALL, MpacerText.settings(), Graphics.COLOR_WHITE);
+        // Version de l'application et jour de compilation : une seule ligne,
+        // car l'ecran est deja bien rempli. Les deux valeurs viennent du fichier
+        // genere par garmin/build.ps1 (voir monkey.jungle).
+        var ligneVersion = MpacerText.versionLabel() + " " + MpacerBuildInfo.version()
+            + " (" + MpacerBuildInfo.buildDate() + ")";
         var lines = [
             "Assistant : " + settings.assistantMode,
             "Unites : " + (settings.imperial ? "mi" : "km"),
@@ -209,15 +214,16 @@ class MpacerView extends WatchUi.View {
             "Temps : " + MpacerUnits.formatDuration(settings.plannedTimeS),
             "Negative split : " + self.onOff(settings.negativeSplit),
             "FC max : " + settings.maxHeartRate.toString(),
-            "Trace GPS : " + self.onOff(settings.syncTrace)
+            "Trace GPS : " + self.onOff(settings.syncTrace),
+            ligneVersion
         ];
         var y = (height * 0.20).toNumber();
-        var step = ((height * 0.62) / lines.size()).toNumber();
+        var step = ((height * 0.60) / lines.size()).toNumber();
         for (var i = 0; i < lines.size(); i++) {
             self.center(dc, center, y, Graphics.FONT_XTINY, lines[i], Graphics.COLOR_LT_GRAY);
             y = y + step;
         }
-        self.center(dc, center, (height * 0.88).toNumber(), Graphics.FONT_XTINY,
+        self.center(dc, center, (height * 0.87).toNumber(), Graphics.FONT_XTINY,
             "Reglages : Garmin Connect > M-pacer", Graphics.COLOR_DK_GRAY);
     }
 

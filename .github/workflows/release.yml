@@ -48,6 +48,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       VERSION: ${{ needs.version.outputs.numero }}
+      # Date de compilation inscrite dans le binaire : celle du commit tague,
+      # donc de la release, et non celle du runner qui rejoue le build.
+      MPACER_BUILD_DATE: ${{ steps.date.outputs.jour }}
     strategy:
       fail-fast: false
       matrix:
@@ -58,6 +61,13 @@ jobs:
             cible: windows-x86_64
     steps:
       - uses: actions/checkout@v4
+
+      # Le jour de compilation est fige au debut du job : binaire et APK d'une
+      # meme release portent ainsi la meme date.
+      - name: Date de la release
+        id: date
+        shell: bash
+        run: echo "jour=$(git log -1 --format=%cd --date=format:%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -98,8 +108,16 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.version.outputs.numero }}
+      # Jour de compilation des trois APK : affiche dans leurs reglages, il
+      # donne la date de la release (celle du commit tague).
+      MPACER_BUILD_DATE: ${{ steps.date.outputs.jour }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Date de la release
+        id: date
+        shell: bash
+        run: echo "jour=$(git log -1 --format=%cd --date=format:%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-java@v5
         with:

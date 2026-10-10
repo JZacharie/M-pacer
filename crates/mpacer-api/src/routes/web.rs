@@ -1361,6 +1361,7 @@ async fn settings_page(
             a href="#profil" { span class="icon icon-user" {} "Profil" }
             a href="#appareils" { span class="icon icon-watch" {} "Appareils appaires" }
             a href="#appairer" { span class="icon icon-key" {} "Appairer une montre" }
+            a href="#version" { span class="icon icon-check" {} "Version" }
             a href="#deconnexion" { span class="icon icon-logout" {} "Deconnexion" }
         }
 
@@ -1431,6 +1432,23 @@ async fn settings_page(
             }
             p class="tiny muted" {
                 "La page " a href="/link" { "Appairer une montre" } " detaille la procedure."
+            }
+        }
+
+        // ------------------------------------------------ version
+        // Le numero de version et la date de compilation du serveur : c'est ce
+        // qui distingue deux deploiements d'une meme version, et ce qui permet
+        // de verifier qu'un correctif est bien en ligne.
+        div class="section-head" id="version" { h2 { "Version" } }
+        section class="panel" {
+            p class="muted" {
+                span class="tiny muted" { "Serveur" }
+                br;
+                "M-pacer " (crate::build_info::VERSION)
+                " - compile le " (crate::build_info::BUILD_DATE)
+            }
+            p class="tiny muted" {
+                "Coeur de calcul Rust " (mpacer_core::VERSION) "."
             }
         }
 
@@ -2171,7 +2189,13 @@ fn layout_refresh(
                 main { (content) }
                 // Slogan du pied de page : la promesse du projet (aucun tiers,
                 // aucune donnee qui part) et le rappel de ce qu'il reste a faire.
-                footer { "M-pacer - " (mpacer_core::VERSION) " - Vos données restent chez vous, vous courez !" }
+                // La version porte la date de compilation du serveur : deux
+                // deploiements de la meme version restent ainsi discernables.
+                footer {
+                    "M-pacer - " (crate::build_info::VERSION)
+                    " (compile le " (crate::build_info::BUILD_DATE) ")"
+                    " - Vos données restent chez vous, vous courez !"
+                }
                 @if let Some(user) = user {
                     nav class="tabbar" aria-label="Navigation principale" {
                         @for (cle, libelle, icone, chemin) in NAV {
@@ -8791,14 +8815,39 @@ mod navigation_web_tests {
     }
 
     #[test]
+    fn the_settings_page_shows_the_version_and_the_build_day() {
+        // La section « Version » des reglages porte le numero et le jour de
+        // compilation : c'est ce qui permet de verifier qu'un correctif est bien
+        // en ligne, sans se fier a l'horodatage d'une image conteneur.
+        let contenu = html! {
+            div class="section-head" id="version" { h2 { "Version" } }
+            section class="panel" {
+                p class="muted" {
+                    "M-pacer " (crate::build_info::VERSION)
+                    " - compile le " (crate::build_info::BUILD_DATE)
+                }
+            }
+        };
+        let markup = contenu.into_string();
+        assert!(
+            markup.contains(&format!("M-pacer {}", crate::build_info::VERSION)),
+            "{markup}"
+        );
+        assert!(markup.contains(crate::build_info::BUILD_DATE), "{markup}");
+        assert!(markup.contains("id=\"version\""), "{markup}");
+    }
+
+    #[test]
     fn the_footer_states_where_the_data_stays() {
         // Le pied de page porte la promesse du projet, avec ses accents : la page
         // est servie en UTF-8 (meta charset), rien ne doit etre translittere.
+        // Il porte aussi la version du serveur et sa date de compilation.
         let markup = layout("Accueil", "accueil", None, html! {}).into_string();
         assert!(
             markup.contains(&format!(
-                "M-pacer - {} - Vos données restent chez vous, vous courez !",
-                mpacer_core::VERSION
+                "M-pacer - {} (compile le {}) - Vos données restent chez vous, vous courez !",
+                crate::build_info::VERSION,
+                crate::build_info::BUILD_DATE
             )),
             "{markup}"
         );

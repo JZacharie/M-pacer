@@ -58,6 +58,13 @@
           <a href="https://github.com/JZacharie/M-pacer">github.com/JZacharie/M-pacer</a>
           - licence MIT ou Apache-2.0.
         </p>
+        <!-- Version du projet et jour de construction du site : le meme bloc que
+             dans les reglages des applications, pour s'y retrouver d'un coup d'oeil.
+             `site.time` est le moment ou Jekyll construit le site ; la version est
+             tenue a jour dans site/_data/version.yml. -->
+        <p class="tiny">
+          Version {{ site.data.version.version }} - construite le {{ site.time | date: "%d/%m/%Y" }}
+        </p>
       </div>
     </footer>
 

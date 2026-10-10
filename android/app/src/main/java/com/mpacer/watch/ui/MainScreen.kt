@@ -175,8 +175,9 @@ private fun AuRepos(
  * moment. L'allure reste la premiere vue -- la seule qu'on lit en courant -- et
  * un glissement de gauche a droite amene les autres.
  *
- * Les commandes, elles, ne defilent pas : arreter une seance ne doit jamais
- * obliger a chercher la bonne page.
+ * Les commandes (pause, arret) vivent sur la **premiere vue** seulement : on ne
+ * les croise pas en changeant d'ecran, et un arret demande une **confirmation**
+ * avant de fermer la seance.
  *
  * Deux vues supplementaires repondent aux besoins d'une sortie longue : la
  * **musique** (volume et changement de piste, pour ne pas sortir le telephone)
@@ -202,13 +203,20 @@ private fun Seance(
     onMusicToggle: () -> Unit,
 ) {
     val pages = rememberPagerState(pageCount = { VUES_EN_COURSE.size })
+    // Arret en deux temps : le premier appui arme la confirmation, le second
+    // arrete la seance. Quitter la premiere vue desarme.
+    var confirmationStop by remember { mutableStateOf(false) }
+    LaunchedEffect(pages.currentPage) {
+        if (pages.currentPage != 0) confirmationStop = false
+    }
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         LigneEtat(output)
-        // Le pager occupe ce qui reste entre l'etat et les commandes : chaque
-        // vue se centre dans cet espace, sans jamais pousser les commandes.
+        // Le pager occupe tout l'espace entre l'etat et les points de page : les
+        // commandes font partie de la premiere vue, elles ne sont donc plus
+        // reservees ici.
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -226,7 +234,19 @@ private fun Seance(
                     contentAlignment = Alignment.Center,
                 ) {
                     when (VUES_EN_COURSE[index]) {
-                        VueCourse.ALLURE -> VueAllure(output, metric, enPause)
+                        VueCourse.ALLURE -> VueAllure(
+                            output = output,
+                            metric = metric,
+                            enPause = enPause,
+                            confirmationStop = confirmationStop,
+                            onPrincipal = onPrincipal,
+                            onDemanderStop = { confirmationStop = true },
+                            onConfirmerStop = {
+                                confirmationStop = false
+                                onStop()
+                            },
+                            onAnnulerStop = { confirmationStop = false },
+                        )
                         VueCourse.TOUR -> VueTour(output, metric)
                         VueCourse.CARDIO -> VueCardio(output)
                         VueCourse.OBJECTIF -> VueObjectif(output, metric)
@@ -245,15 +265,28 @@ private fun Seance(
         }
         Spacer(Modifier.height(6.dp))
         PageIndicator(count = VUES_EN_COURSE.size, current = pages.currentPage)
-        Spacer(Modifier.height(6.dp))
-        Commandes(enPause, onPrincipal, onStop)
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(8.dp))
     }
 }
 
-/** Premiere vue : l'allure, la distance et le temps. */
+/**
+ * Premiere vue : l'allure, la distance, le temps, et **les commandes**.
+ *
+ * C'est la vue qu'on a sous les yeux pendant l'effort : c'est donc la seule qui
+ * porte Pause et Arreter. Les autres vues restent des lectures, sans risque de
+ * toucher un bouton en changeant d'ecran.
+ */
 @Composable
-private fun VueAllure(output: EngineOutput?, metric: Boolean, enPause: Boolean) {
+private fun VueAllure(
+    output: EngineOutput?,
+    metric: Boolean,
+    enPause: Boolean,
+    confirmationStop: Boolean,
+    onPrincipal: () -> Unit,
+    onDemanderStop: () -> Unit,
+    onConfirmerStop: () -> Unit,
+    onAnnulerStop: () -> Unit,
+) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Allure(
             pace = output?.currentPace,
@@ -267,6 +300,15 @@ private fun VueAllure(output: EngineOutput?, metric: Boolean, enPause: Boolean) 
         Box(modifier = Modifier.height(24.dp), contentAlignment = Alignment.Center) {
             PastilleAssistant(output, enPause)
         }
+        Spacer(Modifier.height(8.dp))
+        Commandes(
+            enPause = enPause,
+            confirmationStop = confirmationStop,
+            onPrincipal = onPrincipal,
+            onDemanderStop = onDemanderStop,
+            onConfirmerStop = onConfirmerStop,
+            onAnnulerStop = onAnnulerStop,
+        )
     }
 }
 
@@ -555,9 +597,56 @@ private fun heureCourante(): LocalDateTime {
     return heure
 }
 
-/** Les deux commandes de seance : elles restent visibles sur toutes les vues. */
+/**
+ * Les deux commandes de seance, sur la premiere vue seulement.
+ *
+ * Arreter ferme la seance et fige le resume : un appui malencontreux en pleine
+ * course coute cher. Le bouton demande donc une confirmation -- un second rond,
+ * en rouge, avec une croix pour renoncer -- plutot que d'arreter tout de suite.
+ * La pause, elle, se rattrape d'un appui : elle reste immediate.
+ */
 @Composable
-private fun Commandes(enPause: Boolean, onPrincipal: () -> Unit, onStop: () -> Unit) {
+private fun Commandes(
+    enPause: Boolean,
+    confirmationStop: Boolean,
+    onPrincipal: () -> Unit,
+    onDemanderStop: () -> Unit,
+    onConfirmerStop: () -> Unit,
+    onAnnulerStop: () -> Unit,
+) {
+    if (confirmationStop) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = "Arreter la seance ?",
+                color = Palette.attention,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                RoundButton(
+                    icon = WatchIcons.Check,
+                    label = "Confirmer l'arret",
+                    onClick = onConfirmerStop,
+                    size = 50.dp,
+                    iconSize = 25.dp,
+                    background = Palette.danger,
+                    contentColor = Color.White,
+                )
+                RoundButton(
+                    icon = WatchIcons.Close,
+                    label = "Annuler",
+                    onClick = onAnnulerStop,
+                    size = 42.dp,
+                    iconSize = 20.dp,
+                    background = Palette.surface3,
+                    contentColor = Palette.texte,
+                )
+            }
+        }
+        return
+    }
     Row(horizontalArrangement = Arrangement.spacedBy(13.dp)) {
         RoundButton(
             icon = if (enPause) WatchIcons.Play else WatchIcons.Pause,
@@ -570,8 +659,8 @@ private fun Commandes(enPause: Boolean, onPrincipal: () -> Unit, onStop: () -> U
         )
         RoundButton(
             icon = WatchIcons.Stop,
-            label = "Arreter",
-            onClick = onStop,
+            label = "Arreter la seance",
+            onClick = onDemanderStop,
             size = 42.dp,
             iconSize = 19.dp,
             background = Palette.surface3,

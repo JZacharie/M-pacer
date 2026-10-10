@@ -6,7 +6,7 @@ meme backend auto-heberge :
 | Module | Identifiant | Role |
 |---|---|---|
 | `:core` | `com.mpacer.core` | Bibliotheque commune : pont JNI vers `mpacer-core`, service de seance (GPS 1 Hz), voix, archive locale, synchronisation backend, suivi MQTT, musique, amis et partage de position. Aucune interface. |
-| `:app` | `com.mpacer.watch` | Application Wear OS : ecrans ronds, six vues de course (allure, tour, cardio, objectif, **musique avec volume et changement de piste**, **heure**), capteur cardiaque de la montre, Data Layer (reception des seances envoyees par le telephone). |
+| `:app` | `com.mpacer.watch` | Application Wear OS : ecrans ronds, six vues de course (allure, tour, cardio, objectif, **musique avec volume et changement de piste**, **heure**) ; **Pause et Arreter sur la premiere vue seulement**, l'arret demandant une confirmation ; capteur cardiaque de la montre, Data Layer (reception des seances envoyees par le telephone). |
 | `:phone` | `com.mpacer.phone` | Application telephone (Android 8+) pour **courir avec le telephone** : ecrans Material 3, ceinture cardiaque Bluetooth LE, historique, synchronisation, MQTT, musique, onglet Amis (carte OpenStreetMap des proches). |
 | `:companion` | `com.mpacer.companion` | Application telephone d'appoint : connexion au backend, liste et detail des seances, import de fichier `.pac`/JSON, envoi vers la montre. **Ne fait pas de seance.** |
 

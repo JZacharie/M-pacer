@@ -43,6 +43,33 @@ object MusicPlayer {
     private var queue: List<LocalTrack> = emptyList()
     private var loadedToken: String? = null
 
+    /**
+     * Ordre de lecture choisi sur l'ecran Musique : melange, ou ordre de la
+     * playlist. Il ne concerne que la file locale ; le choix de piste du moteur
+     * (docs/07) reste pilote par le tempo. Le choix est retenu entre deux
+     * lancements.
+     */
+    @Volatile
+    private var shuffle = false
+
+    /** Nom des preferences du lecteur (ordre de lecture). */
+    private const val PREFERENCES = "mpacer-musique-lecture"
+    private const val CLE_SHUFFLE = "aleatoire"
+
+    /** Vrai si la file locale est jouee dans un ordre melange. */
+    fun shuffleEnabled(): Boolean = shuffle
+
+    /** Regle l'ordre de lecture et le retient pour les prochaines seances. */
+    fun setShuffle(enabled: Boolean) {
+        shuffle = enabled
+        _state.update { it.copy(shuffle = enabled) }
+        appContext
+            ?.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            ?.edit()
+            ?.putBoolean(CLE_SHUFFLE, enabled)
+            ?.apply()
+    }
+
     // ---------------------------------------------------------------- connexion
 
     /**
@@ -50,6 +77,13 @@ object MusicPlayer {
      * des interfaces (montre, telephone), qui n'ont pas Media3 sur leur classpath.
      */
     fun prepare(context: Context) {
+        // L'ordre de lecture est un choix de l'utilisateur : il survit a la
+        // fermeture de l'application.
+        val application = context.applicationContext
+        shuffle = application
+            .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getBoolean(CLE_SHUFFLE, false)
+        _state.update { it.copy(shuffle = shuffle) }
         ensure(context)
     }
 
@@ -93,9 +127,11 @@ object MusicPlayer {
 
     /** Charge une playlist locale et demarre la lecture. */
     fun play(playlist: LocalPlaylist, startTrackId: String? = null) {
-        val tracks = playlist.playable
+        val tracks = ordreLecture(playlist.playable, shuffle)
         queue = tracks
-        val token = playlist.id + ":" + tracks.size + ":" + (tracks.firstOrNull()?.id ?: "")
+        // Le jeton porte l'ordre complet : relancer une playlist en mode melange
+        // doit remplacer la file Media3, meme si la premiere piste est la meme.
+        val token = playlist.id + ":" + tracks.joinToString(",") { track -> track.id }
         _state.update {
             it.copy(
                 playlistId = playlist.id,
@@ -316,6 +352,8 @@ object MusicPlayer {
 data class MusicPlayerState(
     val connected: Boolean = false,
     val playing: Boolean = false,
+    /** File locale melangee (ecran Musique) ou jouee dans l'ordre de la playlist. */
+    val shuffle: Boolean = false,
     val playlistId: String? = null,
     val playlistName: String? = null,
     val source: String = "manual",

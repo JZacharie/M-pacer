@@ -86,6 +86,9 @@ class MainActivity : ComponentActivity() {
         val liveState by LiveTracker.state.collectAsState()
         val probeState by LiveProbe.state.collectAsState()
         val player by MusicPlayer.state.collectAsState()
+        // L'etat d'appairage est affiche dans les Reglages (le cadran d'accueil
+        // n'a plus de bouton de synchronisation).
+        val syncState by SyncClient.state.collectAsState()
 
         // Les reglages musique partent tout de suite au moteur (ou sont gardes
         // par MusicSession si la seance n'a pas encore demarre).
@@ -111,11 +114,16 @@ class MainActivity : ComponentActivity() {
             showSettings -> SettingsScreen(
                 settings = settings,
                 liveState = liveState,
+                syncState = syncState,
                 onSettingsChange = updateSettings,
                 onBack = { showSettings = false },
                 onMusic = {
                     showSettings = false
                     showMusic = true
+                },
+                onSync = {
+                    showSettings = false
+                    showSync = true
                 },
                 onLive = {
                     showSettings = false
@@ -142,7 +150,6 @@ class MainActivity : ComponentActivity() {
                 onResume = { TrackingService.send(this, TrackingService.ACTION_RESUME) },
                 onStop = { TrackingService.send(this, TrackingService.ACTION_STOP) },
                 onSettings = { showSettings = true },
-                onSync = { showSync = true },
                 onMusic = { showMusic = true },
                 player = player,
                 // Commandes de la vue Musique en course : volume du flux media

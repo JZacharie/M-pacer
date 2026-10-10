@@ -71,6 +71,7 @@ fun MusicScreen(onBack: () -> Unit) {
         if (showPlayer) {
             PlayerPane(
                 player = player,
+                shuffle = player.shuffle,
                 targetBpm = watch.output?.music?.targetBpm,
                 trackBpm = watch.output?.music?.current?.bpm ?: player.track?.bpm,
                 cadence = watch.output?.music?.cadenceSpm,
@@ -83,6 +84,8 @@ fun MusicScreen(onBack: () -> Unit) {
             LibraryPane(
                 library = library,
                 telechargement = telechargement,
+                shuffle = player.shuffle,
+                onToggleShuffle = { MusicPlayer.setShuffle(!player.shuffle) },
                 onDownload = { MusicDownloadService.start(context) },
                 onImport = { scope.launch { MusicLibrary.scan(context) } },
                 onPlay = { playlist ->
@@ -108,6 +111,8 @@ fun MusicScreen(onBack: () -> Unit) {
 private fun LibraryPane(
     library: MusicLibraryState,
     telechargement: MusicDownloadState,
+    shuffle: Boolean,
+    onToggleShuffle: () -> Unit,
     onDownload: () -> Unit,
     onImport: () -> Unit,
     onPlay: (LocalPlaylist) -> Unit,
@@ -115,6 +120,16 @@ private fun LibraryPane(
     onAskDelete: (String) -> Unit,
     onDelete: (LocalPlaylist) -> Unit,
 ) {
+    // L'ordre de lecture se choisit ici, avant la playlist : c'est lui qui
+    // decide de l'ordre des MP3 quand on appuie sur Lire.
+    SectionTitle("Lecture")
+    SettingRow(
+        label = if (shuffle) "Aleatoire" else "Dans l'ordre",
+        onClick = onToggleShuffle,
+        selected = shuffle,
+        icon = WatchIcons.Shuffle,
+    )
+    SectionTitle("Fichiers")
     SettingRow(
         label = if (library.busy) "Analyse du dossier..." else "Importer (USB)",
         onClick = onImport,
@@ -253,6 +268,7 @@ private fun PlaylistRow(
 @Composable
 private fun PlayerPane(
     player: MusicPlayerState,
+    shuffle: Boolean,
     targetBpm: Double?,
     trackBpm: Double?,
     cadence: Double?,
@@ -293,6 +309,12 @@ private fun PlayerPane(
     player.playlistName?.let {
         Text(text = it, color = Palette.muted2, fontSize = 10.sp, textAlign = TextAlign.Center)
     }
+    Text(
+        text = if (shuffle) "aleatoire" else "dans l'ordre",
+        color = Palette.muted2,
+        fontSize = 10.sp,
+        textAlign = TextAlign.Center,
+    )
 
     Row(
         horizontalArrangement = Arrangement.spacedBy(10.dp),

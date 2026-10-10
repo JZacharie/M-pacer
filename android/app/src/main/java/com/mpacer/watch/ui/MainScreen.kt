@@ -68,7 +68,6 @@ fun MainScreen(
     onResume: () -> Unit,
     onStop: () -> Unit,
     onSettings: () -> Unit,
-    onSync: () -> Unit,
     onMusic: () -> Unit,
     player: MusicPlayerState = MusicPlayerState(),
     onVolumeDown: () -> Unit = {},
@@ -87,7 +86,7 @@ fun MainScreen(
         when (output?.state) {
             "Running" -> Seance(output, metric, enPause = false, onPrincipal = onPause, onStop = onStop, player = player, onVolumeDown = onVolumeDown, onVolumeUp = onVolumeUp, onMusicPrevious = onMusicPrevious, onMusicNext = onMusicNext, onMusicToggle = onMusicToggle)
             "Paused", "AutoPaused" -> Seance(output, metric, enPause = true, onPrincipal = onResume, onStop = onStop, player = player, onVolumeDown = onVolumeDown, onVolumeUp = onVolumeUp, onMusicPrevious = onMusicPrevious, onMusicNext = onMusicNext, onMusicToggle = onMusicToggle)
-            else -> AuRepos(output, metric, onStart, onStop, onMusic, onSync, onSettings)
+            else -> AuRepos(output, metric, onStart, onStop, onMusic, onSettings)
         }
     }
 }
@@ -101,7 +100,6 @@ private fun AuRepos(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onMusic: () -> Unit,
-    onSync: () -> Unit,
     onSettings: () -> Unit,
 ) {
     val arme = output?.state == "Armed"
@@ -158,9 +156,10 @@ private fun AuRepos(
             )
         }
         Spacer(Modifier.height(18.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+        // L'appairage et la synchronisation vivent dans les Reglages : un cadran
+        // de 40 mm ne garde que ce qui sert au depart de la seance.
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             RoundButton(WatchIcons.Music, "Musique", onMusic, size = 40.dp, iconSize = 20.dp)
-            RoundButton(WatchIcons.Sync, "Synchronisation", onSync, size = 40.dp, iconSize = 20.dp)
             RoundButton(WatchIcons.Settings, "Reglages", onSettings, size = 40.dp, iconSize = 20.dp)
         }
     }

@@ -12,6 +12,7 @@ import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material.Text
 import com.mpacer.core.AssistantMode
 import com.mpacer.core.BuildInfo
+import com.mpacer.core.SyncState
 import com.mpacer.core.live.LiveConfig
 import com.mpacer.core.live.LiveState
 import com.mpacer.core.ui.Palette
@@ -33,9 +34,11 @@ import com.mpacer.watch.WatchSettings
 fun SettingsScreen(
     settings: WatchSettings,
     liveState: LiveState,
+    syncState: SyncState,
     onSettingsChange: (WatchSettings) -> Unit,
     onBack: () -> Unit,
     onMusic: () -> Unit,
+    onSync: () -> Unit,
     onLive: () -> Unit,
 ) {
     SecondaryScreen(onBack = onBack) {
@@ -135,6 +138,26 @@ fun SettingsScreen(
             label = if (settings.live.url.isBlank()) "Broker MQTT" else "Broker configure",
             onClick = onLive,
             selected = settings.live.url.isNotBlank(),
+            icon = WatchIcons.Sync,
+        )
+
+        // L'appairage et la synchronisation ont quitte le cadran d'accueil :
+        // c'est un reglage comme un autre, on le retrouve ici.
+        SectionTitle("Synchronisation")
+        Text(
+            text = if (syncState.paired) {
+                "Connecte - " + syncState.pending + " seance(s) en attente"
+            } else {
+                "Non connecte"
+            },
+            color = if (syncState.paired) Palette.ok else Palette.orange,
+            fontSize = 11.sp,
+            textAlign = TextAlign.Center,
+        )
+        SettingRow(
+            label = if (syncState.paired) "Synchroniser" else "S'appairer",
+            onClick = onSync,
+            selected = syncState.paired,
             icon = WatchIcons.Sync,
         )
 

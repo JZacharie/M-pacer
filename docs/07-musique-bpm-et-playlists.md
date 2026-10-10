@@ -307,13 +307,18 @@ dans le manifeste.
 ```text
    +---------------------------+        +---------------------------+
    | 1. Bibliotheque (USB)     |        | 2. Lecture                |
-   |  Run 170     18 p. 86 Mo  |  --->  |      Wake me up           |
-   |  Ma course 10km 12 p.     |        |      Avicii  172 BPM      |
-   |  [ Importer (USB) ]       |        |  cible 176 BPM   cadence  |
+   |  Lecture : Dans l'ordre   |        |      Wake me up           |
+   |  Run 170     18 p. 86 Mo  |  --->  |      Avicii  172 BPM      |
+   |  Ma course 10km 12 p.     |        |  cible 176 BPM   cadence  |
+   |  [ Importer (USB) ]       |        |  dans l'ordre             |
    |  libre 5,1 Go             |        |  [<<]  [ Pause ]  [>>]    |
    +---------------------------+        +---------------------------+
 ```
 
+* l'**ordre de lecture** se choisit en tete de l'ecran : « Dans l'ordre » (ordre de
+  la playlist) ou « Aleatoire » (file locale melangee, `MusicOrder.kt`). Le choix est
+  retenu d'une seance a l'autre ; il ne touche jamais au choix de piste du moteur, qui
+  reste pilote par le tempo cible ;
 * aucune application de lecture tierce sur la montre (pas de session externe,
   pas d'acces aux notifications) ;
 * « Importer (USB) » relit `getExternalFilesDir("Music")` : chaque sous-dossier

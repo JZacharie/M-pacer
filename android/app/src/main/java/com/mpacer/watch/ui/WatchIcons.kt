@@ -142,6 +142,32 @@ object WatchIcons {
         close()
     }
 
+    /** Shuffle : lecture melangee. */
+    val Shuffle: ImageVector = icone("Shuffle", PathFillType.NonZero) {
+        moveTo(10.59f, 9.17f)
+        lineTo(5.41f, 4f)
+        lineTo(4f, 5.41f)
+        lineTo(9.17f, 10.59f)
+        close()
+        moveTo(14.5f, 4f)
+        lineTo(16.54f, 6.04f)
+        lineTo(3f, 19.59f)
+        lineTo(4.41f, 21f)
+        lineTo(18f, 7.41f)
+        verticalLineTo(9.5f)
+        horizontalLineTo(20f)
+        verticalLineTo(4f)
+        close()
+        moveTo(14.83f, 13.41f)
+        lineTo(13.42f, 14.82f)
+        lineTo(16.54f, 17.94f)
+        lineTo(14.5f, 20f)
+        horizontalLineTo(20f)
+        verticalLineTo(14.5f)
+        lineTo(18f, 16.54f)
+        close()
+    }
+
     /** Back */
     val Back: ImageVector = icone("Back", PathFillType.NonZero) {
         moveTo(20f, 11f)

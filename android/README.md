@@ -311,6 +311,9 @@ curl -s -X POST http://<backend>/api/v1/device/token -H "Content-Type: applicati
 - La montre poste ses seances locales sur `POST /api/v1/workouts` avec le `WorkoutSummary`
   produit par `mpacer-core` (voir `SyncClient.kt` et `WorkoutArchive.kt`). Un identifiant
   de seance deja envoye est memorise localement, ce qui rend l envoi idempotent.
+- **Point d entree** : la synchronisation se trouve dans les **Reglages** de la montre
+  (section « Synchronisation »), pas sur le cadran d accueil ; le cadran ne garde que
+  Musique et Reglages. Le bouton ouvre `SyncScreen.kt` (appairage, code, envoi).
 - Le telephone liste `GET /api/v1/workouts`, lit `GET /api/v1/workouts/{id}`, importe un
   fichier `.pac`/JSON local, puis peut renvoyer une seance vers la montre.
 - Envoi vers la montre (`WearSync.kt`) :
@@ -334,6 +337,10 @@ fichiers presents sur son disque et remonte l'etat. Contrat complet :
   (`MusicLibrary.kt`), construit l'index `filesDir/music-index.json` et affiche le
   nombre de titres, l'espace utilise et l'espace libre. Une playlist importee peut
   etre supprimee depuis la montre.
+- **Ordre de lecture** : l'ecran Musique offre « Dans l'ordre » ou « Aleatoire »
+  (`MusicOrder.kt`) avant de choisir la playlist ; le choix porte sur la file locale
+  des MP3, il est conserve entre deux lancements (`MusicPlayer.setShuffle`) et ne
+  change rien au choix de piste du moteur, toujours pilote par le tempo.
 - **Deezer est la source de metadonnees** (page `/music` du backend) : M-pacer ne
   pilote aucune application de lecture et ne lit aucun flux protege par DRM.
 - **Pendant la seance**, `TrackingService` applique la directive du moteur

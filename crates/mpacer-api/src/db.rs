@@ -52,6 +52,8 @@ const SCHEMA_DEEZER_ARL: &str = include_str!("../migrations/0008-deezer-arl.sql"
 const SCHEMA_DEEZER_ONLY: &str = include_str!("../migrations/0009-source-unique-deezer.sql");
 /// Demandes d'amitie : l'amitie nait quand la personne visee accepte.
 const SCHEMA_FRIEND_REQUESTS: &str = include_str!("../migrations/0010-demandes-amis.sql");
+/// Optimisations d'indexation FK, partial indexes et index d'expression.
+const SCHEMA_OPTIMISATIONS: &str = include_str!("../migrations/0011-optimisations-postgres.sql");
 
 /// Ouvre le pool et applique le schema (idempotent).
 pub async fn connect(config: &Config) -> anyhow::Result<PgPool> {
@@ -76,5 +78,6 @@ pub async fn connect_with_options(options: PgConnectOptions) -> anyhow::Result<P
     sqlx::raw_sql(SCHEMA_DEEZER_ARL).execute(&pool).await?;
     sqlx::raw_sql(SCHEMA_DEEZER_ONLY).execute(&pool).await?;
     sqlx::raw_sql(SCHEMA_FRIEND_REQUESTS).execute(&pool).await?;
+    sqlx::raw_sql(SCHEMA_OPTIMISATIONS).execute(&pool).await?;
     Ok(pool)
 }

@@ -191,12 +191,16 @@ private fun PlayerCard(
     onNext: () -> Unit,
     onVolume: (Int) -> Unit,
 ) {
-    Card(colors = CardDefaults.cardColors(containerColor = Palette.surface)) {
+    Card(
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Palette.surface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1FFFFFFF)),
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Icon(PhoneIcons.Music, contentDescription = null, tint = Palette.muted, modifier = Modifier.size(14.dp))

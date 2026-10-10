@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -19,8 +20,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -430,12 +432,18 @@ fun FriendsScreen() {
 @Composable
 private fun CarteAmi(ami: Friend, onRemove: () -> Unit) {
     val position = ami.live
-    Card(colors = CardDefaults.cardColors(containerColor = Palette.surface)) {
+    val enDirect = position != null && (position.ageS ?: 999L) < 300L
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Palette.surface),
+        border = BorderStroke(1.dp, if (enDirect) Color(0x662FBF71) else Color(0x1FFFFFFF)),
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -445,39 +453,76 @@ private fun CarteAmi(ami: Friend, onRemove: () -> Unit) {
                 Row(
                     modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    PhotoProfil(id = ami.id, nom = ami.displayName, taille = 40.dp)
+                    Box {
+                        PhotoProfil(id = ami.id, nom = ami.displayName, taille = 44.dp)
+                        if (enDirect) {
+                            Box(
+                                modifier = Modifier
+                                    .size(12.dp)
+                                    .clip(CircleShape)
+                                    .background(Palette.ok)
+                                    .align(Alignment.BottomEnd),
+                            )
+                        }
+                    }
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(ami.displayName, color = Palette.texte, fontWeight = FontWeight.Medium)
-                        Text(ami.email, color = Palette.muted, fontSize = 11.sp)
+                        Text(ami.displayName, color = Palette.texte, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                        Text(ami.email, color = Palette.muted2, fontSize = 11.sp)
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .background(if (enDirect) Color(0x262FBF71) else Palette.surface2, RoundedCornerShape(50))
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                ) {
+                    Text(
+                        text = libelleEtat(ami),
+                        color = if (enDirect) Palette.ok else Palette.muted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
+            if (position != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Palette.surface2, RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column {
+                        Text("DISTANCE", color = Palette.muted2, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
+                        Text(MpacerFormat.distance(position.distanceM ?: 0.0), color = Palette.texte, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Column {
+                        Text("ALLURE", color = Palette.muted2, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
+                        Text(position.paceSPerKm?.let { MpacerFormat.pace(it) + " /km" } ?: "--:--", color = Palette.texte, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    }
+                    position.heartRateBpm?.let { bpm ->
+                        Column {
+                            Text("CARDIO", color = Palette.muted2, fontSize = 9.sp, fontWeight = FontWeight.SemiBold)
+                            Text("$bpm bpm", color = Palette.danger, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
                 Text(
-                    libelleEtat(ami),
-                    color = couleurEtat(ami),
-                    fontSize = 12.sp,
-                )
-            }
-            if (position != null) {
-                Text(
-                    MpacerFormat.distance(position.distanceM ?: 0.0) + "   " +
-                        (position.paceSPerKm?.let { MpacerFormat.pace(it) + " /km" } ?: "--") +
-                        (position.heartRateBpm?.let { "   " + it + " bpm" } ?: "") +
-                        (position.lap?.let { "   tour " + it } ?: ""),
-                    color = Palette.texte,
-                    fontSize = 14.sp,
-                )
-                Text(
-                    position.device + "   il y a " + age(position.ageS),
-                    color = Palette.muted,
+                    text = position.device + " • il y a " + age(position.ageS),
+                    color = Palette.muted2,
                     fontSize = 11.sp,
                 )
             }
-            TextButton(onClick = onRemove) {
-                Icon(PhoneIcons.Delete, contentDescription = null, tint = Palette.danger, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Retirer", color = Palette.danger)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                TextButton(onClick = onRemove) {
+                    Icon(PhoneIcons.Delete, contentDescription = null, tint = Palette.danger, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Retirer", color = Palette.danger, fontSize = 12.sp)
+                }
             }
         }
     }

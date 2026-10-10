@@ -12,7 +12,10 @@ use crate::cardio::{HeartRateSample, HeartRateZones};
 use crate::gps::{GpsMonitor, GpsSample, GpsStatus, GpsThresholds, StatusLight};
 use crate::history::WorkoutSummary;
 use crate::lap::{Lap, LapTracker};
-use crate::music::{MusicConfig, MusicDirector, MusicInput, MusicState, NowPlaying, Playlist};
+use crate::music::{
+    cadence_from_speed, stride_for_speed, MusicConfig, MusicDirector, MusicInput, MusicState,
+    NowPlaying, Playlist, STRIDE_REFERENCE_SPEED_MPS,
+};
 use crate::pace::{PaceConfig, PaceEngine};
 use crate::units::{DistanceDisplay, UnitSystem};
 use crate::voice::{VoiceCoach, VoiceConfig, VoiceMessage, VoiceSnapshot};
@@ -84,6 +87,12 @@ pub struct EngineOutput {
     pub heart_rate_bpm: Option<u16>,
     /// Zone de la derniere frequence (1 a 5), absente sous la zone 1.
     pub heart_rate_zone: Option<u8>,
+    /// Cadence de course (pas/min), capteur ou estimee.
+    #[serde(default)]
+    pub cadence_spm: Option<f64>,
+    /// Longueur de foulee estimee ou calculee (m).
+    #[serde(default)]
+    pub stride_m: Option<f64>,
     /// Etat musique du tick (toujours present, jamais null).
     #[serde(default)]
     pub music: MusicState,
@@ -109,6 +118,8 @@ impl Default for EngineOutput {
             messages: Vec::new(),
             heart_rate_bpm: None,
             heart_rate_zone: None,
+            cadence_spm: None,
+            stride_m: None,
             music: MusicState::default(),
         }
     }
@@ -538,6 +549,18 @@ impl PacerEngine {
     ) -> EngineOutput {
         let distance = self.workout.distance_m();
         let current_pace = self.pace.current_pace(self.config.units);
+        let speed = self.pace.current_speed_mps();
+        let cadence_spm = self
+            .music
+            .cadence_spm()
+            .or_else(|| speed.map(cadence_from_speed));
+        let stride_m = match (speed, cadence_spm) {
+            (Some(v), Some(cadence)) if cadence > 0.0 => {
+                Some((v * 60.0 / cadence).clamp(0.2, 3.0))
+            }
+            (Some(v), None) => Some(stride_for_speed(v, STRIDE_REFERENCE_SPEED_MPS)),
+            _ => None,
+        };
         EngineOutput {
             status: self.gps.status(),
             light: self.gps.status().light(),
@@ -554,7 +577,7 @@ impl PacerEngine {
             current_lap_distance_m: self.laps.current_lap_distance_m(distance),
             // Le tour en cours suit ceux deja franchis.
             lap_index: self.laps.lap_count() as u32 + 1,
-            speed_mps: self.pace.current_speed_mps(),
+            speed_mps: speed,
             panel,
             lap_completed,
             events,
@@ -565,6 +588,8 @@ impl PacerEngine {
                 .last()
                 .map(|sample| self.config.heart_rate.zone_of(sample.bpm as f64))
                 .filter(|zone| *zone > 0),
+            cadence_spm,
+            stride_m,
             music: self.last_music.clone(),
         }
     }
@@ -1041,5 +1066,19 @@ mod tests {
         let output = run(&mut engine, 11_000, 300, 1000.0 / 360.0);
         assert_eq!(output.music.reason, DirectiveReason::BehindPlan);
         assert_eq!(output.music.target_bpm, Some(176.0));
+    }
+
+    #[test]
+    fn engine_output_exposes_cadence_and_stride() {
+        let mut engine = PacerEngine::default();
+        engine.start(10_000);
+        engine.on_cadence(180.0);
+        // Course à 5.0 m/s (18 km/h = 3:20/km)
+        let output = run(&mut engine, 11_000, 10, 5.0);
+        assert_eq!(output.cadence_spm, Some(180.0));
+        // Stride = 5.0 * 60 / 180 = 1.666... m
+        assert!(output.stride_m.is_some());
+        let stride = output.stride_m.unwrap();
+        assert!((stride - 1.666).abs() < 0.05, "stride was {stride}");
     }
 }

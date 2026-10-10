@@ -247,6 +247,13 @@ data class EngineOutput(val json: JSONObject) {
 
     /** Zone de la derniere frequence (1 a 5), null sous la zone 1 ou sans mesure. */
     val heartRateZone: Int? get() = json.optInt("heart_rate_zone", 0).takeIf { it > 0 }
+
+    /** Cadence en pas par minute (capteur de pas ou estimation). */
+    val cadenceSpm: Double? get() = json.doubleOrNull("cadence_spm")
+
+    /** Longueur de foulee en metres (calculee depuis la vitesse et cadence). */
+    val strideM: Double? get() = json.doubleOrNull("stride_m")
+
     val isPaused: Boolean get() = state == "Paused" || state == "AutoPaused"
 
     val estimatedFinishS: Double?

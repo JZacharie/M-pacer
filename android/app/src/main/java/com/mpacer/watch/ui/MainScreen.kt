@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
@@ -340,45 +341,70 @@ private fun VueTour(output: EngineOutput?, metric: Boolean) {
 @Composable
 private fun VueCardio(output: EngineOutput?) {
     val bpm = output?.heartRateBpm
-    if (bpm == null) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            SectionTitle("Cardio")
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "Aucun capteur cardiaque",
-                color = Palette.muted2,
-                fontSize = 12.sp,
-                maxLines = 2,
-            )
-        }
-        return
-    }
-    val zone = output.heartRateZone
+    val cadence = output?.cadenceSpm?.let { Math.round(it).toString() + " spm" } ?: "-- spm"
+    val foulee = output?.strideM?.let { String.format(java.util.Locale.US, "%.2f m", it) } ?: "-- m"
+
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        SectionTitle("Cardio")
+        SectionTitle("Cardio & Foulée")
         Spacer(Modifier.height(2.dp))
-        Row(
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
+        if (bpm == null) {
             Text(
-                text = bpm.toString(),
-                color = Palette.zoneColor(zone),
-                fontSize = 46.sp,
+                text = "-- bpm",
+                color = Palette.muted2,
+                fontSize = 32.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
             )
+        } else {
+            val zone = output.heartRateZone
+            Row(
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = bpm.toString(),
+                    color = Palette.zoneColor(zone),
+                    fontSize = 38.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                )
+                Text(
+                    text = "bpm",
+                    color = Palette.muted2,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(bottom = 6.dp),
+                    maxLines = 1,
+                )
+                if (zone != null) {
+                    Spacer(Modifier.width(4.dp))
+                    StatusPill(text = "Z" + zone, color = Palette.zoneColor(zone))
+                }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
-                text = "bpm",
-                color = Palette.muted2,
+                text = cadence,
+                color = Palette.texte,
                 fontSize = 13.sp,
-                modifier = Modifier.padding(bottom = 7.dp),
+                fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
             )
-        }
-        if (zone != null) {
-            Spacer(Modifier.height(4.dp))
-            StatusPill(text = "Z" + zone, color = Palette.zoneColor(zone))
+            Text(
+                text = "•",
+                color = Palette.muted2,
+                fontSize = 11.sp,
+            )
+            Text(
+                text = foulee,
+                color = Palette.orange,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
         }
     }
 }

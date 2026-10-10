@@ -217,3 +217,75 @@ fun LigneTour(
         )
     }
 }
+
+/**
+ * Miniature du tracé GPS (silhouette vectorielle inspirée de Strava).
+ * Dessinée au Canvas sans charger de WebView : rapide, léger et autonome.
+ */
+@Composable
+fun MiniTraceGPX(
+    points: List<PointCarte>,
+    modifier: Modifier = Modifier,
+    couleur: Color = Palette.orange,
+) {
+    Canvas(modifier = modifier) {
+        if (points.size < 2) return@Canvas
+        val minLat = points.minOf { it.lat }
+        val maxLat = points.maxOf { it.lat }
+        val minLon = points.minOf { it.lon }
+        val maxLon = points.maxOf { it.lon }
+
+        val deltaLat = (maxLat - minLat).coerceAtLeast(0.0001)
+        val deltaLon = (maxLon - minLon).coerceAtLeast(0.0001)
+
+        val padding = 8.dp.toPx()
+        val availW = size.width - padding * 2
+        val availH = size.height - padding * 2
+
+        val scale = minOf(availW / deltaLon.toFloat(), availH / deltaLat.toFloat())
+        val offsetX = padding + (availW - deltaLon.toFloat() * scale) / 2f
+        val offsetY = padding + (availH - deltaLat.toFloat() * scale) / 2f
+
+        fun proj(p: PointCarte): Offset {
+            val x = offsetX + ((p.lon - minLon).toFloat() * scale)
+            // Latitude inversée pour l'axe Y de l'écran
+            val y = offsetY + ((maxLat - p.lat).toFloat() * scale)
+            return Offset(x, y)
+        }
+
+        val path = Path()
+        val start = proj(points.first())
+        path.moveTo(start.x, start.y)
+        for (i in 1 until points.size) {
+            val pt = proj(points[i])
+            path.lineTo(pt.x, pt.y)
+        }
+
+        // Tracé principal lumineux avec dégradé subtil
+        drawPath(
+            path = path,
+            color = couleur,
+            style = Stroke(
+                width = 3.dp.toPx(),
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round,
+            ),
+        )
+
+        // Point de départ (vert clair)
+        drawCircle(
+            color = Palette.ok,
+            radius = 3.5.dp.toPx(),
+            center = start,
+        )
+
+        // Point d'arrivée (orange ou rouge)
+        val end = proj(points.last())
+        drawCircle(
+            color = Color.White,
+            radius = 3.5.dp.toPx(),
+            center = end,
+        )
+    }
+}
+

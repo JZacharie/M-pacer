@@ -260,7 +260,7 @@ pub fn cadence_from_speed(speed_mps: f64) -> f64 {
 }
 
 /// Longueur de foulee pour une vitesse et une vitesse de reference donnees.
-fn stride_for_speed(speed_mps: f64, reference_speed_mps: f64) -> f64 {
+pub fn stride_for_speed(speed_mps: f64, reference_speed_mps: f64) -> f64 {
     let ratio = speed_mps / reference_speed_mps;
     REFERENCE_STRIDE_M * ratio.powf(STRIDE_SPEED_EXPONENT)
 }
@@ -624,6 +624,11 @@ impl MusicDirector {
         } else {
             None
         };
+    }
+
+    /// Cadence issue d'un capteur de pas, si connue.
+    pub fn cadence_spm(&self) -> Option<f64> {
+        self.cadence_spm
     }
 
     /// Nouvelle seance : oublie la lecture en cours, garde playlist et reglages.

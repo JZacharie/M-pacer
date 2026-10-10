@@ -156,7 +156,8 @@ header.site nav button {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 8px 13px;
+  min-height: 40px;
+  padding: 8px 14px;
   border-radius: 999px;
   color: var(--muted);
   font-size: 14.5px;
@@ -164,11 +165,25 @@ header.site nav button {
   border: 1px solid transparent;
   background: none;
   cursor: pointer;
-  transition: color .18s var(--ease), background .18s var(--ease);
+  transition: color .18s var(--ease), background .18s var(--ease), border-color .18s var(--ease), transform .12s var(--ease);
 }
 
-header.site nav a:hover { color: var(--text); background: var(--surface-2); }
-header.site nav a.active { color: var(--text); background: var(--surface-2); border-color: var(--border); }
+header.site nav a:hover {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+header.site nav a.active {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--orange-line);
+  box-shadow: 0 0 0 1px var(--orange-line);
+}
+
+header.site nav a:active {
+  transform: scale(.97);
+}
 
 .who {
   color: var(--text);
@@ -312,15 +327,40 @@ footer {
   min-height: 52px;
   border-radius: var(--radius-xs);
   color: var(--muted-2);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: .01em;
-  transition: color .18s var(--ease), transform .18s var(--ease);
+  transition: color .18s var(--ease), transform .18s var(--ease), background .18s var(--ease);
 }
 
-.tabbar a .icon { width: 23px; height: 23px; }
-.tabbar a:active { transform: scale(.94); }
-.tabbar a.active { color: var(--orange); }
+.tabbar a .icon {
+  width: 23px;
+  height: 23px;
+  transition: transform .18s var(--ease);
+}
+
+.tabbar a:active {
+  transform: scale(.93);
+  background: var(--surface-2);
+}
+
+.tabbar a.active {
+  color: var(--orange);
+}
+
+.tabbar a.active .icon {
+  transform: translateY(-1px);
+}
+
+.tabbar a.active::after {
+  content: "";
+  position: absolute;
+  bottom: 3px;
+  width: 14px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--orange);
+}
 
 /* Pastille des demandes d'amis en attente (onglet Amis, en-tete et barre
    d'onglets) : c'est la seule « notification » cote web, elle est visible

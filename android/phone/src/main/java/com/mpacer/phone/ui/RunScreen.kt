@@ -245,72 +245,118 @@ private fun Puce(texte: String, couleur: Color) {
     }
 }
 
-/** L'allure courante, en tres grand : la seule valeur lue en courant. */
+/** L'allure courante avec badge d'unité et carte hero façon Strava. */
 @Composable
 private fun PaceBlock(output: EngineOutput?, settings: PhoneSettings) {
-    Column(
+    Card(
         modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = Palette.surface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1FFFFFFF)),
     ) {
-        Text(
-            text = MpacerFormat.pace(output?.currentPace),
-            fontSize = 84.sp,
-            fontWeight = FontWeight.Bold,
-            color = if (output?.isPaused == true) Palette.muted else Palette.texte,
-        )
-        Text(
-            text = if (settings.metric) "min/km" else "min/mi",
-            color = Palette.muted,
-            fontSize = 14.sp,
-        )
-        output?.previousLapPace?.let { precedente ->
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 20.dp, horizontal = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             Text(
-                text = "tour precedent " + MpacerFormat.pace(precedente),
-                color = Palette.muted2,
-                fontSize = 13.sp,
+                text = "ALLURE INSTANTANÉE",
+                color = Palette.muted,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.sp,
             )
+            Spacer(Modifier.height(4.dp))
+            Row(
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    text = MpacerFormat.pace(output?.currentPace),
+                    fontSize = 76.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = if (output?.isPaused == true) Palette.muted else Palette.texte,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = if (settings.metric) "/km" else "/mi",
+                    color = Palette.orange,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 14.dp),
+                )
+            }
+            output?.previousLapPace?.let { precedente ->
+                Box(
+                    modifier = Modifier
+                        .background(Palette.surface2, RoundedCornerShape(50))
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                ) {
+                    Text(
+                        text = "Tour précédent : " + MpacerFormat.pace(precedente) + " /km",
+                        color = Palette.muted,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
         }
     }
 }
 
-/** Distance, duree, frequence cardiaque, tour courant. */
+/** Distance, durée, fréquence cardiaque, tour courant en grille 2x2 Strava. */
 @Composable
 private fun StatsRow(output: EngineOutput?, settings: PhoneSettings) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Tuile(
-            libelle = "Distance",
+            libelle = "DISTANCE",
             valeur = MpacerFormat.distance(output?.distanceM ?: 0.0, imperial = !settings.metric),
             modifier = Modifier.weight(1f),
         )
         Tuile(
-            libelle = "Duree",
+            libelle = "TEMPS ÉCOULÉ",
             valeur = MpacerFormat.duration(output?.elapsedS ?: 0.0),
-            modifier = Modifier.weight(1f),
-        )
-        Tuile(
-            libelle = "Cardio",
-            valeur = output?.heartRateBpm?.let { bpm ->
-                output.heartRateZone?.let { "Z" + it + " " + bpm } ?: bpm.toString()
-            } ?: "--",
-            couleur = Palette.zoneColor(output?.heartRateZone),
             modifier = Modifier.weight(1f),
         )
     }
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        val zone = output?.heartRateZone
         Tuile(
-            libelle = "Tour courant",
-            valeur = MpacerFormat.distance(output?.currentLapDistanceM ?: 0.0, imperial = !settings.metric),
+            libelle = "FRÉQUENCE CARDIAQUE",
+            valeur = output?.heartRateBpm?.let { bpm ->
+                zone?.let { "Z" + it + "  " + bpm + " bpm" } ?: (bpm.toString() + " bpm")
+            } ?: "-- bpm",
+            couleur = Palette.zoneColor(zone),
             modifier = Modifier.weight(1f),
         )
         Tuile(
-            libelle = "Allure du tour",
-            valeur = MpacerFormat.pace(output?.currentLapPace),
+            libelle = "ALLURE MOYENNE",
+            valeur = MpacerFormat.pace(output?.currentLapPace) + " /km",
+            modifier = Modifier.weight(1f),
+        )
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        val cadence = output?.cadenceSpm?.let { Math.round(it).toString() + " spm" } ?: "-- spm"
+        Tuile(
+            libelle = "CADENCE",
+            valeur = cadence,
+            modifier = Modifier.weight(1f),
+        )
+        val foulee = output?.strideM?.let { String.format(java.util.Locale.US, "%.2f m", it) } ?: "-- m"
+        Tuile(
+            libelle = "LONGUEUR DE FOULÉE",
+            valeur = foulee,
+            couleur = Palette.orange,
             modifier = Modifier.weight(1f),
         )
     }
@@ -325,11 +371,27 @@ private fun Tuile(
 ) {
     Card(
         modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = Palette.surface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1FFFFFFF)),
     ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Text(libelle, color = Palette.muted, fontSize = 12.sp)
-            Text(valeur, color = couleur, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = libelle,
+                color = Palette.muted2,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.5.sp,
+            )
+            Text(
+                text = valeur,
+                color = couleur,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+            )
         }
     }
 }
@@ -457,76 +519,84 @@ private fun Controls(
     )
 
     when (etat) {
-        "Idle", "Finished" -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        "Idle", "Finished" -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(
                 onClick = onStart,
                 colors = principal,
+                shape = RoundedCornerShape(28.dp),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 6.dp, pressedElevation = 2.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(56.dp),
+                    .height(60.dp),
             ) {
-                Icon(PhoneIcons.Play, contentDescription = null, modifier = Modifier.size(22.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Demarrer la course", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Icon(PhoneIcons.Play, contentDescription = null, modifier = Modifier.size(24.dp))
+                Spacer(Modifier.width(10.dp))
+                Text("DÉMARRER LA COURSE", fontSize = 16.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
             }
             Button(
                 onClick = onArm,
                 colors = secondaire,
-                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth().height(48.dp),
             ) {
-                Icon(PhoneIcons.Flag, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(PhoneIcons.Flag, contentDescription = null, tint = Palette.muted, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Preparer (depart au premier pas)")
+                Text("Départ au premier pas", color = Palette.texte, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             }
         }
 
-        "Running" -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        "Running" -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(
                 onClick = onPause,
                 colors = secondaire,
+                shape = RoundedCornerShape(28.dp),
                 modifier = Modifier
                     .weight(1f)
-                    .height(56.dp),
+                    .height(58.dp),
             ) {
-                Icon(PhoneIcons.Pause, contentDescription = null, modifier = Modifier.size(20.dp))
+                Icon(PhoneIcons.Pause, contentDescription = null, modifier = Modifier.size(22.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Pause", fontSize = 17.sp)
+                Text("PAUSE", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
             Button(
                 onClick = onStop,
                 colors = arret,
+                shape = RoundedCornerShape(28.dp),
                 modifier = Modifier
                     .weight(1f)
-                    .height(56.dp),
+                    .height(58.dp),
             ) {
-                Icon(PhoneIcons.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(PhoneIcons.Stop, contentDescription = null, tint = Palette.danger, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Arreter", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Text("ARRÊTER", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Palette.danger)
             }
         }
 
-        else -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        else -> Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(
                 onClick = onResume,
                 colors = principal,
+                shape = RoundedCornerShape(28.dp),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp),
                 modifier = Modifier
                     .weight(1f)
-                    .height(56.dp),
+                    .height(58.dp),
             ) {
-                Icon(PhoneIcons.Play, contentDescription = null, modifier = Modifier.size(20.dp))
+                Icon(PhoneIcons.Play, contentDescription = null, modifier = Modifier.size(22.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Reprendre", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Text("REPRENDRE", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
             Button(
                 onClick = onStop,
                 colors = arret,
+                shape = RoundedCornerShape(28.dp),
                 modifier = Modifier
                     .weight(1f)
-                    .height(56.dp),
+                    .height(58.dp),
             ) {
-                Icon(PhoneIcons.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(PhoneIcons.Stop, contentDescription = null, tint = Palette.danger, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Arreter", fontSize = 17.sp)
+                Text("ARRÊTER", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Palette.danger)
             }
         }
     }

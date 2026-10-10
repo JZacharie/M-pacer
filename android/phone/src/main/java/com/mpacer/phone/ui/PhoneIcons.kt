@@ -262,6 +262,20 @@ object PhoneIcons {
         PathFillType.NonZero,
     )
 
+    /** Chevron bas pour menu accordeon (Material ExpandMore). */
+    val ExpandMore: ImageVector = icone(
+        "ExpandMore",
+        "M16.59,8.59 L12,13.17 L7.41,8.59 L6,10 L12,16 L18,10 Z",
+        PathFillType.NonZero,
+    )
+
+    /** Chevron haut pour menu accordeon (Material ExpandLess). */
+    val ExpandLess: ImageVector = icone(
+        "ExpandLess",
+        "M12,8 L6,14 L7.41,15.41 L12,10.83 L16.59,15.41 L18,14 Z",
+        PathFillType.NonZero,
+    )
+
     /**
      * Fabrique commune : grille de 24 x 24, un trace SVG, un seul remplissage.
      * Le remplissage pair-impair n'est necessaire que pour l'engrenage, dont le

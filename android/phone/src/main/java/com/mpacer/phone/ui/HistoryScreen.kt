@@ -3,7 +3,10 @@ package com.mpacer.phone.ui
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -17,12 +20,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -186,35 +191,101 @@ private fun age(instantMs: Long): String {
 
 @Composable
 private fun CarteSeance(summary: JSONObject, onOpen: () -> Unit) {
+    val trace = remember(summary) { traceDeSeance(summary) }
     Card(
         modifier = Modifier.fillMaxWidth(),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = Palette.surface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1FFFFFFF)),
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(date(summary.optLong("started_at_ms")), color = Palette.texte, fontSize = 15.sp)
-                Text(
-                    MpacerFormat.distance(summary.optDouble("distance_m")) + "  " +
-                        MpacerFormat.duration(summary.optDouble("duration_s")) + "  " +
-                        MpacerFormat.pace(summary.optDouble("average_pace_s_per_km")) + " /km",
-                    color = Palette.muted,
-                    fontSize = 13.sp,
-                )
-                // Simple presence d'un capteur : la liste ne calcule rien.
-                val capteurs = etiquettes(summary)
-                if (capteurs.isNotEmpty()) {
-                    Text(capteurs.joinToString("   "), color = Palette.muted2, fontSize = 11.sp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = date(summary.optLong("started_at_ms")),
+                        color = Palette.texte,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    val capteurs = etiquettes(summary)
+                    if (capteurs.isNotEmpty()) {
+                        Text(
+                            text = capteurs.joinToString(" • "),
+                            color = Palette.muted2,
+                            fontSize = 11.sp,
+                        )
+                    }
+                }
+                TextButton(onClick = onOpen) {
+                    Text("Détail", color = Palette.orange, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.width(2.dp))
+                    Icon(PhoneIcons.ChevronRight, contentDescription = null, tint = Palette.orange, modifier = Modifier.size(16.dp))
                 }
             }
-            TextButton(onClick = onOpen) {
-                Icon(PhoneIcons.ChevronRight, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("Ouvrir")
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                // Métriques principales en grand (Style Strava)
+                Row(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    Column {
+                        Text("Distance", color = Palette.muted, fontSize = 11.sp)
+                        Text(
+                            text = MpacerFormat.distance(summary.optDouble("distance_m")),
+                            color = Palette.texte,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Column {
+                        Text("Allure", color = Palette.muted, fontSize = 11.sp)
+                        Text(
+                            text = MpacerFormat.pace(summary.optDouble("average_pace_s_per_km")) + " /km",
+                            color = Palette.texte,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Column {
+                        Text("Temps", color = Palette.muted, fontSize = 11.sp)
+                        Text(
+                            text = MpacerFormat.duration(summary.optDouble("duration_s")),
+                            color = Palette.texte,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+
+                // Mini silhouette GPS vectorielle si trace disponible
+                if (trace.size >= 2) {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 80.dp, height = 60.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Palette.surface2),
+                    ) {
+                        MiniTraceGPX(
+                            points = trace,
+                            couleur = Palette.orange,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
             }
         }
     }

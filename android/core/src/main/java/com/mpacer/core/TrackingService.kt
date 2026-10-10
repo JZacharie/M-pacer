@@ -45,6 +45,7 @@ class TrackingService : Service() {
     private lateinit var core: MpacerCore
     private lateinit var locations: FusedLocationProviderClient
     private lateinit var heart: HeartRateSensor
+    private lateinit var cadence: StepCadenceSensor
     private var startedAtMs: Long = 0L
 
     private val locationCallback = object : LocationCallback() {
@@ -66,6 +67,7 @@ class TrackingService : Service() {
         // Le capteur cardiaque est branche des la creation ; il n'ecoute vraiment
         // qu'entre le depart et l'arret de la seance.
         heart = HeartRateSensor(this, ::onHeartRate)
+        cadence = StepCadenceSensor(this, ::onCadence)
         createChannel()
     }
 
@@ -114,24 +116,24 @@ class TrackingService : Service() {
         // strictement rien (aucun fil, aucune connexion).
         LiveTracker.start(this, if (armed) "arm" else "run")
         requestLocations()
-        startHeartSensors()
+        startSensors()
     }
 
     /**
-     * Capteurs de frequence cardiaque : le capteur integre de l'appareil (montre,
-     * ou rare telephone qui en possede un) et la source supplementaire declaree par
-     * l'application ([HeartRateSources.external], la ceinture Bluetooth du
-     * telephone). Aucune des deux n'est obligatoire : sans cardio la seance reste
-     * complete, il manque seulement les zones et la derive cardiaque.
+     * Capteurs physiologiques et biomécaniques :
+     * - Fréquence cardiaque (capteur intégré montre ou ceinture Bluetooth [HeartRateSources.external])
+     * - Cadence de pas et foulée ([StepCadenceSensor])
      */
-    private fun startHeartSensors() {
+    private fun startSensors() {
         heart.start()
         HeartRateSources.external?.start(::onHeartRate)
+        cadence.start()
     }
 
-    private fun stopHeartSensors() {
+    private fun stopSensors() {
         heart.stop()
         HeartRateSources.external?.stop()
+        cadence.stop()
     }
 
     /**
@@ -194,6 +196,13 @@ class TrackingService : Service() {
      */
     private fun onHeartRate(tMs: Long, bpm: Int) {
         publish(core.heartRate(tMs, bpm))
+    }
+
+    /**
+     * Mesure de cadence : transmet la cadence au moteur Rust pour calcul de foulée.
+     */
+    private fun onCadence(tMs: Long, spm: Double) {
+        publish(core.onCadence(tMs, spm))
     }
 
     private fun publish(output: EngineOutput, location: Location? = null) {
@@ -269,7 +278,7 @@ class TrackingService : Service() {
         val summary = core.summary(startedAtMs)
         WorkoutArchive.save(this, summary)
         locations.removeLocationUpdates(locationCallback)
-        stopHeartSensors()
+        stopSensors()
         // Envoi immediat de la seance terminee (le scope appartient au processus :
         // il n'est pas annule par le stopSelf() ci-dessous).
         SyncClient.syncInBackground(this)
@@ -280,7 +289,7 @@ class TrackingService : Service() {
     override fun onDestroy() {
         LiveTracker.stop()
         locations.removeLocationUpdates(locationCallback)
-        stopHeartSensors()
+        stopSensors()
         MusicSession.detach(core)
         SessionConfig.detach(core)
         core.close()

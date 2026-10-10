@@ -1,5 +1,6 @@
 package com.mpacer.phone.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -303,7 +304,7 @@ fun SettingsScreen(
         }
 
         // --------------------------------------------------------- suivi MQTT
-        Section("Suivi en direct (MQTT)") {
+        Section("Suivi en direct (MQTT)", initialExpanded = false) {
             Text(liveState.resume, color = Palette.muted, fontSize = 12.sp)
             LigneBascule(
                 libelle = "Publier la position pendant la course",
@@ -378,7 +379,7 @@ fun SettingsScreen(
         }
 
         // ------------------------------------------------------------- version
-        Section("Version") {
+        Section("Version", initialExpanded = false) {
             Text(
                 BuildInfo.resume(context),
                 color = Palette.muted,
@@ -400,16 +401,47 @@ fun SettingsScreen(
 private val FREQUENCES_MAX = listOf(170, 180, 190, 200, 210)
 
 @Composable
-private fun Section(titre: String, contenu: @Composable () -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = Palette.surface)) {
+private fun Section(
+    titre: String,
+    initialExpanded: Boolean = true,
+    contenu: @Composable () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(initialExpanded) }
+    Card(
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Palette.surface),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0x1FFFFFFF)),
+    ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(titre, color = Palette.texte, fontWeight = FontWeight.SemiBold)
-            contenu()
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    titre,
+                    color = Palette.texte,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                Icon(
+                    imageVector = if (expanded) PhoneIcons.ExpandLess else PhoneIcons.ExpandMore,
+                    contentDescription = if (expanded) "Replier" else "Deplier",
+                    tint = Palette.muted,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            if (expanded) {
+                contenu()
+            }
         }
     }
 }

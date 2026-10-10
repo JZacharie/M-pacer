@@ -12,6 +12,7 @@ avec vos séances synchronisées.
 | | |
 |---|---|
 | Documentation illustrée | <https://jzacharie.github.io/M-pacer/> (source [`site/`](site/)) |
+| Guide utilisateur | <https://jzacharie.github.io/M-pacer/guide/> (source [`site/guide/`](site/guide/)) |
 | Documentation technique | [`docs/`](docs/) — index : [`docs/README.md`](docs/README.md) |
 | Guide de déploiement | [`deploy/README.md`](deploy/README.md) |
 

@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Accueil
-description: "M-pacer, controle d'allure auto-heberge pour montre Wear OS : allure lissee, shadow runner, retour vocal, analyse de seance et preparation des courses."
+description: "M-pacer, contrôle d'allure auto-hébergé pour montre Wear OS : allure lissée, shadow runner, retour vocal, analyse de séance et préparation des courses."
 permalink: /
 ---
 
@@ -141,23 +141,23 @@ En course à pied, un <strong>pacer</strong> (meneur d'allure) est un coureur ex
 
 <p class="lead">
 Les pages qui suivent racontent le produit. Le <a href="{{ '/guide/' | relative_url }}">guide utilisateur</a>
-raconte son usage : installer, appairer, regler un plan, courir, synchroniser, relire — puis
-preparer la course suivante. Chaque page tient en une tache.
+raconte son usage : installer, appairer, régler un plan, courir, synchroniser, relire — puis
+préparer la course suivante. Chaque page tient en une tâche.
 </p>
 
 <div class="grid">
   <a class="card" href="{{ '/guide/premiere-seance/' | relative_url }}">
-    <h3>Votre premiere seance</h3>
-    <p>De l'installation a l'analyse ouverte dans le navigateur, avec la liste des
-    verifications d'avant-depart.</p>
+    <h3>Votre première séance</h3>
+    <p>De l'installation à l'analyse ouverte dans le navigateur, avec la liste des
+    vérifications d'avant-départ.</p>
   </a>
   <a class="card" href="{{ '/guide/pendant-la-course/' | relative_url }}">
     <h3>Pendant la course</h3>
-    <p>Les ecrans, les gestes, les couleurs du voyant GPS et ce que disent les pastilles.</p>
+    <p>Les écrans, les gestes, les couleurs du voyant GPS et ce que disent les pastilles.</p>
   </a>
   <a class="card" href="{{ '/guide/depannage/' | relative_url }}">
-    <h3>Depannage</h3>
-    <p>Les problemes courants, leur cause probable, et les limites connues du produit.</p>
+    <h3>Dépannage</h3>
+    <p>Les problèmes courants, leur cause probable, et les limites connues du produit.</p>
   </a>
 </div>
 

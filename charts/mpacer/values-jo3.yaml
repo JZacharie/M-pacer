@@ -30,7 +30,7 @@ image:
 # le tag « latest » sur ghcr.io. Resolue apres un conflit de fusion dont les deux
 # cotes (sha-708d210 et sha-3190d2b) etaient perimes.
 podAnnotations:
-  mpacer.zacharie.org/image-publiee: "sha-7ef88a7@sha256:5d8296f972530c40e32f634f993e24d1410df36e093de31e37e7ae3294d67fcc"
+  mpacer.zacharie.org/image-publiee: "sha-6d84ccd@sha256:fb416079a8f282f7571ade175844fd8785fd0e0cedfc4a56bc843664a0bfcff6"
 
 imagePullSecrets:
   - name: regcred

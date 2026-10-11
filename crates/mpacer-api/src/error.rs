@@ -93,12 +93,19 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = self.status();
         let code = self.code();
-        let message = self.to_string();
         if status.is_server_error() {
-            tracing::error!(error = %message, "erreur serveur");
+            // Le detail (SQL, reseau, anyhow) part au journal, jamais au client :
+            // `code` reste stable et exploitable par la montre.
+            tracing::error!(error = %self, "erreur serveur");
         } else {
-            tracing::debug!(error = %message, "requete refusee");
+            tracing::debug!(error = %self, "requete refusee");
         }
+        let message = match &self {
+            AppError::Database(_) | AppError::Network(_) | AppError::Internal(_) => {
+                "erreur interne".to_string()
+            }
+            other => other.to_string(),
+        };
         let body = serde_json::json!({ "error": code, "message": message });
         (status, axum::Json(body)).into_response()
     }

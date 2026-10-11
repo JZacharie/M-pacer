@@ -51,7 +51,10 @@ param(
     [string] $TestDb = 'mpacer_test',
 
     # Ne pas toucher aux regles nftables de la machine Podman.
-    [switch] $NoForwardFix
+    [switch] $NoForwardFix,
+
+    # Sans confirmation interactive pour les actions destructives (Reset).
+    [switch] $Force
 )
 
 $ErrorActionPreference = 'Stop'
@@ -218,6 +221,13 @@ switch ($Action) {
         Test-Podman
         Etape 'Remise a zero (destructif)'
         Alerte 'Toutes les donnees du volume seront perdues.'
+        if (-not $Force) {
+            $reponse = Read-Host 'Confirmer en tapant OUI'
+            if ($reponse -ne 'OUI') {
+                Info 'Remise a zero annulee.'
+                break
+            }
+        }
         podman rm -f $Container 2>&1 | Out-Null
         podman volume rm -f $Volume 2>&1 | Out-Null
         Ok 'Conteneur et volume supprimes.'

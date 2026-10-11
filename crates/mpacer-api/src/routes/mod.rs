@@ -7,6 +7,7 @@ use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 use axum::body::Body;
 use axum::http::header;
+use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -146,16 +147,27 @@ async fn healthz() -> Json<serde_json::Value> {
 }
 
 /// Disponibilite : la base de donnees repond.
+///
+/// Un echec repond 503 : le chart utilise cette route comme sonde de
+/// disponibilite, un 200 permanent mettrait du trafic sur un pod sans base.
 async fn readyz(
     axum::extract::State(state): axum::extract::State<AppState>,
-) -> Json<serde_json::Value> {
+) -> (StatusCode, Json<serde_json::Value>) {
     // CAST explicite : PostgreSQL renvoie un `integer` pour un litteral, alors que
     // sqlx attend un `bigint` pour un i64.
     let database = sqlx::query_scalar::<_, i64>("SELECT 1::bigint")
         .fetch_one(&state.pool)
         .await
         .is_ok();
-    Json(
-        serde_json::json!({ "status": if database { "ready" } else { "degraded" }, "database": database }),
+    let status = if database {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        status,
+        Json(
+            serde_json::json!({ "status": if database { "ready" } else { "degraded" }, "database": database }),
+        ),
     )
 }

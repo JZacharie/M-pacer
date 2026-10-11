@@ -218,9 +218,16 @@ pub struct Config {
 impl Config {
     /// Construit la configuration depuis l'environnement.
     pub fn from_env() -> anyhow::Result<Self> {
+        // Une valeur inconnue est une faute de deploiement, pas un defaut :
+        // tomber silencieusement en Development signerait les jetons avec le
+        // secret de developpement et retirer le attribut `Secure` aux cookies.
         let environment = match env_var("MPACER_ENV").as_deref() {
             Some("production") | Some("prod") => Environment::Production,
-            _ => Environment::Development,
+            Some("development") | Some("dev") => Environment::Development,
+            Some(other) => anyhow::bail!(
+                "MPACER_ENV non reconnu : {other:?} (valeurs attendues : production, prod, development, dev)"
+            ),
+            None => Environment::Development,
         };
         let public_url =
             env_var("MPACER_PUBLIC_URL").unwrap_or_else(|| "http://localhost:8080".to_string());

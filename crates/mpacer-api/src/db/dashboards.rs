@@ -4,10 +4,7 @@ use crate::models::{Dashboard, DashboardWidget};
 use sqlx::PgPool;
 
 /// Tableaux de bord de l'utilisateur, du plus recent au plus ancien.
-pub async fn list_dashboards(
-    pool: &PgPool,
-    user_id: &str,
-) -> Result<Vec<Dashboard>, sqlx::Error> {
+pub async fn list_dashboards(pool: &PgPool, user_id: &str) -> Result<Vec<Dashboard>, sqlx::Error> {
     sqlx::query_as::<_, Dashboard>(
         "SELECT id, user_id, name, created_at_ms, updated_at_ms
            FROM dashboards

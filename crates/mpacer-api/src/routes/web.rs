@@ -32,8 +32,23 @@ use mpacer_core::music::{
     WantedTrack, MUSIC_MARGIN_RATIO,
 };
 use mpacer_core::units::{format_duration, format_pace, UnitSystem};
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde::Deserialize;
 use std::fmt::Write as _;
+
+/// Caracteres laisses tels quels dans une valeur placee dans un en-tete
+/// `Location` : tout le reste est percent-encode. Sans cela, une valeur de
+/// requete contenant un caractere interdit (saut de ligne, guillemet...) fait
+/// paniquer `Redirect::to` et tomber tout le worker.
+const LOCATION_QUERY_VALUE: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
+fn location_value(value: &str) -> String {
+    utf8_percent_encode(value, LOCATION_QUERY_VALUE).to_string()
+}
 
 /// Routes web.
 pub fn router() -> Router<AppState> {
@@ -1174,7 +1189,9 @@ pub(crate) async fn google_callback(
     jar: axum_extra::extract::CookieJar,
 ) -> AppResult<Response> {
     if let Some(error) = query.error {
-        return Ok(Redirect::to(&format!("/login?erreur={error}")).into_response());
+        return Ok(
+            Redirect::to(&format!("/login?erreur={}", location_value(&error))).into_response(),
+        );
     }
     let (Some(code), Some(oauth_state)) = (query.code, query.state) else {
         return Err(AppError::bad_request("parametres OAuth manquants"));
@@ -6007,40 +6024,28 @@ pub(crate) async fn deezer_callback(
     Query(query): Query<CallbackQuery>,
 ) -> AppResult<Response> {
     if let Some(error) = query.error {
-        return Ok(Redirect::to(&format!("/music?erreur={error}")).into_response());
+        return Ok(
+            Redirect::to(&format!("/music?erreur={}", location_value(&error))).into_response(),
+        );
     }
     let Some(user) = user else {
         return Ok(Redirect::to("/login").into_response());
     };
-    let Some(code) = query.code else {
+    let (Some(code), Some(oauth_state)) = (query.code, query.state.as_deref()) else {
         return Err(AppError::bad_request("parametres OAuth manquants"));
     };
     let now = state.now_ms();
-    // Deezer renvoie `state` quand il est fourni ; s'il manque, on retombe sur le
-    // dernier etat Deezer en attente : une protection minimale est conservee et
-    // la connexion ne casse pas sur un fournisseur qui omet le parametre.
-    let row: Option<(String, String)> = match query.state.as_deref() {
-        Some(oauth_state) => {
-            sqlx::query_as(
-                "SELECT state, pkce_verifier FROM oauth_states
-                  WHERE state = $1 AND expires_at_ms > $2",
-            )
-            .bind(oauth_state)
-            .bind(now)
-            .fetch_optional(&state.pool)
-            .await?
-        }
-        None => {
-            sqlx::query_as(
-                "SELECT state, pkce_verifier FROM oauth_states
-                  WHERE redirect_to = '/music/deezer' AND expires_at_ms > $1
-                  ORDER BY created_at_ms DESC LIMIT 1",
-            )
-            .bind(now)
-            .fetch_optional(&state.pool)
-            .await?
-        }
-    };
+    // L'etat est obligatoire et a usage unique : retomber sur « le dernier etat
+    // en attente » permettrait d'injecter un code OAuth sur le compte d'un autre
+    // utilisateur (CSRF). Deezer renvoie toujours le `state` fourni.
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT state, pkce_verifier FROM oauth_states
+          WHERE state = $1 AND expires_at_ms > $2",
+    )
+    .bind(oauth_state)
+    .bind(now)
+    .fetch_optional(&state.pool)
+    .await?;
     let Some((oauth_state, _provenance)) = row else {
         return Err(AppError::bad_request("etat OAuth inconnu ou expire"));
     };
@@ -7260,9 +7265,11 @@ fn live_denivele_chart(points: &[LivePoint]) -> Markup {
     }
     // Si chaque point porte une distance, l'axe des x est la distance reelle ;
     // sinon on retombe sur le rang du point (la forme reste juste).
-    let distances_connues = mesures
-        .iter()
-        .all(|(point, _)| point.distance_m.is_some_and(|distance| distance.is_finite()));
+    let distances_connues = mesures.iter().all(|(point, _)| {
+        point
+            .distance_m
+            .is_some_and(|distance| distance.is_finite())
+    });
     let profil: Vec<(f64, f64)> = mesures
         .iter()
         .enumerate()
@@ -7280,13 +7287,20 @@ fn live_denivele_chart(points: &[LivePoint]) -> Markup {
         return html! {};
     }
 
-    let altitude_min = profil.iter().map(|(_, alt)| *alt).fold(f64::INFINITY, f64::min);
-    let altitude_max = profil.iter().map(|(_, alt)| *alt).fold(f64::NEG_INFINITY, f64::max);
+    let altitude_min = profil
+        .iter()
+        .map(|(_, alt)| *alt)
+        .fold(f64::INFINITY, f64::min);
+    let altitude_max = profil
+        .iter()
+        .map(|(_, alt)| *alt)
+        .fold(f64::NEG_INFINITY, f64::max);
     let marge = ((altitude_max - altitude_min) * 0.1).max(3.0);
     let bas = altitude_min - marge;
     let etendue = (altitude_max + marge - bas).max(1e-6);
     let x_de = |distance: f64| MARGE + (distance / fin).clamp(0.0, 1.0) * (LARGEUR - 2.0 * MARGE);
-    let y_de = |altitude: f64| HAUTEUR - MARGE - ((altitude - bas) / etendue) * (HAUTEUR - 2.0 * MARGE);
+    let y_de =
+        |altitude: f64| HAUTEUR - MARGE - ((altitude - bas) / etendue) * (HAUTEUR - 2.0 * MARGE);
 
     let mut ligne = String::with_capacity(profil.len() * 14);
     for (distance, altitude) in &profil {

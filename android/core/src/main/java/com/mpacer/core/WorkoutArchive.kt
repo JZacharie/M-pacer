@@ -43,7 +43,7 @@ object WorkoutArchive {
         val workouts = list(context)
         val root = JSONObject()
             .put("format", "mpacer.pac")
-            .put("version", 1)
+            .put("version", 2)
             .put("workouts", org.json.JSONArray(workouts))
         return root.toString(2)
     }

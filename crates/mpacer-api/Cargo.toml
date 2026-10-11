@@ -30,6 +30,9 @@ jsonwebtoken = { workspace = true }
 reqwest = { workspace = true }
 maud = { workspace = true }
 cookie = { workspace = true }
+# Encodage des valeurs injectees dans un en-tete Location (Redirect::to panique
+# sur un caractere interdit : voir web.rs, callbacks OAuth).
+percent-encoding = "2"
 uuid = { workspace = true }
 sha2 = { workspace = true }
 base64 = { workspace = true }

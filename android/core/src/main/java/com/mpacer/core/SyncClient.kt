@@ -570,8 +570,9 @@ data class DeviceToken(
 
 /**
  * Miroir de mpacer_core::history::WorkoutSummary (memes noms de champs JSON).
- * laps / best_efforts / track restent des JsonArray : la montre ne les interprete pas,
- * elle les transporte tels que le coeur les a produits.
+ * laps / best_efforts / track / pauses / heart_rate / plan restent du JSON brut :
+ * la montre ne les interprete pas, elle les transporte tels que le coeur les a
+ * produits. Sans ces champs, un aller-retour decode/encode les supprimerait.
  */
 @Serializable
 data class WorkoutSummary(
@@ -584,6 +585,10 @@ data class WorkoutSummary(
     @SerialName("best_efforts") val bestEfforts: JsonArray = JsonArray(emptyList()),
     val track: JsonArray = JsonArray(emptyList()),
     @SerialName("unit_system") val unitSystem: String? = null,
+    @SerialName("elapsed_s") val elapsedS: Double = 0.0,
+    val pauses: JsonArray = JsonArray(emptyList()),
+    @SerialName("heart_rate") val heartRate: JsonArray = JsonArray(emptyList()),
+    val plan: JsonObject? = null,
 )
 
 sealed interface TokenPoll {

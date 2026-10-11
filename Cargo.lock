@@ -1207,6 +1207,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "mpacer-core",
+ "percent-encoding",
  "reqwest",
  "serde",
  "serde_json",

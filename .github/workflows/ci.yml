@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+# Moindre privilege : la CI lit le depot, elle n'ecrit rien.
+permissions:
+  contents: read
+
 env:
   ACTIONS_RUNNER_FORCE_NODE24: "true"
 

@@ -164,15 +164,18 @@ class MpacerArchive {
         if (values.size() <= maximum) {
             return values;
         }
-        var result = [];
-        var step = (values.size() / maximum).toNumber();
-        if (step < 1) {
-            step = 1;
+        // Pas de division : un pas flottant indexerait des tableaux avec des
+        // valeurs non entieres. On cherche le plus petit pas entier qui tient
+        // dans `maximum` par multiplication.
+        var step = 1;
+        while (values.size() > maximum * step) {
+            step += 1;
         }
+        var result = [];
         var index = 0;
         while (index < values.size()) {
             result.add(values[index]);
-            index = index + step;
+            index += step;
         }
         return result;
     }

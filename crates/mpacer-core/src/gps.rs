@@ -190,6 +190,7 @@ impl GpsMonitor {
 
         if sample.accuracy_m > self.thresholds.poor_accuracy_m * 2.0 {
             self.rejected_samples += 1;
+            self.note_rejection();
             return (self.status, false);
         }
 
@@ -203,6 +204,7 @@ impl GpsMonitor {
             };
             if !plausible {
                 self.rejected_samples += 1;
+                self.note_rejection();
                 return (self.status, false);
             }
         }
@@ -222,6 +224,15 @@ impl GpsMonitor {
             GpsStatus::Poor
         };
         (self.status, true)
+    }
+
+    /// Un echantillon rejete invalide la confiance : le voyant ne peut pas
+    /// rester vert quand le flux produit des mesures aberrantes.
+    fn note_rejection(&mut self) {
+        self.consecutive_good = 0;
+        if matches!(self.status, GpsStatus::Good | GpsStatus::Poor) {
+            self.status = GpsStatus::Poor;
+        }
     }
 }
 
@@ -273,5 +284,17 @@ mod tests {
         monitor.push(sample(0, 45.0, 100.0));
         assert_eq!(monitor.rejected_samples, 1);
         assert!(monitor.last_accepted().is_none());
+    }
+
+    #[test]
+    fn rejection_degrades_green_light() {
+        let mut monitor = GpsMonitor::default();
+        monitor.push(sample(0, 45.0, 5.0));
+        monitor.push(sample(1000, 45.00001, 5.0));
+        monitor.push(sample(2000, 45.00002, 5.0));
+        assert_eq!(monitor.status(), GpsStatus::Good);
+        // Un saut GPS invalide la confiance : le voyant retombe en jaune.
+        monitor.push(sample(3000, 45.05, 5.0));
+        assert_eq!(monitor.status(), GpsStatus::Poor);
     }
 }

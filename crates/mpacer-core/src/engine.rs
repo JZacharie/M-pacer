@@ -330,6 +330,9 @@ impl PacerEngine {
         self.gps = GpsMonitor::new(self.config.gps);
         self.pace.clear();
         self.workout.reset();
+        // Les tours vivent dans le LapTracker, pas dans Workout : sans cette
+        // remise a zero, summary() renverrait les tours de la seance precedente.
+        self.laps = LapTracker::new(self.config.units);
         self.voice.reset();
         self.track.clear();
         self.opponent_name = None;
@@ -555,9 +558,7 @@ impl PacerEngine {
             .cadence_spm()
             .or_else(|| speed.map(cadence_from_speed));
         let stride_m = match (speed, cadence_spm) {
-            (Some(v), Some(cadence)) if cadence > 0.0 => {
-                Some((v * 60.0 / cadence).clamp(0.2, 3.0))
-            }
+            (Some(v), Some(cadence)) if cadence > 0.0 => Some((v * 60.0 / cadence).clamp(0.2, 3.0)),
             (Some(v), None) => Some(stride_for_speed(v, STRIDE_REFERENCE_SPEED_MPS)),
             _ => None,
         };

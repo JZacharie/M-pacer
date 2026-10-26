@@ -130,8 +130,22 @@ pub async fn insert_race(
     .execute(&mut *tx)
     .await?;
 
+    let notes_lower = input.notes.as_deref().unwrap_or_default().to_ascii_lowercase();
+    let reg_done = notes_lower.contains("inscription validee") || notes_lower.contains("inscription confirm");
+    let pps_done = notes_lower.contains("dossier complet") || notes_lower.contains("pps a jour");
+
     for label in crate::models::DEFAULT_RACE_TASKS {
-        insert_task_row(&mut tx, user_id, &id, label, None, now_ms).await?;
+        let task_id = insert_task_row(&mut tx, user_id, &id, label, None, now_ms).await?;
+        let auto_done = (label == "Hotel reserve" && input.hotel_booked)
+            || (label == "Inscription confirmee" && reg_done)
+            || (label == "Certificat medical / PPS a jour" && pps_done);
+        if auto_done {
+            sqlx::query("UPDATE race_tasks SET done = TRUE, done_at_ms = $1 WHERE id = $2")
+                .bind(now_ms)
+                .bind(&task_id)
+                .execute(&mut *tx)
+                .await?;
+        }
     }
     tx.commit().await?;
 

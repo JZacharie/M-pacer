@@ -3135,6 +3135,37 @@ impl RaceForm {
         }
     }
 
+    /// Pre-remplit le formulaire depuis un modele de course preconfigure (ex. Issue #1 : La Romagnatoise - Ronde des Plateaux).
+    fn from_preset(preset: &str) -> Option<(RaceForm, &'static str)> {
+        match preset.trim().to_ascii_lowercase().as_str() {
+            "romagnatoise" | "ronde-des-plateaux" => Some((
+                RaceForm {
+                    name: "La Romagnatoise - Ronde des Plateaux".to_string(),
+                    discipline: "Trail".to_string(),
+                    date: "2027-01-31".to_string(),
+                    time: "08:45".to_string(),
+                    distance_km: "44".to_string(),
+                    location: "Romagnat (63540, Puy-de-Dome)".to_string(),
+                    start_location: "Stade de Romagnat, 1 allee Marie Marvingt, 63540 Romagnat".to_string(),
+                    latitude: "45.7297".to_string(),
+                    longitude: "3.1003".to_string(),
+                    bib_pickup_date: "2027-01-31".to_string(),
+                    bib_pickup_time: "07:30".to_string(),
+                    bib_pickup_location: "Village depart - Stade de Romagnat (ou magasin Athlerunning Aubiere du 27 au 29/01)".to_string(),
+                    registration_url: "https://in.njuko.com/altichrono_romagnatoise_2027?currentPage=select-competition".to_string(),
+                    website_url: "https://thankful-pond-0cfe9cc03.7.azurestaticapps.net/parcours/ronde-des-plateaux.html".to_string(),
+                    hotel_booked: String::new(),
+                    nutrition_notes: "Semi-autonomie. Ravitaillements : Opme, Le Crest, Gergovie, Chateau de la Batisse (km 21,5), Ponteix. Aucun gobelet sur les ravitaillements (Ecocup ou flasque obligatoire). Reserve d'eau min. 250 ml et reserve energetique obligatoires.".to_string(),
+                    important_info: "D+ 1660 m / D- 1660 m. Materiel obligatoire : reserve d'eau 250 ml min, reserve energetique, tenue adaptee aux conditions hivernales (conseille : sifflet, couverture de survie, veste etanche a capuche, telephone charge). Barrieres horaires (6,7 km/h) : km 18,5 a 2h45 (aiguillage sur le 27 km au-dela) ; km 21,5 (Chateau de la Batisse) a 3h15 ; km 34 a 5h00 ; km 36,6 a 5h30. Consigne sacs fermes (1 EUR), douches et kines a l'arrivee.".to_string(),
+                    notes: "Inscription validee et payee (44 EUR / 40 EUR licencie FFA), dossier complet (PPS / licence FFA a jour). Logement pas encore reserve. 300 dossards solo. Organisateur : AS Romagnat Athletisme (romagnatoise@yahoo.com). Trace : https://tracedetrail.fr/fr/trace/357184".to_string(),
+                    ..RaceForm::default()
+                },
+                "Fiche pre-remplie : La Romagnatoise - Ronde des Plateaux (44 km, 1660 m D+, inscription validee, logement a reserver).",
+            )),
+            _ => None,
+        }
+    }
+
     /// Convertit la saisie en champs enregistrables.
     fn to_input(&self) -> Result<RaceInput, String> {
         Ok(RaceInput {
@@ -3315,6 +3346,13 @@ fn race_form_response_with_notice(
         section class="hero" {
             h1 { (heading) }
             p class="muted" { "Renseignez ce que vous savez : la fiche se complete au fil des semaines." }
+            @if action == "/courses/nouvelle" {
+                div class="actions" style="margin-top:0.5rem" {
+                    a class="button ghost" href="/courses/nouvelle?preset=romagnatoise" {
+                        "Pre-remplir : La Romagnatoise - Ronde des Plateaux (44 km)"
+                    }
+                }
+            }
         }
         @if let Some(notice) = notice {
             p class="notice" { (notice) }
@@ -3651,6 +3689,8 @@ struct RaceNewQuery {
     finishers: Option<String>,
     #[serde(default)]
     distance: Option<String>,
+    #[serde(default)]
+    preset: Option<String>,
 }
 
 /// Page de creation d'une course.
@@ -3669,6 +3709,10 @@ async fn race_new_page(
     };
     let mut values = RaceForm::default();
     let mut notice = None;
+    if let Some((preset_form, preset_notice)) = params.preset.as_deref().and_then(RaceForm::from_preset) {
+        values = preset_form;
+        notice = Some(preset_notice.to_string());
+    }
     let event = params
         .finishers
         .as_deref()
@@ -9433,6 +9477,25 @@ mod finishers_web_tests {
         assert_eq!(form.goal_time, "");
         assert_eq!(form.website_url, "");
         // La fiche pre-remplie passe la validation du formulaire.
+        let input = form.to_input().unwrap();
+        assert!(input.validate().is_ok(), "{input:?}");
+    }
+
+    #[test]
+    fn romagnatoise_preset_prefills_all_issue_1_details_and_validates() {
+        let (form, banner) = RaceForm::from_preset("romagnatoise").expect("romagnatoise preset");
+        assert!(banner.contains("La Romagnatoise"));
+        assert_eq!(form.name, "La Romagnatoise - Ronde des Plateaux");
+        assert_eq!(form.date, "2027-01-31");
+        assert_eq!(form.time, "08:45");
+        assert_eq!(form.distance_km, "44");
+        assert_eq!(form.discipline, "Trail");
+        assert!(form.location.contains("Romagnat"));
+        assert!(form.website_url.contains("ronde-des-plateaux.html"));
+        assert!(form.notes.contains("Inscription validee et payee"));
+        assert!(form.notes.contains("dossier complet (PPS"));
+        assert!(form.notes.contains("Logement pas encore reserve"));
+        assert!(form.important_info.contains("D+ 1660 m"));
         let input = form.to_input().unwrap();
         assert!(input.validate().is_ok(), "{input:?}");
     }
